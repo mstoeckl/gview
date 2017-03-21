@@ -741,7 +741,7 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     tree_view->setSelectionMode(QAbstractItemView::SingleSelection);
     tree_view->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree_view->setIndentation(20);
-    tree_view->expandToDepth(2);
+    tree_view->collapseAll();
     tree_view->header()->resizeSections(QHeaderView::ResizeToContents);
     tree_view->header()->setStretchLastSection(false);
     tree_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);

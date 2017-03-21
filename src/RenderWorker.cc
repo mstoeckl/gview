@@ -102,12 +102,19 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
         clippable = true;
     }
 
-    // Assume we are already in the root element
-    std::vector<const Element *> stack;
-    stack.push_back(&d.root);
+    const int maxdepth = 10;
+    // Assume no depth greater than depth
+    // TODO: make all such buffers created but once and
+    // passed in, so that stack elements stay close
+
+    // Assume we are already in the root element.
+    // We statically allocate, because many new/frees are too expensive
+    const Element *stack[maxdepth];
+    stack[0] = &d.root;
+    size_t n = 1;
     G4ThreeVector local = start;
     for (int iter = 0; iter < 1000; iter++) {
-        const Element &last = *stack[stack.size() - 1];
+        const Element &last = *stack[n - 1];
 
         // Strictly inclusion tests....
         // check inside on all children, append; stop when no longer dropping
@@ -123,7 +130,8 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
             // rotate/offset start point...
             ++elem.ngeocalls;
             if (elem.solid->Inside(sub)) {
-                stack.push_back(&elem);
+                stack[n] = &elem;
+                ++n;
                 found = true;
                 local = sub;
                 break;
@@ -134,26 +142,32 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
         }
     }
     // Create direction vector sequence....
-    // (we can tack on normals later; for now, defnormal works...)
-    std::vector<G4ThreeVector> directions;
-    directions.push_back(forward);
-    std::vector<G4ThreeVector> positions;
-    positions.push_back(start);
-    for (size_t i = 1; i < stack.size(); i++) {
+    // Stack allocation is _way_ faster than vector malloc costs,
+    // but incurs drag from stack bloat. (maxdepth*8*15 bytes)
+    // May want to establish as thread-local memory...
+    // TODO: establish maxdepth!
+    G4ThreeVector directions[maxdepth];
+    G4ThreeVector positions[maxdepth];
+    G4RotationMatrix rotations[maxdepth];
+    directions[0] = forward;
+    positions[0] = start;
+    rotations[0] = G4RotationMatrix();
+    for (size_t i = 1; i < n; i++) {
         const Element &elem = *stack[i];
         if (elem.rotated) {
-            directions.push_back(elem.rot * directions[i - 1]);
-            positions.push_back(elem.rot * (positions[i - 1] + elem.offset));
+            directions[i] = elem.rot * directions[i - 1];
+            positions[i] = elem.rot * (positions[i - 1] + elem.offset);
+            rotations[i] = elem.rot * rotations[i - 1];
         } else {
-            directions.push_back(directions[i - 1]);
-            positions.push_back(positions[i - 1] + elem.offset);
+            directions[i] = directions[i - 1];
+            positions[i] = positions[i - 1] + elem.offset;
+            rotations[i] = rotations[i - 1];
         }
     }
-
     int nhits = 1;
     if (clippable) {
         // Start point is in the world volume, and is an intersection
-        hits[0] = stack[stack.size() - 1];
+        hits[0] = stack[n - 1];
         ints[0] = {sdist, entrynormal};
     } else {
         // Starting point
@@ -164,14 +178,23 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
         // Intersection on entry
     }
 
+    // Note: w/ mutable, there is a viable partial ordering optimization
+    // For each element, record in elem the closest absolute intersection dist;
+    // For the current element, the closest valid leaving dist is stored
+    // (Note each thread has its own element tree...)
+    // We recalculate abs distances in the routine only if the current distance
+    // has surpassed the calculated distance. (Thus kInfinity is an option).
+    // This should, for nested solids, reduce net calcs to 1 per missed,
+    // 2 per intersected convex thing, rather than redoing all every
+    // intersection
+    // Note: Routine compiles in large part into lots of moves. Too copy-heavy?
     for (int iter = 0; iter < 1000; iter++) {
-        const Element &curr = *stack[stack.size() - 1];
-        const G4ThreeVector &dir = directions[stack.size() - 1];
-        const G4ThreeVector &pos = positions[stack.size() - 1];
+        const Element &curr = *stack[n - 1];
+        const G4ThreeVector &dir = directions[n - 1];
+        const G4ThreeVector &pos = positions[n - 1];
 
         ++curr.ngeocalls;
         G4double exitdist = curr.solid->DistanceToOut(pos, dir);
-
         G4double closestDist = 2 * kInfinity;
         const Element *closest = NULL;
         G4ThreeVector closestDir;
@@ -205,43 +228,51 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
         } else if (exitdist < closestDist) {
             // Transition on leaving vol w/o intersections
             // Advance all levels, why not
-            for (size_t j = 0; j < positions.size(); j++) {
+            for (size_t j = 0; j < n; j++) {
                 positions[j] += exitdist * directions[j];
             }
             sdist += exitdist;
-            G4ThreeVector lpos = positions[positions.size() - 1];
-            stack.pop_back();
-            directions.pop_back();
-            positions.pop_back();
+            G4ThreeVector lpos = positions[n - 1];
+            G4RotationMatrix lrot = rotations[n - 1];
+            // Drop from stack
+            --n;
 
-            // Only calc normal if need be
+            // Record hit with normal
             ++curr.ngeocalls;
             G4ThreeVector lnormal = curr.solid->SurfaceNormal(lpos);
-            ints[nhits] = {sdist, lnormal};
-            if (stack.size() == 0 || nhits >= maxhits) {
+            ints[nhits] = {sdist, lrot.invert() * lnormal};
+            if (n == 0 || nhits >= maxhits) {
                 return nhits;
             }
-            hits[nhits] = stack[stack.size() - 1];
+            hits[nhits] = stack[n - 1];
             nhits++;
         } else {
             // Transition on visiting a child
-            positions.push_back(closestPos);
-            directions.push_back(closestDir);
-            for (size_t j = 0; j < positions.size(); j++) {
+            G4RotationMatrix lrot;
+            if (closest->rotated) {
+                lrot = closest->rot * rotations[n - 1];
+            } else {
+                lrot = rotations[n - 1];
+            }
+            positions[n] = closestPos;
+            directions[n] = closestDir;
+            rotations[n] = lrot;
+            for (size_t j = 0; j < n + 1; j++) {
                 positions[j] += closestDist * directions[j];
             }
-            stack.push_back(closest);
+            stack[n] = closest;
+            n++;
             sdist += closestDist;
 
+            // Record hit with normal
             ++closest->ngeocalls;
             G4ThreeVector lnormal =
-                closest->solid->SurfaceNormal(positions[positions.size() - 1]);
-            ints[nhits] = {sdist, lnormal};
+                closest->solid->SurfaceNormal(positions[n - 1]);
+            ints[nhits] = {sdist, lrot.invert() * lnormal};
             if (nhits >= maxhits) {
                 // Don't increment hit counter; ignore last materialc
                 return nhits;
             }
-
             hits[nhits] = closest;
             nhits++;
         }
@@ -266,17 +297,15 @@ static int compressTraces(const Element *hits[], Intersection ints[], int m) {
             n++;
         }
     }
-    // Next, nuke invisible slices
-    // TODO ALERT FIXME: otherwise we get weird compression bugs
-    // (The alpha=0 fails because same-material invisibility creates holes
-    // (really ought to do depth-absorption routines instead)
 
     // Finally, nuke intersections between similar material'd objects
+    // (If one is visible/one isn't, don't contract
     int p = 0;
     // 001122334  =>  0022334
     // |x|x|y|x|  =>  |x|y|x|
     for (int i = 0; i < n; i++) {
-        if (i == 0 || hits[i]->mat != hits[i - 1]->mat) {
+        if (i == 0 || hits[i]->mat != hits[i - 1]->mat ||
+            hits[i]->visible != hits[i - 1]->visible) {
             hits[p] = hits[i];
             ints[p] = ints[i];
             p++;
@@ -328,6 +357,11 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
     int hl = (slice * h / nslices);
     int hh = slice == nslices - 1 ? h : ((slice + 1) * h / nslices);
     const G4double radius = 0.8 / mind;
+    const int M = 30;
+    const Element *hits[M];
+    Intersection ints[M + 1];
+    const Element *althits[M];
+    Intersection altints[M + 1];
     for (int i = hl; i < hh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
         for (int j = 0; j < w; j++) {
@@ -338,18 +372,9 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
             }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
-            const int M = 30;
-            const Element *hits[M];
-            Intersection ints[M + 1];
             int m = traceRay(pt, d, hits, ints, M);
             m = compressTraces(hits, ints, m);
 
-            // TODO: List editing on hits/dists/normals
-            // to eliminate dummy transitions between objects of the
-            // same material. (if three things in a row have the same mtl,
-            // cut the middle one; do the same for the level_of_detail.
-            // (Note: is a useful precursor step for the depth-based approach)
-            // --> eliminates spurious lines of all sorts..
             int p = m - 1;
             bool line = false;
             if (d.level_of_detail <= -1) {
@@ -358,8 +383,6 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
                     ndevs[k] = 0;
                 }
                 G4double seed = CLHEP::pi / 5 * (qrand() >> 16) / 16384.0;
-                const Element *althits[M];
-                Intersection altints[M + 1];
                 int am;
                 for (int k = 0; k < 10; k++) {
 
@@ -410,8 +433,7 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
                                        hits[k]->hue, ints[k].dist);
                 double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
                 if (!hits[k]->visible) {
-                    e = 0.;
-                    f = 1.;
+                    continue;
                 }
                 col = qRgb(int(e * qRed(altcol) + f * qRed(col)),
                            int(e * qGreen(altcol) + f * qGreen(col)),
