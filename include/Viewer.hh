@@ -62,6 +62,9 @@ typedef struct Element_s {
 
     // statistics, frequently updated, nolock
     mutable long ngeocalls;
+    // Caching for acceleration
+    mutable int niter;
+    mutable double abs_dist;
 
     std::vector<struct Element_s> children;
 } Element;

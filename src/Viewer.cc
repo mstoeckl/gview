@@ -1004,6 +1004,10 @@ void Viewer::screenshot(int sx) {
     }
     QString n = QFileDialog::getSaveFileName(this, "Save screenshot",
                                              QDir::current().canonicalPath());
+    if (n.isEmpty()) {
+        // Didn't choose a file...
+        return;
+    }
     QImageWriter r(n);
     r.setDescription("Screenshot of GEANT4 scene");
     r.write(im);

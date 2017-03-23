@@ -42,7 +42,8 @@ static void recursivelyPrintNCalls(const Element &r, int depth = 0,
 }
 
 static int traceRay(const QPointF &scpt, const ViewData &d,
-                    const Element *hits[], Intersection ints[], int maxhits) {
+                    const Element *hits[], Intersection ints[], int maxhits,
+                    int iteration) {
     // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
     // Return number of hits recorded.
 
@@ -188,13 +189,26 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
     // 2 per intersected convex thing, rather than redoing all every
     // intersection
     // Note: Routine compiles in large part into lots of moves. Too copy-heavy?
+    // YES!
+    // 1: TODO, pass down rotations at decompile level
+    // So everything is in absolute coordinates... (saves a full rotation
+    // sequence)
+    // Then it's dir w/ only offsets, and rotations applied last
+    // Issue: rotate early, then all children rotated :-(
+    // We track: sdist, and keep positions fixed, recalcing intersections as
+    // needed?)
     for (int iter = 0; iter < 1000; iter++) {
         const Element &curr = *stack[n - 1];
         const G4ThreeVector &dir = directions[n - 1];
         const G4ThreeVector &pos = positions[n - 1];
 
         ++curr.ngeocalls;
-        G4double exitdist = curr.solid->DistanceToOut(pos, dir);
+        if (curr.niter != iteration || curr.abs_dist <= sdist /* epsilon ? */) {
+            curr.abs_dist = sdist + curr.solid->DistanceToOut(pos, dir);
+            curr.niter = iteration;
+        }
+        G4double exitdist = curr.abs_dist - sdist;
+
         G4double closestDist = 2 * kInfinity;
         const Element *closest = NULL;
         G4ThreeVector closestDir;
@@ -209,7 +223,11 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
                 subdir = dir;
             }
             ++elem.ngeocalls;
-            G4double altdist = elem.solid->DistanceToIn(sub, subdir);
+            if (elem.niter != iteration || elem.abs_dist <= sdist) {
+                elem.abs_dist = sdist + elem.solid->DistanceToIn(sub, subdir);
+                elem.niter = iteration;
+            }
+            G4double altdist = elem.abs_dist - sdist;
             if (altdist >= kInfinity) {
                 // No intersection
                 continue;
@@ -333,6 +351,16 @@ static QRgb colorMap(const G4ThreeVector &normal, const G4ThreeVector &forward,
     return QColor::fromHsvF(hue, 1.0, 1.0 - cx).rgb();
 }
 
+static int prepareTree(const Element &e) {
+    int d = 0;
+    e.niter = 0;
+    e.abs_dist = 0.0;
+    for (const Element &s : e.children) {
+        d = std::max(prepareTree(s), d);
+    }
+    return d + 1;
+}
+
 RenderWorker::RenderWorker() { abort_task = false; }
 
 RenderWorker::~RenderWorker() {}
@@ -344,6 +372,11 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
                           QProgressDialog *progdiag) {
     if (!d.root.solid) {
         return false;
+    }
+    int treedepth = prepareTree(d.root);
+    // ^ TODO: allocate traceray buffers to match!
+    if (treedepth > 10) {
+        qFatal("Excessive tree depth, fatal!");
     }
     int w = next->width();
     int h = next->height();
@@ -362,6 +395,7 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
     Intersection ints[M + 1];
     const Element *althits[M];
     Intersection altints[M + 1];
+    int iter = 0;
     for (int i = hl; i < hh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
         for (int j = 0; j < w; j++) {
@@ -372,7 +406,8 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
             }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
-            int m = traceRay(pt, d, hits, ints, M);
+            int m = traceRay(pt, d, hits, ints, M, iter);
+            iter++;
             m = compressTraces(hits, ints, m);
 
             int p = m - 1;
@@ -388,7 +423,8 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
 
                     QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
                                 radius * std::sin(seed + k * CLHEP::pi / 5));
-                    am = traceRay(pt + off, d, althits, altints, M);
+                    am = traceRay(pt + off, d, althits, altints, M, iter);
+                    iter++;
                     am = compressTraces(althits, altints, am);
                     // At which intersection have we disagreements?
                     int cm = std::min(am, m);
