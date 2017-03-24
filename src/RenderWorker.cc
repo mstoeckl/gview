@@ -361,6 +361,14 @@ static int prepareTree(const Element &e) {
     return d + 1;
 }
 
+static void sliceBounds(int slice, int nslices, int w, int h, int &xl, int &xh,
+                        int &yl, int &yh) {
+    xl = 0;
+    xh = w;
+    yl = (slice * h / nslices);
+    yh = slice == nslices - 1 ? h : ((slice + 1) * h / nslices);
+}
+
 RenderWorker::RenderWorker() { abort_task = false; }
 
 RenderWorker::~RenderWorker() {}
@@ -368,8 +376,121 @@ RenderWorker::~RenderWorker() {}
 void RenderWorker::coAbort() { abort_task = true; }
 void RenderWorker::flushAbort() { abort_task = false; }
 
-bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
-                          QProgressDialog *progdiag) {
+static double iproject(G4ThreeVector point, const ViewData &d, int w, int h,
+                       int *dx, int *dy) {
+    G4ThreeVector forward = d.orientation.rowX();
+    G4ThreeVector pos = point - d.camera;
+    G4double off = forward * pos;
+    G4ThreeVector projected = pos - forward * off;
+    double fx = d.orientation.rowZ() * projected / d.scale;
+    double fy = d.orientation.rowY() * projected / d.scale;
+    int mind = std::min(w, h);
+    *dx = int(w / 2. + 2. * fx * mind);
+    *dy = int(h / 2. + 2. * fy * mind);
+    return std::abs(off);
+}
+
+bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
+                                G4double *dists, QRgb *colors, int slice,
+                                int nslices, int w, int h) {
+    // ^ All three vectors are normalized...
+
+    int xl, xh, yl, yh;
+    sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
+    //    int mind = w > h ? h : w;
+    for (int s = 0; s < (yh - yl) * (xh - xl); s++) {
+        dists[s] = kInfinity;
+        colors[s] = qRgb(255, 255, 255);
+    }
+    for (size_t i = 0; i < t.ntracks; i++) {
+        const TrackHeader &header = t.headers[i];
+        // TODO: evtly, trackc a function of energy and time
+        TrackPoint *tp = &t.points[header.offset];
+        double sct = tp[header.npts - 1].time / (10.0 * CLHEP::ns);
+        while (sct > 1.0)
+            sct -= 1.0;
+        QRgb trackc = QColor::fromHslF(sct, 1.0, 0.5).rgb();
+        for (int j = 0; j < header.npts - 1; j++) {
+            const TrackPoint &sp = tp[j];
+            const TrackPoint &ep = tp[j + 1];
+            // Trace a line ep->sp with the given color
+
+            // Ortho projection to x/y coordinates relative to center
+            // When not ortho,
+            G4ThreeVector spos(sp.x, sp.y, sp.z);
+            G4ThreeVector epos(ep.x, ep.y, ep.z);
+            int sdx, sdy, edx, edy;
+            double soff, eoff;
+            soff = iproject(spos, d, w, h, &sdx, &sdy);
+            eoff = iproject(epos, d, w, h, &edx, &edy);
+
+            if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
+                (edx >= xh && sdx >= xh) || (edy >= yh && sdy >= yh)) {
+                continue;
+            }
+
+            // TODO: adjustable width lines,
+            // so they can be more than 1 pixel thick and widths
+            // aren't grid independent
+
+            // Also TODO: clipping plane filtering of the tracks
+            // (basically, iteratively apply clipping planes...
+            // -> is sequential line subdivision and transformation,
+            // adjusting endpoints to match. Note that it will likely alter the number
+            // of total tracks, so a std::vector<> oughta be a good intermediate
+            if (sdx == edx && sdy == edy) {
+                int x = sdx, y = sdy;
+                if (xl <= x && x < xh && yl <= y && y < yh) {
+                    double off = eoff;
+                    // Override color/track length only if before prev item
+                    int sidx = (y - yl) * (xh - xl) + (x - xl);
+                    if (dists[sidx] > off) {
+                        dists[sidx] = off;
+                        colors[sidx] = trackc;
+                    }
+                }
+            } else if (std::abs(sdx - edx) > std::abs(sdy - edy)) {
+                if (sdx < edx) {
+                    std::swap(sdx, edx);
+                    std::swap(sdy, edy);
+                }
+                for (int x = std::max(edx,xl); x <= std::min(sdx, xh-1); x++) {
+                    int y = edy + ((sdy - edy) * (x - edx)) / (sdx - edx);
+                    if (yl <= y && y < yh) {
+                        double off =
+                            eoff + ((soff - eoff) * (x - edx)) / (sdx - edx);
+                        int sidx = (y - yl) * (xh - xl) + (x - xl);
+                        if (dists[sidx] > off) {
+                            dists[sidx] = off;
+                            colors[sidx] = trackc;
+                        }
+                    }
+                }
+            } else {
+                if (sdy < edy) {
+                    std::swap(sdx, edx);
+                    std::swap(sdy, edy);
+                }
+                for (int y = std::max(edy,yl); y <= std::min(sdy,yh-1); y++) {
+                    int x = edx + ((sdx - edx) * (y - edy)) / (sdy - edy);
+                    if (xl <= x && x < xh) {
+                        double off =
+                            eoff + ((soff - eoff) * (y - edy)) / (sdy - edy);
+                        int sidx = (y - yl) * (xh - xl) + (x - xl);
+                        if (dists[sidx] > off) {
+                            dists[sidx] = off;
+                            colors[sidx] = trackc;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool RenderWorker::render(ViewData d, TrackData *t, QImage *next, int slice,
+                          int nslices, QProgressDialog *progdiag) {
     if (!d.root.solid) {
         return false;
     }
@@ -387,8 +508,10 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
 #endif
 
     int mind = w > h ? h : w;
-    int hl = (slice * h / nslices);
-    int hh = slice == nslices - 1 ? h : ((slice + 1) * h / nslices);
+
+    int xl, xh, yl, yh;
+    sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
+
     const G4double radius = 0.8 / mind;
     const int M = 30;
     const Element *hits[M];
@@ -396,12 +519,24 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
     const Element *althits[M];
     Intersection altints[M + 1];
     int iter = 0;
-    for (int i = hl; i < hh; i++) {
+    G4double *trackdists = new G4double[(xh - xl) * (yh - yl)];
+    QRgb *trackcolors = new QRgb[(xh - xl) * (yh - yl)];
+    bool s = renderTracks(d, *t, trackdists, trackcolors, slice, nslices, w, h);
+    if (!s) {
+        // aborted
+        delete[] trackdists;
+        delete[] trackcolors;
+        return false;
+    }
+
+    for (int i = yl; i < yh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
-        for (int j = 0; j < w; j++) {
+        for (int j = xl; j < xh; j++) {
             if (this->abort_task) {
                 this->abort_task = false;
                 emit aborted();
+                delete[] trackdists;
+                delete[] trackcolors;
                 return false;
             }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
@@ -460,7 +595,23 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
                 }
             }
 
-            QRgb col = line ? qRgb(0, 0, 0) : qRgb(255, 255, 255);
+            int sidx = (i - yl) * (xh - xl) + (j - xl);
+            QRgb trackcol = trackcolors[sidx];
+            // ^ trackcol includes background
+            G4double trackdist = trackdists[sidx];
+
+            bool rayoverride = false;
+            for (int k = 0; k < p; k++) {
+                if (ints[k].dist > trackdist) {
+                    p = k - 1;
+                    // WARNING: there exist exceptions!
+                    // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
+                    rayoverride = true;
+                    break;
+                }
+            }
+
+            QRgb col = (line && !rayoverride) ? qRgb(0, 0, 0) : trackcol;
             // p indicates the first volume to use the color rule on
             // (p<0 indicates the line dominates)
             for (int k = p; k >= 0; --k) {
@@ -491,5 +642,7 @@ bool RenderWorker::render(ViewData d, QImage *next, int slice, int nslices,
     qDebug("portion done after %d ms", t.msecsTo(QTime::currentTime()));
 #endif
     emit completed();
+    delete[] trackdists;
+    delete[] trackcolors;
     return true;
 }

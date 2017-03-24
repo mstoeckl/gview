@@ -79,6 +79,26 @@ typedef struct {
     int level_of_detail;
 } ViewData;
 
+typedef struct {
+    int npts;
+    int ptype;
+    size_t offset;
+} TrackHeader;
+
+typedef struct {
+    float energy;
+    float time;
+    double x;
+    double y;
+    double z;
+} TrackPoint;
+
+typedef struct {
+    size_t ntracks;
+    TrackHeader *headers;
+    TrackPoint *points;
+} TrackData;
+
 class RenderWorker : public QObject {
     Q_OBJECT
 public:
@@ -86,19 +106,23 @@ public:
     ~RenderWorker();
     bool abort_task;
 public slots:
-    bool render(ViewData p, QImage *i, int slice, int nslices,
+    bool render(ViewData p, TrackData *t, QImage *i, int slice, int nslices,
                 QProgressDialog *d = NULL);
     void coAbort();
     void flushAbort();
 signals:
     void completed();
     void aborted();
+
+private:
+    bool renderTracks(const ViewData &d, const TrackData &t, G4double *dists,
+                      QRgb *colors, int slice, int nslices, int w, int h);
 };
 
 class RenderWidget : public QWidget {
     Q_OBJECT
 public:
-    RenderWidget(ViewData &v);
+    RenderWidget(ViewData &v, TrackData &t);
     virtual ~RenderWidget();
 
     virtual void resizeEvent(QResizeEvent *evt);
@@ -112,6 +136,7 @@ public slots:
 private:
     void rerender_priv();
     ViewData &currView;
+    TrackData &trackdata;
     enum { NONE, ACTIVE, ACTIVE_AND_QUEUED } state;
     int last_level_of_detail;
 
@@ -252,6 +277,8 @@ private:
     std::vector<GeoOption> geo_options;
     size_t which_geo;
     ViewData vd;
+    TrackData trackdata;
+    TrackData origtrackdata;
     RenderWidget *rwidget;
     QDockWidget *dock_clip;
     QDockWidget *dock_tree;

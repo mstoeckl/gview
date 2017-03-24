@@ -33,7 +33,8 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 
-RenderWidget::RenderWidget(ViewData &v) : QWidget(), currView(v) {
+RenderWidget::RenderWidget(ViewData &v, TrackData &tdr)
+    : QWidget(), currView(v), trackdata(tdr) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
     back = QImage(50, 50, QImage::Format_RGB32);
@@ -46,6 +47,7 @@ RenderWidget::RenderWidget(ViewData &v) : QWidget(), currView(v) {
     t = QVector<QThread *>();
     w = QVector<RenderWorker *>();
     qRegisterMetaType<ViewData>("ViewData");
+    qRegisterMetaType<TrackData *>("TrackData*");
     qRegisterMetaType<QImage *>("QImage*");
     int itc = QThread::idealThreadCount();
     itc = itc < 0 ? 2 : itc;
@@ -106,7 +108,8 @@ void RenderWidget::rerender_priv() {
     for (int i = 0; i < w.size(); i++) {
         QMetaObject::invokeMethod(
             w[i], "render", Qt::QueuedConnection, Q_ARG(ViewData, currView),
-            Q_ARG(QImage *, &next), Q_ARG(int, i), Q_ARG(int, w.size()));
+            Q_ARG(TrackData *, &trackdata), Q_ARG(QImage *, &next),
+            Q_ARG(int, i), Q_ARG(int, w.size()));
     }
     response_count = 0;
 
@@ -649,6 +652,77 @@ void OverView::recalculate() {
     endResetModel();
 }
 
+static TrackData loadTracks(const char *path) {
+    // Step 1: load file into memory
+    FILE *f = fopen(path, "rb");
+    fseek(f, 0, SEEK_END);
+    size_t fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = reinterpret_cast<char *>(malloc(fsize));
+    fread(buf, fsize, 1, f);
+    fclose(f);
+
+    size_t blocksize = sizeof(TrackPoint);
+    size_t n = fsize / blocksize;
+    size_t ntracks = 0;
+    for (size_t i = 0; i < n;) {
+        const TrackHeader &h =
+            *reinterpret_cast<TrackHeader *>(&buf[blocksize * i]);
+        i += 1 + size_t(h.npts);
+        ntracks++;
+    }
+
+    TrackData data;
+    data.ntracks = ntracks;
+    data.headers = new TrackHeader[ntracks];
+    data.points = new TrackPoint[n - ntracks];
+    size_t j = 0;
+    for (size_t i = 0; i < ntracks; i++) {
+        const TrackHeader &h =
+            *reinterpret_cast<TrackHeader *>(&buf[blocksize * j]);
+        data.headers[i].npts = h.npts;
+        data.headers[i].ptype = h.ptype;
+        data.headers[i].offset = j - i;
+        size_t start = j + size_t(h.npts);
+        for (; j < start; j++) {
+            data.points[j - i] =
+                *reinterpret_cast<TrackPoint *>(&buf[blocksize * (j + 1)]);
+        }
+        j++;
+    }
+    free(buf);
+    qDebug("Loaded %lu tracks, average length %.1f", ntracks,
+           double(n - ntracks) / ntracks);
+    return data;
+}
+
+static TrackData filterTracks(const TrackData& orig) {
+
+    // Apply all ye clipping planes! Joyful and triumphant!
+
+    // ^ Requires a std::vector<pt> to handle all that stuff
+
+    // Apply whatever time range, energy range, particle type
+    // filters are necessary. (Note: t/e range can split lines..)
+    TrackData clone;
+    clone.ntracks = orig.ntracks;
+    clone.headers = new TrackHeader[clone.ntracks];
+    const TrackHeader& last = orig.headers[orig.ntracks-1];
+    size_t n = size_t(last.npts) + last.offset;
+    clone.points = new TrackPoint[n];
+    memcpy(clone.headers,orig.headers, sizeof(TrackHeader)*clone.ntracks);
+    memcpy(clone.points,orig.points, sizeof(TrackPoint)*n);
+    return clone;
+}
+
+static void clearTrackData(TrackData& t) {
+    delete[] t.headers;
+    delete[] t.points;
+    t.headers = NULL;
+    t.points = NULL;
+    t.ntracks = 0;
+}
+
 Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     which_geo = idx;
     geo_options = options;
@@ -656,6 +730,8 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
         geo_options[which_geo].cache = geo_options[which_geo].cons->Construct();
     }
     vd = initVD(convertCreation(geo_options[which_geo].cache));
+    origtrackdata = loadTracks("trace.dat");
+    trackdata = filterTracks(origtrackdata);
 
     QMenu *picker = new QMenu("Choose Geometry");
     QActionGroup *opts = new QActionGroup(this);
@@ -707,7 +783,7 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     this->menuBar()->addAction(screenAction);
     this->menuBar()->addAction(screen4Action);
 
-    rwidget = new RenderWidget(vd);
+    rwidget = new RenderWidget(vd, trackdata);
     this->setCentralWidget(rwidget);
     rwidget->setFocusPolicy(Qt::WheelFocus);
 
@@ -936,6 +1012,9 @@ void Viewer::updatePlanes() {
             vd.clipping_planes.push_back(p);
         }
     }
+    // TODO: find a threadsafe smart pointer to nuke old track editions
+    clearTrackData(trackdata);
+    trackdata = filterTracks(origtrackdata);
     rwidget->rerender();
 }
 
@@ -997,7 +1076,7 @@ void Viewer::screenshot(int sx) {
     connect(&d, SIGNAL(canceled()), &w, SLOT(coAbort()));
     QImage im(rwidget->width() * sx, rwidget->height() * sx,
               QImage::Format_RGB32);
-    bool worked = w.render(sccopy, &im, 0, 1, &d);
+    bool worked = w.render(sccopy, &trackdata, &im, 0, 1, &d);
     d.close();
     if (!worked) {
         return;
