@@ -413,22 +413,29 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     const TrackHeader *headers = t.getHeaders();
     const TrackPoint *points = t.getPoints();
     for (size_t i = 0; i < ntracks; i++) {
-        const TrackHeader &header = headers[i];
-        // TODO: evtly, trackc a function of energy and time
-        const TrackPoint *tp = &points[header.offset];
-        for (int j = 0; j < header.npts - 1; j++) {
-            const TrackPoint &ep = tp[j];
-            const TrackPoint &sp = tp[j + 1];
-            // Trace a line ep->sp with the given color
+        if (this->abort_task) {
+            this->abort_task = false;
+            emit aborted();
+            return false;
+        }
 
-            // Ortho projection to x/y coordinates relative to center
-            // When not ortho,
+        const TrackHeader &header = headers[i];
+        const TrackPoint *tp = &points[header.offset];
+        // Project calculations 1 point ahead
+        TrackPoint sp = tp[0];
+        G4ThreeVector spos(sp.x, sp.y, sp.z);
+        int sdx, sdy;
+        double soff;
+        soff = iproject(spos, d, w, h, &sdx, &sdy);
+        for (int j = 1; j < header.npts; j++) {
+            // Adopt previous late point as early point
+            TrackPoint ep = sp;
+            int edx = sdx, edy = sdy;
+            double eoff = soff;
+            // Calculate new late point
+            sp = tp[j];
             G4ThreeVector spos(sp.x, sp.y, sp.z);
-            G4ThreeVector epos(ep.x, ep.y, ep.z);
-            int sdx, sdy, edx, edy;
-            double soff, eoff;
             soff = iproject(spos, d, w, h, &sdx, &sdy);
-            eoff = iproject(epos, d, w, h, &edx, &edy);
 
             if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
                 (edx >= xh && sdx >= xh) || (edy >= yh && sdy >= yh)) {
@@ -437,14 +444,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
 
             // TODO: adjustable width lines,
             // so they can be more than 1 pixel thick and widths
-            // aren't grid independent
+            // aren't grid dependent. (Need a fast random source...)
 
-            // Also TODO: clipping plane filtering of the tracks
-            // (basically, iteratively apply clipping planes...
-            // -> is sequential line subdivision and transformation,
-            // adjusting endpoints to match. Note that it will likely alter the
-            // number
-            // of total tracks, so a std::vector<> oughta be a good intermediate
             if (sdx == edx && sdy == edy) {
                 int x = sdx, y = sdy;
                 if (xl <= x && x < xh && yl <= y && y < yh) {
@@ -544,13 +545,13 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
     for (int i = yl; i < yh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
         for (int j = xl; j < xh; j++) {
-            if (this->abort_task) {
-                this->abort_task = false;
-                emit aborted();
-                delete[] trackdists;
-                delete[] trackcolors;
-                return false;
-            }
+            //            if (this->abort_task) {
+            //                this->abort_task = false;
+            //                emit aborted();
+            //                delete[] trackdists;
+            //                delete[] trackcolors;
+            //                return false;
+            //            }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
             int m = traceRay(pt, d, hits, ints, M, iter);
@@ -771,6 +772,9 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range, Range) {
 
     std::vector<TrackHeader> ch;
     std::vector<TrackPoint> cp;
+    // Should yield extra space except for pathological cases
+    ch.reserve(other.getNTracks());
+    cp.reserve(other.getNPoints());
     for (size_t i = 0; i < otracks; i++) {
         const TrackPoint *seq = &opoints[oheaders[i].offset];
         int npts = oheaders[i].npts;
