@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
 
     std::vector<GeoOption> opts;
     size_t chc = 0;
-    for (size_t j = 1; j < argc; j++) {
+    for (int j = 1; j < argc; j++) {
         // Load GDML file with name
         G4GDMLParser p;
         G4cout << "Started reading (may take a while)..." << G4endl;

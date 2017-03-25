@@ -1,4 +1,4 @@
-#include "Viewer.hh"
+#include "RenderWorker.hh"
 
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
@@ -390,6 +390,13 @@ static double iproject(G4ThreeVector point, const ViewData &d, int w, int h,
     return std::abs(off);
 }
 
+QRgb trackColor(const TrackHeader &h, const TrackPoint &a, const TrackPoint &b,
+                double interp) {
+    double mtime = double(a.time) * (1. - interp) * double(b.time) * interp;
+    double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
+    return QColor::fromHslF(ptime, 0.8, 0.5).rgb();
+}
+
 bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                                 G4double *dists, QRgb *colors, int slice,
                                 int nslices, int w, int h) {
@@ -402,17 +409,16 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
         dists[s] = kInfinity;
         colors[s] = qRgb(255, 255, 255);
     }
-    for (size_t i = 0; i < t.ntracks; i++) {
-        const TrackHeader &header = t.headers[i];
+    size_t ntracks = t.getNTracks();
+    const TrackHeader *headers = t.getHeaders();
+    const TrackPoint *points = t.getPoints();
+    for (size_t i = 0; i < ntracks; i++) {
+        const TrackHeader &header = headers[i];
         // TODO: evtly, trackc a function of energy and time
-        TrackPoint *tp = &t.points[header.offset];
-        double sct = tp[header.npts - 1].time / (10.0 * CLHEP::ns);
-        while (sct > 1.0)
-            sct -= 1.0;
-        QRgb trackc = QColor::fromHslF(sct, 1.0, 0.5).rgb();
+        const TrackPoint *tp = &points[header.offset];
         for (int j = 0; j < header.npts - 1; j++) {
-            const TrackPoint &sp = tp[j];
-            const TrackPoint &ep = tp[j + 1];
+            const TrackPoint &ep = tp[j];
+            const TrackPoint &sp = tp[j + 1];
             // Trace a line ep->sp with the given color
 
             // Ortho projection to x/y coordinates relative to center
@@ -436,7 +442,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
             // Also TODO: clipping plane filtering of the tracks
             // (basically, iteratively apply clipping planes...
             // -> is sequential line subdivision and transformation,
-            // adjusting endpoints to match. Note that it will likely alter the number
+            // adjusting endpoints to match. Note that it will likely alter the
+            // number
             // of total tracks, so a std::vector<> oughta be a good intermediate
             if (sdx == edx && sdy == edy) {
                 int x = sdx, y = sdy;
@@ -446,7 +453,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                     int sidx = (y - yl) * (xh - xl) + (x - xl);
                     if (dists[sidx] > off) {
                         dists[sidx] = off;
-                        colors[sidx] = trackc;
+                        colors[sidx] = trackColor(header, ep, sp, 0.5);
                     }
                 }
             } else if (std::abs(sdx - edx) > std::abs(sdy - edy)) {
@@ -454,7 +461,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                     std::swap(sdx, edx);
                     std::swap(sdy, edy);
                 }
-                for (int x = std::max(edx,xl); x <= std::min(sdx, xh-1); x++) {
+                for (int x = std::max(edx, xl); x <= std::min(sdx, xh - 1);
+                     x++) {
                     int y = edy + ((sdy - edy) * (x - edx)) / (sdx - edx);
                     if (yl <= y && y < yh) {
                         double off =
@@ -462,7 +470,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                         int sidx = (y - yl) * (xh - xl) + (x - xl);
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
-                            colors[sidx] = trackc;
+                            colors[sidx] = trackColor(
+                                header, ep, sp, (x - edx) / double(sdx - edx));
                         }
                     }
                 }
@@ -471,7 +480,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                     std::swap(sdx, edx);
                     std::swap(sdy, edy);
                 }
-                for (int y = std::max(edy,yl); y <= std::min(sdy,yh-1); y++) {
+                for (int y = std::max(edy, yl); y <= std::min(sdy, yh - 1);
+                     y++) {
                     int x = edx + ((sdx - edx) * (y - edy)) / (sdy - edy);
                     if (xl <= x && x < xh) {
                         double off =
@@ -479,7 +489,9 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                         int sidx = (y - yl) * (xh - xl) + (x - xl);
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
-                            colors[sidx] = trackc;
+                            colors[sidx] = trackColor(
+                                header, ep, sp, (y - edy) / double(sdy - edy));
+                            ;
                         }
                     }
                 }
@@ -489,7 +501,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     return true;
 }
 
-bool RenderWorker::render(ViewData d, TrackData *t, QImage *next, int slice,
+bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
                           int nslices, QProgressDialog *progdiag) {
     if (!d.root.solid) {
         return false;
@@ -521,7 +533,7 @@ bool RenderWorker::render(ViewData d, TrackData *t, QImage *next, int slice,
     int iter = 0;
     G4double *trackdists = new G4double[(xh - xl) * (yh - yl)];
     QRgb *trackcolors = new QRgb[(xh - xl) * (yh - yl)];
-    bool s = renderTracks(d, *t, trackdists, trackcolors, slice, nslices, w, h);
+    bool s = renderTracks(d, t, trackdists, trackcolors, slice, nslices, w, h);
     if (!s) {
         // aborted
         delete[] trackdists;
@@ -645,4 +657,228 @@ bool RenderWorker::render(ViewData d, TrackData *t, QImage *next, int slice,
     delete[] trackdists;
     delete[] trackcolors;
     return true;
+}
+
+TrackData::TrackData() {
+    //    data = NULL;
+}
+
+TrackData::TrackData(const char *filename) {
+    FILE *f = fopen(filename, "rb");
+    fseek(f, 0, SEEK_END);
+    size_t fsize = size_t(ftell(f));
+    fseek(f, 0, SEEK_SET);
+    char *buf = reinterpret_cast<char *>(malloc(fsize));
+    fread(buf, fsize, 1, f);
+    fclose(f);
+
+    size_t blocksize = sizeof(TrackPoint);
+    size_t n = fsize / blocksize;
+    size_t ntracks = 0;
+    for (size_t i = 0; i < n;) {
+        const TrackHeader &h =
+            *reinterpret_cast<TrackHeader *>(&buf[blocksize * i]);
+        i += 1 + size_t(h.npts);
+        ntracks++;
+    }
+
+    TrackPrivateData *pd = new TrackPrivateData(ntracks, n - ntracks);
+    TrackHeader *headers = pd->headers;
+    TrackPoint *points = pd->points;
+    size_t j = 0;
+    for (size_t i = 0; i < ntracks; i++) {
+        const TrackHeader &h =
+            *reinterpret_cast<TrackHeader *>(&buf[blocksize * j]);
+        headers[i].npts = h.npts;
+        headers[i].ptype = h.ptype;
+        headers[i].offset = j - i;
+        size_t start = j + size_t(h.npts);
+        for (; j < start; j++) {
+            points[j - i] =
+                *reinterpret_cast<TrackPoint *>(&buf[blocksize * (j + 1)]);
+        }
+        j++;
+    }
+    free(buf);
+    data = QSharedDataPointer<TrackPrivateData>(pd);
+}
+
+TrackData::TrackData(const TrackData &other) : data(other.data) {}
+
+static bool insideConvex(std::vector<Plane> clips, G4ThreeVector point) {
+    // The empty convex hull by default contains everything
+    for (const Plane &p : clips) {
+        if (p.normal * point - p.offset < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void lineCuts(std::vector<Plane> clips, G4ThreeVector from,
+                     G4ThreeVector to, G4double &lowE, G4double &highE) {
+    G4double low = -kInfinity;
+    G4double high = kInfinity;
+    for (const Plane &p : clips) {
+        G4double fpos = p.offset - p.normal * from;
+        G4double tpos = p.offset - p.normal * to;
+        if (fpos - tpos == 0.) {
+            // TODO sign may be off
+            if (fpos > 0) {
+                // On cut side of parallel plane
+                low = kInfinity;
+                high = -kInfinity;
+            } else {
+                // No change, inside simplex
+            }
+            continue;
+        }
+        // [0,1] becomes [fpos,tpos]: inv img of 0.
+        // x' = (x - 0) * (fpos - tpos) + fpos
+        // x = (x' - fpos) /  (fpos - tpos)
+        G4double pos = fpos / (fpos - tpos);
+        if (tpos < fpos) {
+            low = std::max(pos, low);
+        } else {
+            high = std::min(pos, high);
+        }
+    }
+    lowE = low;
+    highE = high;
+}
+
+static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
+    TrackPoint c;
+    double dx = 1.0 - mx;
+    c.x = dx * a.x + mx * b.x;
+    c.y = dx * a.y + mx * b.y;
+    c.z = dx * a.z + mx * b.z;
+    c.time = float(dx) * a.time + float(mx) * b.time;
+    c.energy = float(dx) * a.energy + float(mx) * b.energy;
+    return c;
+}
+
+TrackData::TrackData(const TrackData &other, ViewData &vd, Range, Range) {
+    // TODO: first, clipping plane filtering. A line can be cut at most twice.
+    // by the convex hull.
+    // So, iterate over lines, trace entry and exit points.
+    // Create a std::vector<> of points, and one of headers.
+    // Finally, reconstruct the whole....
+
+    size_t otracks = other.getNTracks();
+    const TrackHeader *oheaders = other.getHeaders();
+    const TrackPoint *opoints = other.getPoints();
+
+    std::vector<TrackHeader> ch;
+    std::vector<TrackPoint> cp;
+    for (size_t i = 0; i < otracks; i++) {
+        const TrackPoint *seq = &opoints[oheaders[i].offset];
+        int npts = oheaders[i].npts;
+        G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);
+        if (insideConvex(vd.clipping_planes, fts)) {
+            TrackHeader h;
+            h.offset = cp.size();
+            h.ptype = oheaders[i].ptype;
+            h.npts = 1;
+            ch.push_back(h);
+            cp.push_back(seq[0]);
+        }
+
+        for (int j = 0; j < npts - 1; j++) {
+            double low, high;
+            G4ThreeVector pl(seq[j].x, seq[j].y, seq[j].z);
+            G4ThreeVector ph(seq[j + 1].x, seq[j + 1].y, seq[j + 1].z);
+            lineCuts(vd.clipping_planes, pl, ph, low, high);
+            if (low <= 0. && high >= 1.) {
+                // Keep point
+                ch[ch.size() - 1].npts++;
+                cp.push_back(seq[j + 1]);
+            } else if (low <= 0. && high < 1.) {
+                if (high > 0.) {
+                    ch[ch.size() - 1].npts++;
+                    cp.push_back(linmix(seq[j], seq[j + 1], high));
+                } else {
+                    // Not there entirely
+                }
+            } else if (low > 0. && high >= 1.) {
+                if (low < 1.) {
+                    // Starting new sequence
+                    TrackHeader h;
+                    h.offset = cp.size();
+                    h.ptype = oheaders[i].ptype;
+                    h.npts = 1;
+                    ch.push_back(h);
+                    cp.push_back(linmix(seq[j], seq[j + 1], low));
+                } else {
+                    // Not there entirely
+                }
+            } else {
+                if (high < 1. && low > 0. && low < high) {
+                    // low > 0, high < 1
+                    // A whole new short segment...
+                    TrackHeader h;
+                    h.offset = cp.size();
+                    h.ptype = oheaders[i].ptype;
+                    h.npts = 2;
+                    ch.push_back(h);
+                    cp.push_back(linmix(seq[j], seq[j + 1], low));
+                    cp.push_back(linmix(seq[j], seq[j + 1], high));
+                }
+            }
+        }
+    }
+    // TODO: apply time and energy range filters, assuming hopefully
+    // that both are monotonic?
+
+    size_t qtracks = ch.size();
+    size_t qpoints = cp.size();
+    TrackPrivateData *pd = new TrackPrivateData(qtracks, qpoints);
+    TrackHeader *headers = pd->headers;
+    TrackPoint *points = pd->points;
+    memcpy(headers, ch.data(), sizeof(TrackHeader) * qtracks);
+    memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
+    data = QSharedDataPointer<TrackPrivateData>(pd);
+}
+
+TrackData::~TrackData() {}
+
+size_t TrackData::getNPoints() const {
+    if (!data) {
+        return 0;
+    }
+    return data.constData()->npoints;
+}
+size_t TrackData::getNTracks() const {
+    if (!data) {
+        return 0;
+    }
+    return data.constData()->ntracks;
+}
+const TrackHeader *TrackData::getHeaders() const {
+    if (!data) {
+        return NULL;
+    }
+    return data.constData()->headers;
+}
+const TrackPoint *TrackData::getPoints() const {
+    if (!data) {
+        return NULL;
+    }
+    return data.constData()->points;
+}
+
+TrackPrivateData::TrackPrivateData(size_t itracks, size_t ipoints) {
+    ntracks = itracks;
+    npoints = ipoints;
+    headers = new TrackHeader[ntracks];
+    points = new TrackPoint[npoints];
+}
+TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
+    : QSharedData(other), ntracks(other.ntracks), npoints(other.npoints),
+      headers(other.headers), points(other.points) {
+    ref.ref();
+}
+TrackPrivateData::~TrackPrivateData() {
+    delete[] headers;
+    delete[] points;
 }
