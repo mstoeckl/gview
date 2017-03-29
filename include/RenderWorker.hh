@@ -72,7 +72,6 @@ typedef struct {
 } TrackPoint;
 
 typedef struct { double low, high; } Range;
-
 class TrackPrivateData : public QSharedData {
 public:
     size_t ntracks;
@@ -96,6 +95,8 @@ public:
     size_t getNTracks() const;
     const TrackHeader *getHeaders() const;
     const TrackPoint *getPoints() const;
+    void calcTimeBounds(double &lower, double &upper) const;
+    void calcEnergyBounds(double &lower, double &upper) const;
 
 private:
     QSharedDataPointer<TrackPrivateData> data;

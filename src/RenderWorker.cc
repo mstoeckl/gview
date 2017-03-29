@@ -142,11 +142,6 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
             break;
         }
     }
-    // Create direction vector sequence....
-    // Stack allocation is _way_ faster than vector malloc costs,
-    // but incurs drag from stack bloat. (maxdepth*8*15 bytes)
-    // May want to establish as thread-local memory...
-    // TODO: establish maxdepth!
     G4ThreeVector directions[maxdepth];
     G4ThreeVector positions[maxdepth];
     G4RotationMatrix rotations[maxdepth];
@@ -179,24 +174,6 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
         // Intersection on entry
     }
 
-    // Note: w/ mutable, there is a viable partial ordering optimization
-    // For each element, record in elem the closest absolute intersection dist;
-    // For the current element, the closest valid leaving dist is stored
-    // (Note each thread has its own element tree...)
-    // We recalculate abs distances in the routine only if the current distance
-    // has surpassed the calculated distance. (Thus kInfinity is an option).
-    // This should, for nested solids, reduce net calcs to 1 per missed,
-    // 2 per intersected convex thing, rather than redoing all every
-    // intersection
-    // Note: Routine compiles in large part into lots of moves. Too copy-heavy?
-    // YES!
-    // 1: TODO, pass down rotations at decompile level
-    // So everything is in absolute coordinates... (saves a full rotation
-    // sequence)
-    // Then it's dir w/ only offsets, and rotations applied last
-    // Issue: rotate early, then all children rotated :-(
-    // We track: sdist, and keep positions fixed, recalcing intersections as
-    // needed?)
     for (int iter = 0; iter < 1000; iter++) {
         const Element &curr = *stack[n - 1];
         const G4ThreeVector &dir = directions[n - 1];
@@ -392,6 +369,7 @@ static double iproject(G4ThreeVector point, const ViewData &d, int w, int h,
 
 QRgb trackColor(const TrackHeader &h, const TrackPoint &a, const TrackPoint &b,
                 double interp) {
+    Q_UNUSED(h);
     double mtime = double(a.time) * (1. - interp) * double(b.time) * interp;
     double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
     return QColor::fromHslF(ptime, 0.8, 0.5).rgb();
@@ -400,33 +378,58 @@ QRgb trackColor(const TrackHeader &h, const TrackPoint &a, const TrackPoint &b,
 bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                                 G4double *dists, QRgb *colors, int slice,
                                 int nslices, int w, int h) {
-    // ^ All three vectors are normalized...
+    // Fixme: the lower edge sometimes displays blank
+    // Exact cause unknown
 
     int xl, xh, yl, yh;
     sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
-    //    int mind = w > h ? h : w;
     for (int s = 0; s < (yh - yl) * (xh - xl); s++) {
         dists[s] = kInfinity;
-        colors[s] = qRgb(255, 255, 255);
+        double r = 255. * s / ((yh - yl) * (xh - xl) - 1);
+        Q_UNUSED(r);
+        colors[s] = qRgb(255, 255, 255 /*r*/);
     }
     size_t ntracks = t.getNTracks();
     const TrackHeader *headers = t.getHeaders();
     const TrackPoint *points = t.getPoints();
-    for (size_t i = 0; i < ntracks; i++) {
-        if (this->abort_task) {
-            this->abort_task = false;
-            emit aborted();
-            return false;
+
+    typedef struct { float x, y; } Pt;
+    std::vector<Pt> brush;
+    int mind = w > h ? h : w;
+    float rad = mind / 500.0f;
+    if (rad <= 1.0f) {
+        brush.push_back({0.0f, 0.0f});
+    } else {
+        // Construct brush point list. This will pack a circle,
+        // but be otherwise kinda overkill
+        int sdv = int(rad + 0.5f);
+        for (int i = 0; i < sdv; i++) {
+            float r = i * rad / (sdv - 1);
+            int k = int(CLHEP::twopi * r + 1.0);
+            for (int j = 0; j < k; j++) {
+                Pt q;
+                q.x = r * float(std::cos(j * CLHEP::twopi / k));
+                q.y = r * float(std::sin(j * CLHEP::twopi / k));
+                brush.push_back(q);
+            }
         }
+    }
+
+    for (size_t i = 0; i < ntracks; i++) {
+        //        if (this->abort_task) {
+        //            this->abort_task = false;
+        //            emit aborted();
+        //            return false;
+        //        }
 
         const TrackHeader &header = headers[i];
         const TrackPoint *tp = &points[header.offset];
         // Project calculations 1 point ahead
         TrackPoint sp = tp[0];
-        G4ThreeVector spos(sp.x, sp.y, sp.z);
+        G4ThreeVector ospos(sp.x, sp.y, sp.z);
         int sdx, sdy;
         double soff;
-        soff = iproject(spos, d, w, h, &sdx, &sdy);
+        soff = iproject(ospos, d, w, h, &sdx, &sdy);
         for (int j = 1; j < header.npts; j++) {
             // Adopt previous late point as early point
             TrackPoint ep = sp;
@@ -442,57 +445,45 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                 continue;
             }
 
-            // TODO: adjustable width lines,
-            // so they can be more than 1 pixel thick and widths
-            // aren't grid dependent. (Need a fast random source...)
-
-            if (sdx == edx && sdy == edy) {
-                int x = sdx, y = sdy;
-                if (xl <= x && x < xh && yl <= y && y < yh) {
-                    double off = eoff;
-                    // Override color/track length only if before prev item
-                    int sidx = (y - yl) * (xh - xl) + (x - xl);
-                    if (dists[sidx] > off) {
-                        dists[sidx] = off;
-                        colors[sidx] = trackColor(header, ep, sp, 0.5);
-                    }
-                }
-            } else if (std::abs(sdx - edx) > std::abs(sdy - edy)) {
-                if (sdx < edx) {
-                    std::swap(sdx, edx);
-                    std::swap(sdy, edy);
-                }
-                for (int x = std::max(edx, xl); x <= std::min(sdx, xh - 1);
-                     x++) {
-                    int y = edy + ((sdy - edy) * (x - edx)) / (sdx - edx);
-                    if (yl <= y && y < yh) {
-                        double off =
-                            eoff + ((soff - eoff) * (x - edx)) / (sdx - edx);
-                        int sidx = (y - yl) * (xh - xl) + (x - xl);
-                        if (dists[sidx] > off) {
-                            dists[sidx] = off;
-                            colors[sidx] = trackColor(
-                                header, ep, sp, (x - edx) / double(sdx - edx));
-                        }
-                    }
-                }
+            // NOTE: single point lines are acceptable
+            float dy, dx;
+            int n;
+            if (std::abs(sdx - edx) > std::abs(sdy - edy)) {
+                n = std::abs(sdx - edx) + 1;
+                dx = sdx - edx > 0 ? 1.0 : -1.0;
+                dy = float(sdy - edy) / float(n);
             } else {
-                if (sdy < edy) {
-                    std::swap(sdx, edx);
-                    std::swap(sdy, edy);
-                }
-                for (int y = std::max(edy, yl); y <= std::min(sdy, yh - 1);
-                     y++) {
-                    int x = edx + ((sdx - edx) * (y - edy)) / (sdy - edy);
-                    if (xl <= x && x < xh) {
-                        double off =
-                            eoff + ((soff - eoff) * (y - edy)) / (sdy - edy);
-                        int sidx = (y - yl) * (xh - xl) + (x - xl);
+                n = std::abs(sdy - edy) + 1;
+                dy = sdy - edy > 0 ? 1.0 : -1.0;
+                dx = float(sdx - edx) / float(n);
+            }
+            float ix = edx;
+            float iy = edy;
+
+            int uxl = dx == 0.0f ? 0 : int((xl - edx) / dx);
+            int uyl = dy == 0.0f ? 0 : int((yl - edy) / dy);
+            int uxh = dx == 0.0f ? INT_MAX : int((xh - edx) / dx);
+            int uyh = dy == 0.0f ? INT_MAX : int((yh - edy) / dy);
+
+            // Extra buffers are just in case
+            int near = std::max(std::min(uxl, uxh), std::min(uyl, uyh)) - 1;
+            int far = std::min(std::max(uxl, uxh), std::max(uyl, uyh)) + 1;
+
+            for (int s = std::max(near, 0); s < std::min(far, n); s++) {
+                float x = ix + s * dx;
+                float y = iy + s * dy;
+                double b = n >= 2 ? s / double(n - 1) : 0.5;
+                for (const Pt &p : brush) {
+                    // Q: rotate brush? but expensive!, 1 si/cos each
+                    int rx = int(x + p.x);
+                    int ry = int(y + p.y);
+                    if (yl <= ry && ry < yh && xl <= rx && rx < xh) {
+                        // ^ check if point + brush offset in range...
+                        int sidx = (ry - yl) * (xh - xl) + (rx - xl);
+                        double off = eoff * (1 - b) + soff * b;
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
-                            colors[sidx] = trackColor(
-                                header, ep, sp, (y - edy) / double(sdy - edy));
-                            ;
+                            colors[sidx] = trackColor(header, ep, sp, b);
                         }
                     }
                 }
@@ -759,7 +750,8 @@ static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
     return c;
 }
 
-TrackData::TrackData(const TrackData &other, ViewData &vd, Range, Range) {
+TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
+                     Range erange) {
     // TODO: first, clipping plane filtering. A line can be cut at most twice.
     // by the convex hull.
     // So, iterate over lines, trace entry and exit points.
@@ -775,11 +767,15 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range, Range) {
     // Should yield extra space except for pathological cases
     ch.reserve(other.getNTracks());
     cp.reserve(other.getNPoints());
+    float tlow = float(trange.low), thigh = float(trange.high);
+    float elow = float(erange.low), ehigh = float(erange.high);
     for (size_t i = 0; i < otracks; i++) {
         const TrackPoint *seq = &opoints[oheaders[i].offset];
         int npts = oheaders[i].npts;
         G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);
-        if (insideConvex(vd.clipping_planes, fts)) {
+        bool intime = seq[0].time >= tlow && seq[0].time <= thigh;
+        bool inenergy = seq[0].energy >= elow && seq[0].energy <= ehigh;
+        if (insideConvex(vd.clipping_planes, fts) && intime && inenergy) {
             TrackHeader h;
             h.offset = cp.size();
             h.ptype = oheaders[i].ptype;
@@ -793,6 +789,19 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range, Range) {
             G4ThreeVector pl(seq[j].x, seq[j].y, seq[j].z);
             G4ThreeVector ph(seq[j + 1].x, seq[j + 1].y, seq[j + 1].z);
             lineCuts(vd.clipping_planes, pl, ph, low, high);
+            float tcutlow =
+                (tlow - seq[j].time) / (seq[j + 1].time - seq[j].time);
+            float tcuthigh =
+                (thigh - seq[j].time) / (seq[j + 1].time - seq[j].time);
+            low = std::max(double(tcutlow), low);
+            high = std::min(double(tcuthigh), high);
+            float ecutlow =
+                (elow - seq[j].energy) / (seq[j + 1].energy - seq[j].energy);
+            float ecuthigh =
+                (ehigh - seq[j].energy) / (seq[j + 1].energy - seq[j].energy);
+            low = std::max(double(ecutlow), low);
+            high = std::min(double(ecuthigh), high);
+
             if (low <= 0. && high >= 1.) {
                 // Keep point
                 ch[ch.size() - 1].npts++;
@@ -831,8 +840,6 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range, Range) {
             }
         }
     }
-    // TODO: apply time and energy range filters, assuming hopefully
-    // that both are monotonic?
 
     size_t qtracks = ch.size();
     size_t qpoints = cp.size();
@@ -869,6 +876,35 @@ const TrackPoint *TrackData::getPoints() const {
         return NULL;
     }
     return data.constData()->points;
+}
+void TrackData::calcTimeBounds(double &lower, double &upper) const {
+    upper = -kInfinity;
+    lower = kInfinity;
+    if (!data) {
+        return;
+    }
+    TrackPoint *pts = data.constData()->points;
+    size_t npts = data.constData()->npoints;
+    for (size_t i = 0; i < npts; i++) {
+        upper = std::fmax(pts[i].time, upper);
+        lower = std::fmin(pts[i].time, lower);
+    }
+}
+void TrackData::calcEnergyBounds(double &lower, double &upper) const {
+    upper = -kInfinity;
+    lower = kInfinity;
+    if (!data) {
+        return;
+    }
+    TrackPoint *pts = data.constData()->points;
+    size_t npts = data.constData()->npoints;
+    for (size_t i = 0; i < npts; i++) {
+        float e = pts[i].energy;
+        upper = std::fmax(e, upper);
+        if (e > 0.) {
+            lower = std::fmin(pts[i].energy, lower);
+        }
+    }
 }
 
 TrackPrivateData::TrackPrivateData(size_t itracks, size_t ipoints) {

@@ -20,17 +20,24 @@ int main(int argc, char **argv) {
     }
 
     std::vector<GeoOption> opts;
-    size_t chc = 0;
+    size_t chc = argc - 2;
     for (int j = 1; j < argc; j++) {
         // Load GDML file with name
         G4GDMLParser p;
+        p.SetAddPointerToName(true);
         G4cout << "Started reading (may take a while)..." << G4endl;
         p.Read(argv[j], false);
         G4cout << "Done reading..." << G4endl;
         GeoOption g;
         g.name = G4String(argv[j]);
         g.cons = NULL;
+        // Need to modify volume name to prevent collisions in lookup
         g.cache = p.GetWorldVolume();
+        char buf[30];
+        sprintf(buf, "-%d", j);
+        G4String name = g.cache->GetName() + buf;
+        g.cache->SetName(name);
+        g.cache->GetLogicalVolume()->SetName(name);
         opts.push_back(g);
         G4cout << "Done converting..." << G4endl;
         p.Clear();

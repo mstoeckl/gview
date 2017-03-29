@@ -247,6 +247,51 @@ Plane PlaneEdit::getPlane() {
     return p;
 }
 
+ExpoSpinBox::ExpoSpinBox() {}
+ExpoSpinBox::~ExpoSpinBox() {}
+
+QValidator::State ExpoSpinBox::validate(QString &text, int &pos) const {
+    static const QRegularExpression regExp(tr("(\\d).(\\d)e(\\d)"));
+    Q_ASSERT(regExp.isValid());
+    const QRegularExpressionMatch match = regExp.match(text);
+    if (match.isValid()) {
+        return QValidator::Acceptable;
+    }
+    // note: invalid are wrong character classes; may want to cull those
+    // TODO: evtly, optimize to work precisely & error correct
+    return QValidator::Intermediate;
+}
+
+int ExpoSpinBox::valueFromText(const QString &text) const {
+    static const QRegularExpression regExp(tr("(\\d).(\\d)e(\\d)"));
+    Q_ASSERT(regExp.isValid());
+
+    const QRegularExpressionMatch match = regExp.match(text);
+    if (match.isValid()) {
+        int a = match.captured(1).toInt();
+        int b = match.captured(2).toInt();
+        int c = match.captured(3).toInt();
+        return c * 90 + (a - 1) * 10 + b;
+    }
+    return 0;
+}
+
+QString ExpoSpinBox::textFromValue(int i) const {
+    return QString("%1.%2e%3").arg((i % 90) / 10 + 1).arg(i % 10).arg(i / 90);
+}
+
+double ExpoSpinBox::expFromInt(int r) const {
+    int e = r / 100;
+    double s = (r % 100) / 100.;
+    return s * std::pow(10., e);
+}
+int ExpoSpinBox::nearestIntFromExp(double d) const {
+    int base = int(std::log10(d));
+    double mant = d / std::pow(10., base);
+    int imt = int(mant * 10.);
+    return 100 * base + imt;
+}
+
 ViewData initVD(const Element &root) {
     ViewData d;
     d.root = root;
@@ -291,8 +336,15 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     }
     vd = initVD(convertCreation(geo_options[which_geo].cache));
     origtrackdata = TrackData("trace.dat");
-    Range trange = {0.0 * CLHEP::ns, 3.0 * CLHEP::ns};
-    Range erange = {1 * CLHEP::keV, 300 * CLHEP::keV};
+    //    origtrackdata = TrackData();
+    double lower_time, upper_time;
+    origtrackdata.calcTimeBounds(lower_time, upper_time);
+    double lower_energy, upper_energy;
+    origtrackdata.calcEnergyBounds(lower_energy, upper_energy);
+    lower_energy /= 1.2;
+    upper_energy *= 1.2;
+    Range trange = {lower_time, upper_time};
+    Range erange = {lower_energy, upper_energy};
     trackdata = TrackData(origtrackdata, vd, trange, erange);
 
     QMenu *picker = new QMenu("Choose Geometry");
@@ -339,6 +391,9 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     shift = false;
 
     this->menuBar()->addMenu(picker);
+    // TODO include time range (in ns) in clip;
+    // use a get_min_max time/energy for the tracks
+    // disable if null tracks
     this->menuBar()->addAction(clipAction);
     this->menuBar()->addAction(treeAction);
     this->menuBar()->addAction(infoAction);
@@ -365,6 +420,58 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
         vb->addWidget(plane_edit[i], 0);
         connect(plane_edit[i], SIGNAL(updated()), this, SLOT(updatePlanes()));
     }
+    times_lower = new QDoubleSpinBox();
+    times_upper = new QDoubleSpinBox();
+    times_lower->setSuffix("ns");
+    times_upper->setSuffix("ns");
+    times_lower->setDecimals(3);
+    times_upper->setDecimals(3);
+    times_lower->setSingleStep(0.1);
+    times_upper->setSingleStep(0.1);
+    if (lower_time <= upper_time) {
+        times_lower->setRange(lower_time / CLHEP::ns, upper_time / CLHEP::ns);
+        times_upper->setRange(lower_time / CLHEP::ns, upper_time / CLHEP::ns);
+        times_lower->setValue(lower_time / CLHEP::ns);
+        times_upper->setValue(upper_time / CLHEP::ns);
+    } else {
+        times_lower->setDisabled(true);
+        times_upper->setDisabled(true);
+    }
+    connect(times_lower, SIGNAL(valueChanged(double)), this,
+            SLOT(updatePlanes()));
+    connect(times_upper, SIGNAL(valueChanged(double)), this,
+            SLOT(updatePlanes()));
+    energy_lower = new ExpoSpinBox();
+    energy_upper = new ExpoSpinBox();
+    if (lower_energy > upper_energy) {
+        energy_lower->setRange(0, 900 - 1);
+        energy_upper->setRange(0, 900 - 1);
+        energy_lower->setDisabled(true);
+        energy_upper->setDisabled(true);
+    } else {
+        int el = energy_lower->nearestIntFromExp(lower_energy / CLHEP::eV);
+        int eh = energy_lower->nearestIntFromExp(upper_energy / CLHEP::eV);
+        energy_lower->setRange(el, eh);
+        energy_upper->setRange(el, eh);
+        energy_lower->setValue(el);
+        energy_upper->setValue(eh);
+    }
+    energy_lower->setSingleStep(10);
+    energy_upper->setSingleStep(10);
+    energy_lower->setSuffix("eV");
+    energy_upper->setSuffix("eV");
+    connect(energy_lower, SIGNAL(valueChanged(int)), this,
+            SLOT(updatePlanes()));
+    connect(energy_upper, SIGNAL(valueChanged(int)), this,
+            SLOT(updatePlanes()));
+    QHBoxLayout *trb = new QHBoxLayout();
+    trb->addWidget(times_lower);
+    trb->addWidget(times_upper);
+    vb->addLayout(trb, 0);
+    QHBoxLayout *erb = new QHBoxLayout();
+    erb->addWidget(energy_lower);
+    erb->addWidget(energy_upper);
+    vb->addLayout(erb, 0);
     vb->addStretch(1);
     cont->setLayout(vb);
     dock_clip->setWidget(cont);
@@ -574,8 +681,12 @@ void Viewer::updatePlanes() {
             vd.clipping_planes.push_back(p);
         }
     }
-    Range trange = {0.0 * CLHEP::ns, 3.0 * CLHEP::ns};
-    Range erange = {1 * CLHEP::keV, 300 * CLHEP::keV};
+    double tlow = times_lower->value() * CLHEP::ns;
+    double thigh = times_upper->value() * CLHEP::ns;
+    double elow = energy_lower->expFromInt(energy_lower->value()) * CLHEP::eV;
+    double ehigh = energy_upper->expFromInt(energy_upper->value()) * CLHEP::eV;
+    Range trange = {std::min(tlow, thigh), std::max(tlow, thigh)};
+    Range erange = {std::min(elow, ehigh), std::max(elow, ehigh)};
     trackdata = TrackData(origtrackdata, vd, trange, erange);
     rwidget->rerender();
 }
@@ -598,7 +709,7 @@ void Viewer::changeGeometry(QAction *act) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
                 tree_model->recalculate();
-                tree_view->expandToDepth(2);
+                tree_view->collapseAll();
                 indicateElement(NULL);
                 rwidget->rerender();
                 return;

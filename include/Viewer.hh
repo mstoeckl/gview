@@ -4,6 +4,7 @@
 
 #include <QImage>
 #include <QMainWindow>
+#include <QSpinBox>
 #include <QTime>
 
 #include <vector>
@@ -77,6 +78,18 @@ private:
     QPushButton *act;
 };
 
+class ExpoSpinBox : public QSpinBox {
+    Q_OBJECT
+public:
+    ExpoSpinBox();
+    virtual ~ExpoSpinBox();
+    QValidator::State validate(QString &text, int &pos) const;
+    virtual int valueFromText(const QString &) const;
+    virtual QString textFromValue(int) const;
+    double expFromInt(int) const;
+    int nearestIntFromExp(double) const;
+};
+
 class Viewer : public QMainWindow {
     Q_OBJECT
     // viewer, etc; need a render method that fills a QImage...
@@ -109,6 +122,10 @@ private:
     QDockWidget *dock_tree;
     QDockWidget *dock_info;
     PlaneEdit *plane_edit[3];
+    QDoubleSpinBox *times_lower;
+    QDoubleSpinBox *times_upper;
+    ExpoSpinBox *energy_lower;
+    ExpoSpinBox *energy_upper;
     QTreeView *tree_view;
     OverView *tree_model;
     QTableWidget *info_table;
