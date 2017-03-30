@@ -250,7 +250,7 @@ Plane PlaneEdit::getPlane() {
 ExpoSpinBox::ExpoSpinBox() {}
 ExpoSpinBox::~ExpoSpinBox() {}
 
-QValidator::State ExpoSpinBox::validate(QString &text, int &pos) const {
+QValidator::State ExpoSpinBox::validate(QString &text, int &) const {
     static const QRegularExpression regExp(tr("(\\d).(\\d)e(\\d)"));
     Q_ASSERT(regExp.isValid());
     const QRegularExpressionMatch match = regExp.match(text);
@@ -281,8 +281,8 @@ QString ExpoSpinBox::textFromValue(int i) const {
 }
 
 double ExpoSpinBox::expFromInt(int r) const {
-    int e = r / 100;
-    double s = (r % 100) / 100.;
+    int e = r / 90;
+    double s = (r % 90) / 100. + 1.;
     return s * std::pow(10., e);
 }
 int ExpoSpinBox::nearestIntFromExp(double d) const {
@@ -341,6 +341,7 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     origtrackdata.calcTimeBounds(lower_time, upper_time);
     double lower_energy, upper_energy;
     origtrackdata.calcEnergyBounds(lower_energy, upper_energy);
+    upper_time += 0.01 * CLHEP::ns;
     lower_energy /= 1.2;
     upper_energy *= 1.2;
     Range trange = {lower_time, upper_time};

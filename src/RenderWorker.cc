@@ -340,6 +340,10 @@ static int prepareTree(const Element &e) {
 
 static void sliceBounds(int slice, int nslices, int w, int h, int &xl, int &xh,
                         int &yl, int &yh) {
+    // NOTE: tile system; step 1: prevent partial images at
+    // all costs! step 2: use different tile systems for different
+    // render layers. Requires a request graph/node system with
+    // one entry point; is 1+N control threads :-(
     xl = 0;
     xh = w;
     yl = (slice * h / nslices);
@@ -367,12 +371,22 @@ static double iproject(G4ThreeVector point, const ViewData &d, int w, int h,
     return std::abs(off);
 }
 
-QRgb trackColor(const TrackHeader &h, const TrackPoint &a, const TrackPoint &b,
-                double interp) {
+QRgb trackColor(const TrackHeader &h, const TrackPoint &pa,
+                const TrackPoint &pb, double interp, const G4ThreeVector &a,
+                const G4ThreeVector &b, const G4ThreeVector &forward) {
     Q_UNUSED(h);
-    double mtime = double(a.time) * (1. - interp) * double(b.time) * interp;
-    double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
-    return QColor::fromHslF(ptime, 0.8, 0.5).rgb();
+    G4ThreeVector normal = b - a;
+    double coa = (normal * forward) / normal.mag();
+    // Q fails in fwd dir?? # of tracks changes? raw data modified?
+    //    double mtime = double(pa.time) * (1. - interp) * double(pb.time) *
+    //    interp;
+    double menergy =
+        double(pa.energy) * (1. - interp) * double(pb.energy) * interp;
+    //    double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
+    //    double ptime = std::
+    double loge = std::log10(menergy) / 2.0;
+    double ptime = loge - std::floor(loge);
+    return QColor::fromHsvF(ptime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
 }
 
 bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
@@ -393,27 +407,10 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     const TrackHeader *headers = t.getHeaders();
     const TrackPoint *points = t.getPoints();
 
-    typedef struct { float x, y; } Pt;
-    std::vector<Pt> brush;
     int mind = w > h ? h : w;
-    float rad = mind / 500.0f;
-    if (rad <= 1.0f) {
-        brush.push_back({0.0f, 0.0f});
-    } else {
-        // Construct brush point list. This will pack a circle,
-        // but be otherwise kinda overkill
-        int sdv = int(rad + 0.5f);
-        for (int i = 0; i < sdv; i++) {
-            float r = i * rad / (sdv - 1);
-            int k = int(CLHEP::twopi * r + 1.0);
-            for (int j = 0; j < k; j++) {
-                Pt q;
-                q.x = r * float(std::cos(j * CLHEP::twopi / k));
-                q.y = r * float(std::sin(j * CLHEP::twopi / k));
-                brush.push_back(q);
-            }
-        }
-    }
+    float rad = std::max(mind / 800.0f, 0.5f);
+    // ^ ensure minimum 1 pixel brush width
+    float r2 = rad * rad;
 
     for (size_t i = 0; i < ntracks; i++) {
         //        if (this->abort_task) {
@@ -426,18 +423,19 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
         const TrackPoint *tp = &points[header.offset];
         // Project calculations 1 point ahead
         TrackPoint sp = tp[0];
-        G4ThreeVector ospos(sp.x, sp.y, sp.z);
+        G4ThreeVector spos(sp.x, sp.y, sp.z);
         int sdx, sdy;
         double soff;
-        soff = iproject(ospos, d, w, h, &sdx, &sdy);
+        soff = iproject(spos, d, w, h, &sdx, &sdy);
         for (int j = 1; j < header.npts; j++) {
             // Adopt previous late point as early point
             TrackPoint ep = sp;
             int edx = sdx, edy = sdy;
             double eoff = soff;
+            G4ThreeVector epos = spos;
             // Calculate new late point
             sp = tp[j];
-            G4ThreeVector spos(sp.x, sp.y, sp.z);
+            spos = G4ThreeVector(sp.x, sp.y, sp.z);
             soff = iproject(spos, d, w, h, &sdx, &sdy);
 
             if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
@@ -473,17 +471,28 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                 float x = ix + s * dx;
                 float y = iy + s * dy;
                 double b = n >= 2 ? s / double(n - 1) : 0.5;
-                for (const Pt &p : brush) {
-                    // Q: rotate brush? but expensive!, 1 si/cos each
-                    int rx = int(x + p.x);
-                    int ry = int(y + p.y);
-                    if (yl <= ry && ry < yh && xl <= rx && rx < xh) {
-                        // ^ check if point + brush offset in range...
-                        int sidx = (ry - yl) * (xh - xl) + (rx - xl);
-                        double off = eoff * (1 - b) + soff * b;
+                // Technically, this is a fast circle rendering technique!
+                QRgb col = qRgb(0, 0, 0);
+                bool hascol = false;
+                double off = eoff * (1 - b) + soff * b;
+                int ur = int(std::ceil(rad));
+                int cy = int(std::round(y));
+                for (int ddy = std::max(yl, cy - ur);
+                     ddy <= std::min(yh - 1, cy + ur); ddy++) {
+                    float lr = std::sqrt(r2 - float((ddy - y) * (ddy - y)));
+                    int lx = int(std::round(x - lr));
+                    int hx = int(std::round(x + lr));
+                    for (int ddx = std::max(xl, lx);
+                         ddx <= std::min(xh - 1, hx); ddx++) {
+                        int sidx = (ddy - yl) * (xh - xl) + (ddx - xl);
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
-                            colors[sidx] = trackColor(header, ep, sp, b);
+                            if (!hascol) {
+                                col = trackColor(header, ep, sp, b, epos, spos,
+                                                 d.orientation.rowX());
+                                hascol = true;
+                            }
+                            colors[sidx] = col;
                         }
                     }
                 }
@@ -752,7 +761,8 @@ static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
 
 TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
                      Range erange) {
-    // TODO: first, clipping plane filtering. A line can be cut at most twice.
+    // TODO: first, clipping plane filtering. A line can be cut at most
+    // twice.
     // by the convex hull.
     // So, iterate over lines, trace entry and exit points.
     // Create a std::vector<> of points, and one of headers.
