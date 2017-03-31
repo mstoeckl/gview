@@ -282,14 +282,14 @@ QString ExpoSpinBox::textFromValue(int i) const {
 
 double ExpoSpinBox::expFromInt(int r) const {
     int e = r / 90;
-    double s = (r % 90) / 100. + 1.;
+    double s = (r % 90) / 10. + 1.;
     return s * std::pow(10., e);
 }
 int ExpoSpinBox::nearestIntFromExp(double d) const {
-    int base = int(std::log10(d));
+    int base = int(std::floor(std::log10(d)));
     double mant = d / std::pow(10., base);
-    int imt = int(mant * 10.);
-    return 100 * base + imt;
+    int imt = int(std::round(mant * 10.)) - 10;
+    return 90 * base + imt;
 }
 
 ViewData initVD(const Element &root) {
@@ -340,26 +340,40 @@ static int exp10(int exp) {
     return r;
 }
 
-Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
-    which_geo = idx;
+Viewer::Viewer(const std::vector<GeoOption> &options,
+               const std::vector<TrackData> &trackopts)
+    : QMainWindow() {
+    which_geo = 0;
     geo_options = options;
+    track_options = trackopts;
     if (!geo_options[which_geo].cache) {
         geo_options[which_geo].cache = geo_options[which_geo].cons->Construct();
     }
     vd = initVD(convertCreation(geo_options[which_geo].cache));
-    origtrackdata = TrackData("trace.dat");
-    //    origtrackdata = TrackData();
-    double lower_time, upper_time;
-    origtrackdata.calcTimeBounds(lower_time, upper_time);
-    double lower_energy, upper_energy;
-    origtrackdata.calcEnergyBounds(lower_energy, upper_energy);
-    upper_time += 0.01 * CLHEP::ns;
-    lower_energy /= 1.2;
-    upper_energy *= 1.2;
-    Range trange = {lower_time, upper_time};
-    Range erange = {lower_energy, upper_energy};
-    IRange nrange = {1, origtrackdata.getNTracks()};
-    trackdata = TrackData(origtrackdata, vd, trange, erange, nrange);
+    which_tracks = track_options.size() > 0 ? 1 : 0;
+
+    TrackData td =
+        which_tracks == 0 ? TrackData() : track_options[which_tracks - 1];
+    for (size_t i = 0; i < track_options.size(); i++) {
+        TrackRestriction rests;
+        track_options[i].calcTimeBounds(rests.time.low, rests.time.high);
+        rests.time.high += 0.01 * CLHEP::ns;
+        track_options[i].calcEnergyBounds(rests.energy.low, rests.energy.high);
+        rests.energy.high *= 1.2;
+        rests.energy.low /= 1.2;
+        rests.energy.low = std::max(1.0 * CLHEP::eV, rests.energy.low);
+        rests.seqno.low = 1;
+        rests.seqno.high = track_options[i].getNTracks();
+        track_res_actual.push_back(rests);
+        track_res_bounds.push_back(rests);
+    }
+    if (which_tracks == 0) {
+        trackdata = TrackData();
+    } else {
+        TrackRestriction current = track_res_actual[which_tracks - 1];
+        trackdata =
+            TrackData(td, vd, current.time, current.energy, current.seqno);
+    }
 
     QMenu *picker = new QMenu("Choose Geometry");
     QActionGroup *opts = new QActionGroup(this);
@@ -369,14 +383,38 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
         ch->setToolTip(s);
         ch->setCheckable(true);
         opts->addAction(ch);
-        if (i == idx) {
+        if (i == 0) {
             ch->setChecked(true);
         }
         picker->addAction(ch);
     }
     connect(opts, SIGNAL(triggered(QAction *)), this,
             SLOT(changeGeometry(QAction *)));
+    QMenu *tpicker = new QMenu("Choose Tracks");
+    QActionGroup *topts = new QActionGroup(this);
+    QAction *base = new QAction("None");
+    base->setToolTip(base->text());
+    base->setCheckable(true);
+    if (track_options.size() == 0) {
+        base->setChecked(true);
+    }
+    topts->addAction(base);
+    tpicker->addAction(base);
+    for (size_t i = 0; i < track_options.size(); i++) {
+        QString s = QString("%1").arg(i + 1);
+        QAction *ch = new QAction(s);
+        ch->setToolTip(s);
+        ch->setCheckable(true);
+        topts->addAction(ch);
+        if (i == 0) {
+            ch->setChecked(true);
+        }
+        tpicker->addAction(ch);
+    }
+    connect(topts, SIGNAL(triggered(QAction *)), this,
+            SLOT(changeTracks(QAction *)));
 
+    // TODO MENU FOR THESE THINGS! (View:)
     QAction *clipAction = new QAction("Clipping");
     clipAction->setToolTip("Edit clipping planes");
     connect(clipAction, SIGNAL(triggered()), this, SLOT(restClip()));
@@ -405,12 +443,14 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     shift = false;
 
     this->menuBar()->addMenu(picker);
+    this->menuBar()->addMenu(tpicker);
     // TODO include time range (in ns) in clip;
     // use a get_min_max time/energy for the tracks
     // disable if null tracks
-    this->menuBar()->addAction(clipAction);
-    this->menuBar()->addAction(treeAction);
-    this->menuBar()->addAction(infoAction);
+    QMenu *sub = this->menuBar()->addMenu("View");
+    sub->addAction(clipAction);
+    sub->addAction(treeAction);
+    sub->addAction(infoAction);
     this->menuBar()->addAction(screenAction);
     this->menuBar()->addAction(screen4Action);
 
@@ -442,60 +482,56 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     times_upper->setDecimals(3);
     times_lower->setSingleStep(0.1);
     times_upper->setSingleStep(0.1);
-    if (lower_time <= upper_time) {
-        times_lower->setRange(lower_time / CLHEP::ns, upper_time / CLHEP::ns);
-        times_upper->setRange(lower_time / CLHEP::ns, upper_time / CLHEP::ns);
-        times_lower->setValue(lower_time / CLHEP::ns);
-        times_upper->setValue(upper_time / CLHEP::ns);
-    } else {
-        times_lower->setDisabled(true);
-        times_upper->setDisabled(true);
-    }
-    connect(times_lower, SIGNAL(valueChanged(double)), this,
-            SLOT(updatePlanes()));
-    connect(times_upper, SIGNAL(valueChanged(double)), this,
-            SLOT(updatePlanes()));
     energy_lower = new ExpoSpinBox();
     energy_upper = new ExpoSpinBox();
-    if (lower_energy > upper_energy) {
-        energy_lower->setRange(0, 900 - 1);
-        energy_upper->setRange(0, 900 - 1);
-        energy_lower->setDisabled(true);
-        energy_upper->setDisabled(true);
-    } else {
-        int el = energy_lower->nearestIntFromExp(lower_energy / CLHEP::eV);
-        int eh = energy_lower->nearestIntFromExp(upper_energy / CLHEP::eV);
-        energy_lower->setRange(el, eh);
-        energy_upper->setRange(el, eh);
-        energy_lower->setValue(el);
-        energy_upper->setValue(eh);
-    }
     energy_lower->setSingleStep(10);
     energy_upper->setSingleStep(10);
     energy_lower->setSuffix("eV");
     energy_upper->setSuffix("eV");
-    connect(energy_lower, SIGNAL(valueChanged(int)), this,
-            SLOT(updatePlanes()));
-    connect(energy_upper, SIGNAL(valueChanged(int)), this,
-            SLOT(updatePlanes()));
     count_lower = new QSpinBox();
     count_upper = new QSpinBox();
-    size_t ntracks = origtrackdata.getNTracks();
-    if (ntracks > 0) {
-        count_lower->setRange(1, int(ntracks));
-        count_upper->setRange(1, int(ntracks));
+    if (which_tracks > 0) {
+        const TrackRestriction &res = track_res_actual[which_tracks - 1];
+        times_lower->setRange(res.time.low / CLHEP::ns,
+                              res.time.high / CLHEP::ns);
+        times_upper->setRange(res.time.low / CLHEP::ns,
+                              res.time.high / CLHEP::ns);
+        times_lower->setValue(res.time.low / CLHEP::ns);
+        times_upper->setValue(res.time.high / CLHEP::ns);
+        int el = energy_lower->nearestIntFromExp(res.energy.low / CLHEP::eV);
+        int eh = energy_lower->nearestIntFromExp(res.energy.high / CLHEP::eV);
+        energy_lower->setRange(el, eh);
+        energy_upper->setRange(el, eh);
+        energy_lower->setValue(el);
+        energy_upper->setValue(eh);
+        count_lower->setRange(1, int(res.seqno.high));
+        count_upper->setRange(1, int(res.seqno.high));
         count_lower->setValue(0);
-        count_upper->setValue(int(ntracks));
-        int step =
-            exp10(std::max(0, int(std::floor(std::log10(ntracks / 15.)))));
+        count_upper->setValue(int(res.seqno.high));
+        int step = exp10(
+            std::max(0, int(std::floor(std::log10(res.seqno.high / 15.)))));
         count_lower->setSingleStep(step);
         count_upper->setSingleStep(step);
     } else {
+        times_lower->setDisabled(true);
+        times_upper->setDisabled(true);
+        energy_lower->setRange(0, 900 - 1);
+        energy_upper->setRange(0, 900 - 1);
+        energy_lower->setDisabled(true);
+        energy_upper->setDisabled(true);
         count_lower->setDisabled(true);
         count_upper->setDisabled(true);
     }
     connect(count_lower, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
     connect(count_upper, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
+    connect(times_lower, SIGNAL(valueChanged(double)), this,
+            SLOT(updatePlanes()));
+    connect(times_upper, SIGNAL(valueChanged(double)), this,
+            SLOT(updatePlanes()));
+    connect(energy_lower, SIGNAL(valueChanged(int)), this,
+            SLOT(updatePlanes()));
+    connect(energy_upper, SIGNAL(valueChanged(int)), this,
+            SLOT(updatePlanes()));
     QHBoxLayout *trb = new QHBoxLayout();
     trb->addWidget(times_lower);
     trb->addWidget(times_upper);
@@ -717,16 +753,25 @@ void Viewer::updatePlanes() {
             vd.clipping_planes.push_back(p);
         }
     }
-    double tlow = times_lower->value() * CLHEP::ns;
-    double thigh = times_upper->value() * CLHEP::ns;
-    double elow = energy_lower->expFromInt(energy_lower->value()) * CLHEP::eV;
-    double ehigh = energy_upper->expFromInt(energy_upper->value()) * CLHEP::eV;
-    Range trange = {std::min(tlow, thigh), std::max(tlow, thigh)};
-    Range erange = {std::min(elow, ehigh), std::max(elow, ehigh)};
-    size_t nlow = size_t(count_lower->value());
-    size_t nhigh = size_t(count_upper->value());
-    IRange nrange = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
-    trackdata = TrackData(origtrackdata, vd, trange, erange, nrange);
+    if (which_tracks > 0) {
+        double tlow = times_lower->value() * CLHEP::ns;
+        double thigh = times_upper->value() * CLHEP::ns;
+        double elow =
+            energy_lower->expFromInt(energy_lower->value()) * CLHEP::eV;
+        double ehigh =
+            energy_upper->expFromInt(energy_upper->value()) * CLHEP::eV;
+        size_t nlow = size_t(count_lower->value());
+        size_t nhigh = size_t(count_upper->value());
+
+        TrackRestriction &res = track_res_actual[which_tracks - 1];
+        res.energy = {std::min(elow, ehigh), std::max(elow, ehigh)};
+        res.time = {std::min(tlow, thigh), std::max(tlow, thigh)};
+        res.seqno = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
+        trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
+                              res.energy, res.seqno);
+    } else {
+        trackdata = TrackData();
+    }
     rwidget->rerender();
 }
 
@@ -755,6 +800,64 @@ void Viewer::changeGeometry(QAction *act) {
             }
         }
     }
+}
+
+void Viewer::changeTracks(QAction *act) {
+    const QList<QAction *> &o = act->actionGroup()->actions();
+    size_t c = 0;
+    for (QAction *q : o) {
+        if (q == act) {
+            break;
+        }
+        c++;
+    }
+    which_tracks = c;
+    bool active = which_tracks > 0;
+    if (active) {
+        times_lower->blockSignals(true);
+        times_upper->blockSignals(true);
+        energy_lower->blockSignals(true);
+        energy_upper->blockSignals(true);
+        count_lower->blockSignals(true);
+        count_upper->blockSignals(true);
+        const TrackRestriction &res = track_res_bounds[which_tracks - 1];
+        const TrackRestriction &cur = track_res_actual[which_tracks - 1];
+        times_lower->setRange(res.time.low / CLHEP::ns,
+                              res.time.high / CLHEP::ns);
+        times_upper->setRange(res.time.low / CLHEP::ns,
+                              res.time.high / CLHEP::ns);
+        times_lower->setValue(cur.time.low / CLHEP::ns);
+        times_upper->setValue(cur.time.high / CLHEP::ns);
+        int el = energy_lower->nearestIntFromExp(res.energy.low / CLHEP::eV);
+        int eh = energy_lower->nearestIntFromExp(res.energy.high / CLHEP::eV);
+        int cl = energy_lower->nearestIntFromExp(cur.energy.low / CLHEP::eV);
+        int ch = energy_lower->nearestIntFromExp(cur.energy.high / CLHEP::eV);
+        energy_lower->setRange(el, eh);
+        energy_upper->setRange(el, eh);
+        energy_lower->setValue(cl);
+        energy_upper->setValue(ch);
+        count_lower->setRange(1, int(res.seqno.high));
+        count_upper->setRange(1, int(res.seqno.high));
+        count_lower->setValue(int(cur.seqno.low));
+        count_upper->setValue(int(cur.seqno.high));
+        int step = exp10(
+            std::max(0, int(std::floor(std::log10(res.seqno.high / 15.)))));
+        count_lower->setSingleStep(step);
+        count_upper->setSingleStep(step);
+        times_lower->blockSignals(false);
+        times_upper->blockSignals(false);
+        energy_lower->blockSignals(false);
+        energy_upper->blockSignals(false);
+        count_lower->blockSignals(false);
+        count_upper->blockSignals(false);
+    }
+    times_lower->setEnabled(active);
+    times_upper->setEnabled(active);
+    energy_lower->setEnabled(active);
+    energy_upper->setEnabled(active);
+    count_lower->setEnabled(active);
+    count_upper->setEnabled(active);
+    updatePlanes();
 }
 
 void Viewer::indicateElement(Element *e) {

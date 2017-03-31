@@ -90,11 +90,17 @@ public:
     int nearestIntFromExp(double) const;
 };
 
+typedef struct {
+    Range energy;
+    Range time;
+    IRange seqno;
+} TrackRestriction;
+
 class Viewer : public QMainWindow {
     Q_OBJECT
-    // viewer, etc; need a render method that fills a QImage...
 public:
-    Viewer(std::vector<GeoOption> options, size_t idx);
+    Viewer(const std::vector<GeoOption> &options,
+           const std::vector<TrackData> &trackopts);
     virtual ~Viewer();
 
     virtual void keyPressEvent(QKeyEvent *event);
@@ -109,14 +115,18 @@ public slots:
     void updatePlanes();
     void screenshot(int sx = 1);
     void changeGeometry(QAction *);
+    void changeTracks(QAction *);
     void indicateElement(Element *);
 
 private:
     std::vector<GeoOption> geo_options;
+    std::vector<TrackData> track_options;
+    std::vector<TrackRestriction> track_res_bounds;
+    std::vector<TrackRestriction> track_res_actual;
     size_t which_geo;
+    size_t which_tracks;
     ViewData vd;
     TrackData trackdata;
-    TrackData origtrackdata;
     RenderWidget *rwidget;
     QDockWidget *dock_clip;
     QDockWidget *dock_tree;

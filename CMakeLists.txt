@@ -6,8 +6,6 @@ add_compile_options(-fPIC)
 
 find_package(Geant4 REQUIRED)
 
-find_library(rt_LIB rt)
-
 include(${Geant4_USE_FILE})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
@@ -39,6 +37,6 @@ file(GLOB mainfiles ${PROJECT_SOURCE_DIR}/*.cc)
 foreach(mainf ${mainfiles})
     get_filename_component(main ${mainf} NAME_WE)
     add_executable(${main} ${mainf} $<TARGET_OBJECTS:_base>)
-    target_link_libraries(${main} ${Geant4_LIBRARIES} ${rt_LIB})
+    target_link_libraries(${main} ${Geant4_LIBRARIES})
     install(TARGETS ${main} DESTINATION bin)
 endforeach()
