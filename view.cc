@@ -20,8 +20,12 @@ int main(int argc, char **argv) {
     }
 
     std::vector<GeoOption> opts;
-    size_t chc = argc - 2;
+    size_t chc = size_t(argc - 2);
     for (int j = 1; j < argc; j++) {
+        // TODO: if file ends in "gdml", load as gdml
+        // if file ends in ".dat", load
+        // if file ends in ".dat.gz", load as gzip...
+
         // Load GDML file with name
         G4GDMLParser p;
         p.SetAddPointerToName(true);

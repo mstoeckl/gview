@@ -395,6 +395,18 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     // Fixme: the lower edge sometimes displays blank
     // Exact cause unknown
 
+    // TODO: major performance improvement possible by octreeing
+    // the tracks until nlines/cuboid is <10. We don't even need
+    // to modify the point array, rather construct a new header
+    // series per octree with (type + offset + length) codes
+    // Then, for each point displayed, we progress along cuboids
+    // and yield a hit if we hit the virtual cylinder around each line
+    // Cost/point is only proportional to the lines inside octree elements
+    // along those points. (Note: octree may not be best structure;
+    // need one for fast ray traversals. The "inside" computations
+    // to create the spatial partitioning are precomputed -> almost free
+    // ?: Bounding interval hierachy trees?
+
     int xl, xh, yl, yh;
     sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
     for (int s = 0; s < (yh - yl) * (xh - xl); s++) {
@@ -760,7 +772,7 @@ static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
 }
 
 TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
-                     Range erange) {
+                     Range erange, IRange selidxs) {
     // TODO: first, clipping plane filtering. A line can be cut at most
     // twice.
     // by the convex hull.
@@ -779,7 +791,9 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     cp.reserve(other.getNPoints());
     float tlow = float(trange.low), thigh = float(trange.high);
     float elow = float(erange.low), ehigh = float(erange.high);
-    for (size_t i = 0; i < otracks; i++) {
+    size_t nlow = std::max(size_t(0), selidxs.low - 1);
+    size_t nhigh = std::min(otracks, selidxs.high);
+    for (size_t i = nlow; i < nhigh; i++) {
         const TrackPoint *seq = &opoints[oheaders[i].offset];
         int npts = oheaders[i].npts;
         G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);

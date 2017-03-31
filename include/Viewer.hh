@@ -126,6 +126,8 @@ private:
     QDoubleSpinBox *times_upper;
     ExpoSpinBox *energy_lower;
     ExpoSpinBox *energy_upper;
+    QSpinBox *count_lower;
+    QSpinBox *count_upper;
     QTreeView *tree_view;
     OverView *tree_model;
     QTableWidget *info_table;

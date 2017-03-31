@@ -328,6 +328,18 @@ Element convertCreation(G4VPhysicalVolume *phys) {
     return m;
 }
 
+static int exp10(int exp) {
+    int r = 1;
+    int base = 10;
+    while (exp) {
+        if (exp & 1)
+            r *= base;
+        exp >>= 1;
+        base *= base;
+    }
+    return r;
+}
+
 Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     which_geo = idx;
     geo_options = options;
@@ -346,7 +358,8 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     upper_energy *= 1.2;
     Range trange = {lower_time, upper_time};
     Range erange = {lower_energy, upper_energy};
-    trackdata = TrackData(origtrackdata, vd, trange, erange);
+    IRange nrange = {1, origtrackdata.getNTracks()};
+    trackdata = TrackData(origtrackdata, vd, trange, erange, nrange);
 
     QMenu *picker = new QMenu("Choose Geometry");
     QActionGroup *opts = new QActionGroup(this);
@@ -465,6 +478,24 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
             SLOT(updatePlanes()));
     connect(energy_upper, SIGNAL(valueChanged(int)), this,
             SLOT(updatePlanes()));
+    count_lower = new QSpinBox();
+    count_upper = new QSpinBox();
+    size_t ntracks = origtrackdata.getNTracks();
+    if (ntracks > 0) {
+        count_lower->setRange(1, int(ntracks));
+        count_upper->setRange(1, int(ntracks));
+        count_lower->setValue(0);
+        count_upper->setValue(int(ntracks));
+        int step =
+            exp10(std::max(0, int(std::floor(std::log10(ntracks / 15.)))));
+        count_lower->setSingleStep(step);
+        count_upper->setSingleStep(step);
+    } else {
+        count_lower->setDisabled(true);
+        count_upper->setDisabled(true);
+    }
+    connect(count_lower, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
+    connect(count_upper, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
     QHBoxLayout *trb = new QHBoxLayout();
     trb->addWidget(times_lower);
     trb->addWidget(times_upper);
@@ -473,6 +504,10 @@ Viewer::Viewer(std::vector<GeoOption> options, size_t idx) : QMainWindow() {
     erb->addWidget(energy_lower);
     erb->addWidget(energy_upper);
     vb->addLayout(erb, 0);
+    QHBoxLayout *crb = new QHBoxLayout();
+    crb->addWidget(count_lower);
+    crb->addWidget(count_upper);
+    vb->addLayout(crb, 0);
     vb->addStretch(1);
     cont->setLayout(vb);
     dock_clip->setWidget(cont);
@@ -688,7 +723,10 @@ void Viewer::updatePlanes() {
     double ehigh = energy_upper->expFromInt(energy_upper->value()) * CLHEP::eV;
     Range trange = {std::min(tlow, thigh), std::max(tlow, thigh)};
     Range erange = {std::min(elow, ehigh), std::max(elow, ehigh)};
-    trackdata = TrackData(origtrackdata, vd, trange, erange);
+    size_t nlow = size_t(count_lower->value());
+    size_t nhigh = size_t(count_upper->value());
+    IRange nrange = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
+    trackdata = TrackData(origtrackdata, vd, trange, erange, nrange);
     rwidget->rerender();
 }
 

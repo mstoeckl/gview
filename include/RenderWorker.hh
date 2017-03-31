@@ -72,6 +72,8 @@ typedef struct {
 } TrackPoint;
 
 typedef struct { double low, high; } Range;
+typedef struct { size_t low, high; } IRange;
+
 class TrackPrivateData : public QSharedData {
 public:
     size_t ntracks;
@@ -89,7 +91,7 @@ public:
     TrackData(const char *filename);
     TrackData(const TrackData &other);
     TrackData(const TrackData &other, ViewData &viewrestr, Range seltimes,
-              Range selenergies);
+              Range selenergies, IRange selidxs);
     ~TrackData();
     size_t getNPoints() const;
     size_t getNTracks() const;
