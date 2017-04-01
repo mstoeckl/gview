@@ -422,8 +422,44 @@ static bool trackTrace(const QPointF &scpt, const ViewData &d,
     G4ThreeVector init =
         d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
 
-    // init, forward, iterate over BIH tree...
+    const LineCollection* lc = t.getTree();
+    const TrackHeader* headers = t.getHeaders();
+    const TrackPoint* points = t.getPoints();
+    SimplexIterator iter = lc->followRay(init, forward);
+    do {
+        const std::vector<std::pair<size_t, int>>& pairs = iter.getContainedLines();
+        G4double nearest = kInfinity;
+        std::pair<size_t, int> best;
+//        qDebug("pairs %lu",pairs.size());
+        for (const std::pair<size_t, int>& p : pairs) {
+            // Pt A, Pt b:
+            const TrackHeader& h = headers[p.first];
+            const TrackPoint& a = points[h.offset + size_t(p.first)];
+            const TrackPoint& b = points[h.offset + size_t(p.first)+1];
+            G4ThreeVector pa(a.x,a.y,a.z);
+            G4ThreeVector pb(b.x,b.y,b.z);
+            G4ThreeVector dir = pb-pa;
+            G4ThreeVector perp = dir.cross(forward);
+            G4double rad = perp * (init - pa);
+            if (std::abs(rad) < 1.0*CLHEP::cm) {
+                // TODO calculate distance to center plane!
+                nearest = 10.0*CLHEP::m;
+                best = p;
+            }
 
+
+            // TODO: detect intersection, requires either 3 projections
+            // or the use of a basis
+
+        }
+        if (nearest < kInfinity) {
+            hitdist = nearest;
+            color = qRgb(200,100,150);
+            return true;
+        }
+    } while (iter.advance());
+
+    // No intersection
     return false;
 }
 
@@ -444,6 +480,9 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
         Q_UNUSED(r);
         colors[s] = qRgb(255, 255, 255 /*r*/);
     }
+    // temp fast abort...
+//    return true;
+
     size_t ntracks = t.getNTracks();
     const TrackHeader *headers = t.getHeaders();
     const TrackPoint *points = t.getPoints();
@@ -653,6 +692,13 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
             QRgb trackcol = trackcolors[sidx];
             // ^ trackcol includes background
             G4double trackdist = trackdists[sidx];
+//            QRgb trackcol;
+//            G4double trackdist;
+//            bool hit = trackTrace(pt, d, t, trackdist, trackcol);
+//            if (!hit) {
+//                trackcol = qRgb(255,255,255);
+//                trackdist = kInfinity;
+//            }
 
             bool rayoverride = false;
             for (int k = 0; k < p; k++) {
@@ -740,7 +786,8 @@ TrackData::TrackData(const char *filename) {
         j++;
     }
     free(buf);
-    pd->tree = new LineCollection(headers, points, ntracks);
+//    pd->tree = new LineCollection(headers, points, ntracks);
+    pd->tree = NULL;
 
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
@@ -901,7 +948,8 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     TrackPoint *points = pd->points;
     memcpy(headers, ch.data(), sizeof(TrackHeader) * qtracks);
     memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
-    pd->tree = new LineCollection(headers, points, qtracks);
+//    pd->tree = new LineCollection(headers, points, qtracks);
+    pd->tree = NULL;
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
 

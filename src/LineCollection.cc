@@ -30,12 +30,32 @@ public:
     Trindx plane;
 };
 
-SimplexIterator::SimplexIterator(const LCData *iin, const G4ThreeVector &isrc,
+static void getCenterAndNormal(const LCData* node, const TrackPoint* points, G4ThreeVector& center, G4ThreeVector& normal) {
+    const TrackPoint& cpt = points[node->plane.center];
+    const TrackPoint& xpt = points[node->plane.xpt];
+    const TrackPoint& ypt = points[node->plane.ypt];
+    G4ThreeVector pc(cpt.x,cpt.y,cpt.z);
+    G4ThreeVector px(xpt.x,xpt.y,xpt.z);
+    G4ThreeVector py(ypt.x,ypt.y,ypt.z);
+    normal = (px - pc).cross(py - pc);
+    center = pc;
+}
+
+SimplexIterator::SimplexIterator(const LineCollection& iin, const G4ThreeVector &isrc,
                                  const G4ThreeVector &idir)
-    : src(isrc), dir(idir) {
-    current = iin;
+    : lc(iin), src(isrc), dir(idir) {
+    current = lc.d;
     t = 0;
-    // Move down in tree to locate src...
+    // Descend tree to locate current element
+    while (current->left) {
+        G4ThreeVector center, normal;
+        getCenterAndNormal(current, lc.mpoints, center, normal);
+        if ((src - center)*normal > 0) {
+            current = current->left;
+        } else {
+            current = current->right;
+        }
+    }
 }
 
 std::vector<std::pair<size_t, int>> SimplexIterator::getContainedLines() const {
@@ -47,6 +67,15 @@ std::vector<std::pair<size_t, int>> SimplexIterator::getContainedLines() const {
     return current->contents;
 }
 bool SimplexIterator::advance() {
+    if (!current) {
+        G4Exception("SimplexIterator::getContainedLines",
+                    "Iterator left tree hierarchy", FatalException,
+                    "Description");
+    }
+    // TODO: casework!!
+
+
+
     // Move to next node in tree.... | go up, fwd, etc...
     return false;
 }
@@ -256,6 +285,8 @@ static void recursivePrintTree(LCData *root, int depth = 0) {
 
 LineCollection::LineCollection(const TrackHeader *headers,
                                const TrackPoint *points, size_t nheaders) {
+    mheaders = headers;
+    mpoints = points;
     d = new LCData();
     for (size_t i = 0; i < nheaders; i++) {
         const TrackHeader &h = headers[i];
@@ -271,7 +302,11 @@ LineCollection::LineCollection(const TrackHeader *headers,
         }
     }
     const size_t lthresh = 50;
-    for (int niter = 0; niter < 10000; niter++) {
+    size_t failcount = 0;
+    for (int niter = 0; niter < 100000; niter++) {
+        if (niter % 1000 == 0) {
+            qDebug("ct: %lu (%g)", getMaxCount(d), failcount / double(niter));
+        }
         // Locate leftmost leaf
         LCData *lcr = d;
         while (lcr->left)
@@ -283,6 +318,7 @@ LineCollection::LineCollection(const TrackHeader *headers,
         // Divide node
         bool wassplit = splitNode(lcr, headers, points);
         if (!wassplit) {
+            failcount++;
             continue;
         }
         // Reorient tree, swapping L/R as need be
@@ -295,7 +331,7 @@ LineCollection::LineCollection(const TrackHeader *headers,
         }
     }
 
-    if (1) {
+    if (0) {
         recursivePrintTree(d);
     }
 
@@ -307,56 +343,5 @@ LineCollection::~LineCollection() { delete d; }
 
 SimplexIterator LineCollection::followRay(const G4ThreeVector &src,
                                           const G4ThreeVector &dir) const {
-    return SimplexIterator(d, src, dir);
+    return SimplexIterator(*this, src, dir);
 }
-
-// STD::make_heap with operator on LCData pointers
-// splits drop current element & insert two new ones
-
-// Alternatively: swapping xpt,ypt reverses left
-// and right. Could impose a dynamic sort condition
-// that bubbles up, corresp. to maximum number of
-// left elements on a given branch. (i.e, LEFT node always has more.)
-
-// Is rather fast, at log(n) cost...
-
-// TODO: ratio to beat is 60% of time spent in rays
-// ALSO: this algorithm fails horribly when zooming
-// in on intersection points, with, say, 6000 lines;
-// get 6000 operations _per_ pixel. Need a balancing
-// algorithm that will even nuke such single-point
-// intersections away & minimizes max #lines per region
-// (for instance, recursive greedy splitting through
-// a _distinct_ internal-clipped _median_ point, with
-// endpoints on divider being given to the zone of the
-// matching line; if both on divider, random pick.
-// Keep heap sort of line counts, and keep dividing
-// until either div cap, pt cap, or pts/box thresh reached
-
-// std::nth_element works to find the median!
-// (if median inside box, yay! if median strictly outside box,
-// move components outside to the box geometric center,
-// in case that helps any. If inf rays meet at point, median
-// inside box ought to resolve it.
-
-// Issue: 10^9 rays through a single point. Division method
-// yields at most 8 quadrants of 10^8 points each, which
-// _could_ be made arb. small. Implies arbitrary
-// planar division is more appropriate, as it can solve that
-// by virtue of lots of lines through the center point
-
-// TODO: arbitrary angle plane system :-(
-// We can represent each div plane by 3 point coordinates;
-// first point is offset, other two construct normal.
-// That way nodes are easily split!
-
-// If N lines pass through a simplex, and a plane separates the lines,
-// then it also separates the simplex. Correspondingly,
-// 50 trial 3-point-plane-picking ought to find a suitable division
-
-// Heap method to select next tree element to split is
-// important... (so, tree w/ heap index...; really
-// need a custom class for the whole thing,
-// that handle memory management as well, because
-// new has way too much overhead since nodes never
-// get deleted, while offset+lengths may be..

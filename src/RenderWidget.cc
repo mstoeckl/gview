@@ -8,7 +8,7 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
     back = QImage(50, 50, QImage::Format_RGB32);
-    back.fill(QColor::fromHsl(0.3, 0.5, 0.7));
+    back.fill(QColor::fromHslF(0.3, 0.5, 0.7));
 
     t = QVector<QThread *>();
     w = QVector<RenderWorker *>();
@@ -70,6 +70,7 @@ void RenderWidget::rerender_priv() {
         request_time = QTime::currentTime();
         arrived = aReqd;
     }
+    // Q: SharedData on image so delete'ing Renderwidget doesn't crash Worker?
     next =
         QImage(this->width() / scl, this->height() / scl, QImage::Format_RGB32);
     for (int i = 0; i < w.size(); i++) {
