@@ -1,11 +1,10 @@
 #pragma once
 
+#include "CustomWidgets.hh"
+#include "RenderWidget.hh"
 #include "RenderWorker.hh"
 
-#include <QImage>
 #include <QMainWindow>
-#include <QSpinBox>
-#include <QTime>
 
 #include <vector>
 
@@ -26,69 +25,6 @@ typedef struct {
     G4VUserDetectorConstruction *cons;
     G4VPhysicalVolume *cache;
 } GeoOption;
-
-class RenderWidget : public QWidget {
-    Q_OBJECT
-public:
-    RenderWidget(ViewData &v, const TrackData &t);
-    virtual ~RenderWidget();
-
-    virtual void resizeEvent(QResizeEvent *evt);
-    virtual void paintEvent(QPaintEvent *evt);
-public slots:
-    void completed();
-    void aborted();
-
-    void rerender();
-
-private:
-    void rerender_priv();
-    ViewData &currView;
-    const TrackData &trackdata;
-    enum { NONE, ACTIVE, ACTIVE_AND_QUEUED } state;
-    int last_level_of_detail;
-
-    QVector<QThread *> t;
-    QVector<RenderWorker *> w;
-    int response_count;
-
-    QImage back;
-    QImage next;
-    enum { aReqd, aCompl, aThere } arrived;
-    QTime request_time;
-};
-
-class PlaneEdit : public QWidget {
-    Q_OBJECT
-public:
-    PlaneEdit(Plane p);
-    virtual ~PlaneEdit();
-    Plane getPlane();
-public slots:
-    void setActive(bool active);
-signals:
-    void updated();
-
-private:
-    QDoubleSpinBox *nx;
-    QDoubleSpinBox *ny;
-    QDoubleSpinBox *nz;
-    QDoubleSpinBox *d;
-    QComboBox *unit;
-    QPushButton *act;
-};
-
-class ExpoSpinBox : public QSpinBox {
-    Q_OBJECT
-public:
-    ExpoSpinBox();
-    virtual ~ExpoSpinBox();
-    QValidator::State validate(QString &text, int &pos) const;
-    virtual int valueFromText(const QString &) const;
-    virtual QString textFromValue(int) const;
-    double expFromInt(int) const;
-    int nearestIntFromExp(double) const;
-};
 
 typedef struct {
     Range energy;

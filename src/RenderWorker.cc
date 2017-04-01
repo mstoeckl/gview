@@ -1,4 +1,5 @@
 #include "RenderWorker.hh"
+#include "LineCollection.hh"
 
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
@@ -357,8 +358,8 @@ RenderWorker::~RenderWorker() {}
 void RenderWorker::coAbort() { abort_task = true; }
 void RenderWorker::flushAbort() { abort_task = false; }
 
-static double iproject(G4ThreeVector point, const ViewData &d, int w, int h,
-                       int *dx, int *dy) {
+static inline double iproject(G4ThreeVector point, const ViewData &d, int w,
+                              int h, int *dx, int *dy) {
     G4ThreeVector forward = d.orientation.rowX();
     G4ThreeVector pos = point - d.camera;
     G4double off = forward * pos;
@@ -371,9 +372,10 @@ static double iproject(G4ThreeVector point, const ViewData &d, int w, int h,
     return std::abs(off);
 }
 
-QRgb trackColor(const TrackHeader &h, const TrackPoint &pa,
-                const TrackPoint &pb, double interp, const G4ThreeVector &a,
-                const G4ThreeVector &b, const G4ThreeVector &forward) {
+static QRgb trackColor(const TrackHeader &h, const TrackPoint &pa,
+                       const TrackPoint &pb, double interp,
+                       const G4ThreeVector &a, const G4ThreeVector &b,
+                       const G4ThreeVector &forward) {
     Q_UNUSED(h);
     G4ThreeVector normal = b - a;
     double coa = (normal * forward) / normal.mag();
@@ -389,23 +391,50 @@ QRgb trackColor(const TrackHeader &h, const TrackPoint &pa,
     return QColor::fromHsvF(ptime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
 }
 
+static bool trackTrace(const QPointF &scpt, const ViewData &d,
+                       const TrackData &t, G4double &hitdist, QRgb &color) {
+    // Ray tracing over all the lines. Can get nasty where
+    // we have the source point, but that only happens once.
+    // a median-based tree partitioner ought to resolve
+    // the source point issue, although one lucky seed
+    // cell gets 10K offsets given 200K lines...
+    // -> 10K iterations, although all of them are
+    // much cheaper...
+
+    // TO test _cylinder_ intersection & perp dist,
+    // (a -> b); rad; init; fwd
+
+    // dy = ((b - a) * init) / ((b - a)*fwd)
+    // if (dy notin [0,1]) skip
+    // p = init - (b-a)*dy
+    // closest point approach: min: ((a-p)+bt)^2, has t: (2*(a-p)/b^2) t = 0
+    // (then t: is dist; min radius is ((a-p)+bt)^2, and we filter
+    // have: p (along b-a),t (along fwd),r (along cross) (basically, a
+    // coordinate transform)
+    // and thus can decide yes/no.
+
+    // Proper order: Cross-test first, to filter by R. Then filter by P;
+    // Finally, calculate T.
+
+    G4ThreeVector forward = d.orientation.rowX();
+    G4ThreeVector updown = d.orientation.rowY();
+    G4ThreeVector lright = d.orientation.rowZ();
+    G4ThreeVector init =
+        d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
+
+    // init, forward, iterate over BIH tree...
+
+    return false;
+}
+
 bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                                 G4double *dists, QRgb *colors, int slice,
                                 int nslices, int w, int h) {
     // Fixme: the lower edge sometimes displays blank
     // Exact cause unknown
 
-    // TODO: major performance improvement possible by octreeing
-    // the tracks until nlines/cuboid is <10. We don't even need
-    // to modify the point array, rather construct a new header
-    // series per octree with (type + offset + length) codes
-    // Then, for each point displayed, we progress along cuboids
-    // and yield a hit if we hit the virtual cylinder around each line
-    // Cost/point is only proportional to the lines inside octree elements
-    // along those points. (Note: octree may not be best structure;
-    // need one for fast ray traversals. The "inside" computations
-    // to create the spatial partitioning are precomputed -> almost free
-    // ?: Bounding interval hierachy trees?
+    // TODO: apply line collection and resolve tracks
+    // via raytracing...
 
     int xl, xh, yl, yh;
     sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
@@ -672,9 +701,7 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
     return true;
 }
 
-TrackData::TrackData() {
-    //    data = NULL;
-}
+TrackData::TrackData() {}
 
 TrackData::TrackData(const char *filename) {
     FILE *f = fopen(filename, "rb");
@@ -713,6 +740,8 @@ TrackData::TrackData(const char *filename) {
         j++;
     }
     free(buf);
+    pd->tree = new LineCollection(headers, points, ntracks);
+
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
 
@@ -872,6 +901,7 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     TrackPoint *points = pd->points;
     memcpy(headers, ch.data(), sizeof(TrackHeader) * qtracks);
     memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
+    pd->tree = new LineCollection(headers, points, qtracks);
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
 
@@ -901,6 +931,13 @@ const TrackPoint *TrackData::getPoints() const {
     }
     return data.constData()->points;
 }
+const LineCollection *TrackData::getTree() const {
+    if (!data) {
+        return NULL;
+    }
+    return data.constData()->tree;
+}
+
 void TrackData::calcTimeBounds(double &lower, double &upper) const {
     upper = -kInfinity;
     lower = kInfinity;
@@ -936,6 +973,7 @@ TrackPrivateData::TrackPrivateData(size_t itracks, size_t ipoints) {
     npoints = ipoints;
     headers = new TrackHeader[ntracks];
     points = new TrackPoint[npoints];
+    tree = NULL;
 }
 TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
     : QSharedData(other), ntracks(other.ntracks), npoints(other.npoints),
@@ -945,4 +983,7 @@ TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
 TrackPrivateData::~TrackPrivateData() {
     delete[] headers;
     delete[] points;
+    if (tree) {
+        delete tree;
+    }
 }

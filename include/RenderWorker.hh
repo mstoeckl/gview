@@ -9,6 +9,7 @@
 
 #include <vector>
 
+class LineCollection;
 class G4Material;
 class G4VSolid;
 class QProgressDialog;
@@ -80,6 +81,7 @@ public:
     size_t npoints;
     TrackHeader *headers;
     TrackPoint *points;
+    LineCollection *tree;
     TrackPrivateData(size_t itracks, size_t ipoints);
     TrackPrivateData(const TrackPrivateData &other);
     ~TrackPrivateData();
@@ -97,6 +99,7 @@ public:
     size_t getNTracks() const;
     const TrackHeader *getHeaders() const;
     const TrackPoint *getPoints() const;
+    const LineCollection *getTree() const;
     void calcTimeBounds(double &lower, double &upper) const;
     void calcEnergyBounds(double &lower, double &upper) const;
 

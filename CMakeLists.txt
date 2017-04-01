@@ -18,7 +18,9 @@ find_package(Qt5Core REQUIRED)
 find_package(Qt5Widgets REQUIRED)
 find_package(Qt5Gui REQUIRED)
 # TODO apply to all headers: 
-qt5_wrap_cpp(WSRCS include/Viewer.hh include/Overview.hh include/RenderWorker.hh)
+qt5_wrap_cpp(WSRCS include/Viewer.hh include/Overview.hh
+             include/RenderWorker.hh include/CustomWidgets.hh
+             include/RenderWidget.hh include/LineCollection.hh)
 include_directories(${Qt5Widgets_INCLUDE_DIRS})
 include_directories(${Qt5Gui_INCLUDE_DIRS})
 include_directories(${Qt5Core_INCLUDE_DIRS})
