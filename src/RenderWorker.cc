@@ -11,11 +11,6 @@
 #include <QCoreApplication>
 #include <QProgressDialog>
 
-typedef struct {
-    G4double dist;
-    G4ThreeVector normal;
-} Intersection;
-
 static long recursivelySumNCalls(const Element &r) {
     long s = r.ngeocalls;
     for (size_t k = 0; k < r.children.size(); k++) {
@@ -42,9 +37,8 @@ static void recursivelyPrintNCalls(const Element &r, int depth = 0,
     }
 }
 
-static int traceRay(const QPointF &scpt, const ViewData &d,
-                    const Element *hits[], Intersection ints[], int maxhits,
-                    int iteration) {
+int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
+             Intersection ints[], int maxhits, int iteration) {
     // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
     // Return number of hits recorded.
 
@@ -165,13 +159,15 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
     if (clippable) {
         // Start point is in the world volume, and is an intersection
         hits[0] = stack[n - 1];
-        ints[0] = {sdist, entrynormal};
+        ints[0].dist = sdist;
+        ints[0].normal = entrynormal;
     } else {
         // Starting point
         ++d.root.ngeocalls;
         G4ThreeVector lnormal = d.root.solid->SurfaceNormal(local);
         hits[0] = &d.root;
-        ints[0] = {sdist, lnormal};
+        ints[0].dist = sdist;
+        ints[0].normal = lnormal;
         // Intersection on entry
     }
 
@@ -219,7 +215,8 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
         G4double fdist = std::min(exitdist, closestDist);
         if (fdist > edist - sdist) {
             // End clip (counts as a hit!)
-            ints[nhits] = {edist, exitnormal};
+            ints[nhits].dist = edist;
+            ints[nhits].normal = exitnormal;
             return nhits;
         } else if (exitdist < closestDist) {
             // Transition on leaving vol w/o intersections
@@ -236,7 +233,8 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
             // Record hit with normal
             ++curr.ngeocalls;
             G4ThreeVector lnormal = curr.solid->SurfaceNormal(lpos);
-            ints[nhits] = {sdist, lrot.invert() * lnormal};
+            ints[nhits].dist = sdist;
+            ints[nhits].normal = lrot.invert() * lnormal;
             if (n == 0 || nhits >= maxhits) {
                 return nhits;
             }
@@ -264,7 +262,8 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
             ++closest->ngeocalls;
             G4ThreeVector lnormal =
                 closest->solid->SurfaceNormal(positions[n - 1]);
-            ints[nhits] = {sdist, lrot.invert() * lnormal};
+            ints[nhits].dist = sdist;
+            ints[nhits].normal = lrot.invert() * lnormal;
             if (nhits >= maxhits) {
                 // Don't increment hit counter; ignore last materialc
                 return nhits;
@@ -276,7 +275,7 @@ static int traceRay(const QPointF &scpt, const ViewData &d,
     return nhits;
 }
 
-static int compressTraces(const Element *hits[], Intersection ints[], int m) {
+int compressTraces(const Element *hits[], Intersection ints[], int m) {
     if (m <= 1) {
         return m;
     }
@@ -422,39 +421,38 @@ static bool trackTrace(const QPointF &scpt, const ViewData &d,
     G4ThreeVector init =
         d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
 
-    const LineCollection* lc = t.getTree();
-    const TrackHeader* headers = t.getHeaders();
-    const TrackPoint* points = t.getPoints();
+    const LineCollection *lc = t.getTree();
+    const TrackHeader *headers = t.getHeaders();
+    const TrackPoint *points = t.getPoints();
     SimplexIterator iter = lc->followRay(init, forward);
     do {
-        const std::vector<std::pair<size_t, int>>& pairs = iter.getContainedLines();
+        const std::vector<std::pair<size_t, int>> &pairs =
+            iter.getContainedLines();
         G4double nearest = kInfinity;
         std::pair<size_t, int> best;
-//        qDebug("pairs %lu",pairs.size());
-        for (const std::pair<size_t, int>& p : pairs) {
+        //        qDebug("pairs %lu",pairs.size());
+        for (const std::pair<size_t, int> &p : pairs) {
             // Pt A, Pt b:
-            const TrackHeader& h = headers[p.first];
-            const TrackPoint& a = points[h.offset + size_t(p.first)];
-            const TrackPoint& b = points[h.offset + size_t(p.first)+1];
-            G4ThreeVector pa(a.x,a.y,a.z);
-            G4ThreeVector pb(b.x,b.y,b.z);
-            G4ThreeVector dir = pb-pa;
+            const TrackHeader &h = headers[p.first];
+            const TrackPoint &a = points[h.offset + size_t(p.first)];
+            const TrackPoint &b = points[h.offset + size_t(p.first) + 1];
+            G4ThreeVector pa(a.x, a.y, a.z);
+            G4ThreeVector pb(b.x, b.y, b.z);
+            G4ThreeVector dir = pb - pa;
             G4ThreeVector perp = dir.cross(forward);
             G4double rad = perp * (init - pa);
-            if (std::abs(rad) < 1.0*CLHEP::cm) {
+            if (std::abs(rad) < 1.0 * CLHEP::cm) {
                 // TODO calculate distance to center plane!
-                nearest = 10.0*CLHEP::m;
+                nearest = 10.0 * CLHEP::m;
                 best = p;
             }
 
-
             // TODO: detect intersection, requires either 3 projections
             // or the use of a basis
-
         }
         if (nearest < kInfinity) {
             hitdist = nearest;
-            color = qRgb(200,100,150);
+            color = qRgb(200, 100, 150);
             return true;
         }
     } while (iter.advance());
@@ -481,7 +479,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
         colors[s] = qRgb(255, 255, 255 /*r*/);
     }
     // temp fast abort...
-//    return true;
+    //    return true;
 
     size_t ntracks = t.getNTracks();
     const TrackHeader *headers = t.getHeaders();
@@ -692,13 +690,13 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
             QRgb trackcol = trackcolors[sidx];
             // ^ trackcol includes background
             G4double trackdist = trackdists[sidx];
-//            QRgb trackcol;
-//            G4double trackdist;
-//            bool hit = trackTrace(pt, d, t, trackdist, trackcol);
-//            if (!hit) {
-//                trackcol = qRgb(255,255,255);
-//                trackdist = kInfinity;
-//            }
+            //            QRgb trackcol;
+            //            G4double trackdist;
+            //            bool hit = trackTrace(pt, d, t, trackdist, trackcol);
+            //            if (!hit) {
+            //                trackcol = qRgb(255,255,255);
+            //                trackdist = kInfinity;
+            //            }
 
             bool rayoverride = false;
             for (int k = 0; k < p; k++) {
@@ -786,7 +784,7 @@ TrackData::TrackData(const char *filename) {
         j++;
     }
     free(buf);
-//    pd->tree = new LineCollection(headers, points, ntracks);
+    //    pd->tree = new LineCollection(headers, points, ntracks);
     pd->tree = NULL;
 
     data = QSharedDataPointer<TrackPrivateData>(pd);
@@ -948,7 +946,7 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     TrackPoint *points = pd->points;
     memcpy(headers, ch.data(), sizeof(TrackHeader) * qtracks);
     memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
-//    pd->tree = new LineCollection(headers, points, qtracks);
+    //    pd->tree = new LineCollection(headers, points, qtracks);
     pd->tree = NULL;
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }

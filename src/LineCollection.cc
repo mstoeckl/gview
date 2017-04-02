@@ -30,18 +30,20 @@ public:
     Trindx plane;
 };
 
-static void getCenterAndNormal(const LCData* node, const TrackPoint* points, G4ThreeVector& center, G4ThreeVector& normal) {
-    const TrackPoint& cpt = points[node->plane.center];
-    const TrackPoint& xpt = points[node->plane.xpt];
-    const TrackPoint& ypt = points[node->plane.ypt];
-    G4ThreeVector pc(cpt.x,cpt.y,cpt.z);
-    G4ThreeVector px(xpt.x,xpt.y,xpt.z);
-    G4ThreeVector py(ypt.x,ypt.y,ypt.z);
+static void getCenterAndNormal(const LCData *node, const TrackPoint *points,
+                               G4ThreeVector &center, G4ThreeVector &normal) {
+    const TrackPoint &cpt = points[node->plane.center];
+    const TrackPoint &xpt = points[node->plane.xpt];
+    const TrackPoint &ypt = points[node->plane.ypt];
+    G4ThreeVector pc(cpt.x, cpt.y, cpt.z);
+    G4ThreeVector px(xpt.x, xpt.y, xpt.z);
+    G4ThreeVector py(ypt.x, ypt.y, ypt.z);
     normal = (px - pc).cross(py - pc);
     center = pc;
 }
 
-SimplexIterator::SimplexIterator(const LineCollection& iin, const G4ThreeVector &isrc,
+SimplexIterator::SimplexIterator(const LineCollection &iin,
+                                 const G4ThreeVector &isrc,
                                  const G4ThreeVector &idir)
     : lc(iin), src(isrc), dir(idir) {
     current = lc.d;
@@ -50,7 +52,7 @@ SimplexIterator::SimplexIterator(const LineCollection& iin, const G4ThreeVector 
     while (current->left) {
         G4ThreeVector center, normal;
         getCenterAndNormal(current, lc.mpoints, center, normal);
-        if ((src - center)*normal > 0) {
+        if ((src - center) * normal > 0) {
             current = current->left;
         } else {
             current = current->right;
@@ -73,8 +75,6 @@ bool SimplexIterator::advance() {
                     "Description");
     }
     // TODO: casework!!
-
-
 
     // Move to next node in tree.... | go up, fwd, etc...
     return false;

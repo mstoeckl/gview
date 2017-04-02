@@ -1,5 +1,6 @@
 #include "Viewer.hh"
 
+#include "CustomWidgets.hh"
 #include "Overview.hh"
 
 #include <G4LogicalVolume.hh>
@@ -11,7 +12,6 @@
 
 #include <QAction>
 #include <QActionGroup>
-#include <QComboBox>
 #include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
@@ -22,15 +22,13 @@
 #include <QImageWriter>
 #include <QItemSelection>
 #include <QListWidget>
+#include <QListWidget>
 #include <QMenuBar>
-#include <QMessageBox>
-#include <QPainter>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalMapper>
 #include <QTableWidget>
-#include <QThread>
 #include <QTime>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -117,6 +115,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         trackdata =
             TrackData(td, vd, current.time, current.energy, current.seqno);
     }
+    rayiter = 0;
 
     QMenu *picker = new QMenu("Choose Geometry");
     QActionGroup *opts = new QActionGroup(this);
@@ -157,18 +156,21 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     connect(topts, SIGNAL(triggered(QAction *)), this,
             SLOT(changeTracks(QAction *)));
 
-    // TODO MENU FOR THESE THINGS! (View:)
     QAction *clipAction = new QAction("Clipping");
-    clipAction->setToolTip("Edit clipping planes");
+    clipAction->setToolTip("Edit geometry clipping planes and track limits");
     connect(clipAction, SIGNAL(triggered()), this, SLOT(restClip()));
 
     QAction *treeAction = new QAction("Tree");
-    treeAction->setToolTip("View tree");
+    treeAction->setToolTip("View object hierarchy");
     connect(treeAction, SIGNAL(triggered()), this, SLOT(restTree()));
 
     QAction *infoAction = new QAction("Info");
-    infoAction->setToolTip("Volume Info");
+    infoAction->setToolTip("Misc information on selected volume");
     connect(infoAction, SIGNAL(triggered()), this, SLOT(restInfo()));
+
+    QAction *rayAction = new QAction("Ray");
+    rayAction->setToolTip("List currently-hovered-over visible objects");
+    connect(rayAction, SIGNAL(triggered()), this, SLOT(restRay()));
 
     QAction *screenAction = new QAction("Screenshot");
     screenAction->setToolTip("Take a screenshot of active scene");
@@ -187,13 +189,12 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
 
     this->menuBar()->addMenu(picker);
     this->menuBar()->addMenu(tpicker);
-    // TODO include time range (in ns) in clip;
-    // use a get_min_max time/energy for the tracks
-    // disable if null tracks
     QMenu *sub = this->menuBar()->addMenu("View");
     sub->addAction(clipAction);
     sub->addAction(treeAction);
     sub->addAction(infoAction);
+    sub->addAction(rayAction);
+    this->menuBar()->addSeparator();
     this->menuBar()->addAction(screenAction);
     this->menuBar()->addAction(screen4Action);
 
@@ -202,7 +203,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     rwidget->setFocusPolicy(Qt::WheelFocus);
 
     // Clipping plane control
-    dock_clip = new QDockWidget(this);
+    dock_clip = new QDockWidget("Clipping", this);
     QWidget *cont = new QWidget();
     QVBoxLayout *vb = new QVBoxLayout();
     Plane iplanes[3];
@@ -292,7 +293,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_clip->setWidget(cont);
 
     // Tree view (with vis/novis, hue control
-    dock_tree = new QDockWidget(this);
+    dock_tree = new QDockWidget("Element tree", this);
     tree_view = new QTreeView();
     tree_model = new OverView(vd);
     tree_view->setSortingEnabled(false);
@@ -321,7 +322,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_tree->setWidget(tree_view);
 
     // Info for a particular item (mass, volume, mtl specs; table...)
-    dock_info = new QDockWidget(this);
+    dock_info = new QDockWidget("Element info", this);
     info_table = new QTableWidget();
     info_table->setColumnCount(1);
     QStringList keys;
@@ -339,29 +340,34 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     for (int i = 0; i < keys.size(); i++) {
         info_table->setItem(i, 0, new QTableWidgetItem(""));
     }
-
     dock_info->setWidget(info_table);
 
+    dock_ray = new QDockWidget("Ray table", this);
+    ray_table = new QListWidget();
+    dock_ray->setWidget(ray_table);
+
+    QDockWidget::DockWidgetFeatures feat = QDockWidget::DockWidgetClosable |
+                                           QDockWidget::DockWidgetMovable |
+                                           QDockWidget::DockWidgetFloatable;
     addDockWidget(Qt::LeftDockWidgetArea, dock_clip);
     dock_clip->setAllowedAreas(Qt::AllDockWidgetAreas);
-    dock_clip->setFeatures(QDockWidget::DockWidgetClosable |
-                           QDockWidget::DockWidgetMovable);
+    dock_clip->setFeatures(feat);
     dock_clip->setVisible(false);
 
     addDockWidget(Qt::LeftDockWidgetArea, dock_tree);
     dock_tree->setAllowedAreas(Qt::AllDockWidgetAreas);
-    dock_tree->setFeatures(QDockWidget::DockWidgetClosable |
-                           QDockWidget::DockWidgetMovable);
+    dock_tree->setFeatures(feat);
     dock_tree->setVisible(false);
 
     addDockWidget(Qt::LeftDockWidgetArea, dock_info);
     dock_info->setAllowedAreas(Qt::AllDockWidgetAreas);
-    dock_info->setFeatures(QDockWidget::DockWidgetClosable |
-                           QDockWidget::DockWidgetMovable |
-                           QDockWidget::DockWidgetFloatable);
+    dock_info->setFeatures(feat);
     dock_info->setVisible(false);
 
-    // set Layout, etc; use an autoshrinking list
+    addDockWidget(Qt::LeftDockWidgetArea, dock_ray);
+    dock_ray->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock_ray->setFeatures(feat);
+    dock_ray->setVisible(false);
 
     setMouseTracking(true);
 
@@ -373,6 +379,7 @@ Viewer::~Viewer() {}
 void Viewer::restClip() { dock_clip->setVisible(true); }
 void Viewer::restTree() { dock_tree->setVisible(true); }
 void Viewer::restInfo() { dock_info->setVisible(true); }
+void Viewer::restRay() { dock_ray->setVisible(true); }
 
 void Viewer::keyPressEvent(QKeyEvent *event) {
     G4double mvd = 0.1;
@@ -444,6 +451,25 @@ void Viewer::mouseReleaseEvent(QMouseEvent *) {
 }
 
 void Viewer::mouseMoveEvent(QMouseEvent *event) {
+    // Ray tracking
+    int h = rwidget->geometry().height();
+    int w = rwidget->geometry().width();
+    int mind = std::min(w, h);
+    QPoint coord = rwidget->mapFromGlobal(event->globalPos());
+    QPointF pt((coord.x() - w / 2.) / (2. * mind),
+               (coord.y() - h / 2.) / (2. * mind));
+    const int M = 50;
+    Intersection ints[M + 1];
+    const Element *elems[M];
+    int m = traceRay(pt, vd, elems, ints, M, rayiter);
+    rayiter++;
+    m = compressTraces(elems, ints, m);
+    ray_table->clear();
+    for (int j = 0; j < m; j++) {
+        QString name(elems[j]->name.data());
+        ray_table->addItem(name);
+    }
+
     if (!clicked)
         return;
     int dmm = std::min(this->width(), this->height());

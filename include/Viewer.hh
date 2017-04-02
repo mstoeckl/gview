@@ -1,6 +1,5 @@
 #pragma once
 
-#include "CustomWidgets.hh"
 #include "RenderWidget.hh"
 #include "RenderWorker.hh"
 
@@ -16,9 +15,12 @@ class QTreeView;
 class QDoubleSpinBox;
 class QComboBox;
 class QPushButton;
+class QListWidget;
+class QSpinBox;
 
 class PlaneEdit;
 class OverView;
+class ExpoSpinBox;
 
 typedef struct {
     G4String name;
@@ -48,6 +50,7 @@ public slots:
     void restClip();
     void restTree();
     void restInfo();
+    void restRay();
     void updatePlanes();
     void screenshot(int sx = 1);
     void changeGeometry(QAction *);
@@ -67,6 +70,7 @@ private:
     QDockWidget *dock_clip;
     QDockWidget *dock_tree;
     QDockWidget *dock_info;
+    QDockWidget *dock_ray;
     PlaneEdit *plane_edit[3];
     QDoubleSpinBox *times_lower;
     QDoubleSpinBox *times_upper;
@@ -77,9 +81,11 @@ private:
     QTreeView *tree_view;
     OverView *tree_model;
     QTableWidget *info_table;
+    QListWidget *ray_table;
 
     QPoint clickpt;
     QPoint lastpt;
     bool clicked;
     bool shift;
+    int rayiter;
 };

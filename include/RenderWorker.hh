@@ -20,6 +20,11 @@ typedef struct {
     // Keep n*x >= o; Drop n*x < o
 } Plane;
 
+typedef struct {
+    G4ThreeVector normal;
+    G4double dist;
+} Intersection;
+
 typedef struct Element_s {
     G4String name;
     // Note: replicas not yet available
@@ -126,3 +131,7 @@ private:
     bool renderTracks(const ViewData &d, const TrackData &t, G4double *dists,
                       QRgb *colors, int slice, int nslices, int w, int h);
 };
+
+int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
+             Intersection ints[], int maxhits, int iteration);
+int compressTraces(const Element *hits[], Intersection ints[], int m);
