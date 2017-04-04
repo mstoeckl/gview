@@ -357,18 +357,20 @@ RenderWorker::~RenderWorker() {}
 void RenderWorker::coAbort() { abort_task = true; }
 void RenderWorker::flushAbort() { abort_task = false; }
 
-static inline double iproject(G4ThreeVector point, const ViewData &d, int w,
+static inline double iproject(const G4ThreeVector& point,
+                              const G4ThreeVector& dcamera,
+                              const G4double& dscale,
+                              const G4RotationMatrix& ori, int w,
                               int h, int *dx, int *dy) {
-    G4ThreeVector forward = d.orientation.rowX();
-    G4ThreeVector pos = point - d.camera;
-    G4double off = forward * pos;
-    G4ThreeVector projected = pos - forward * off;
-    double fx = d.orientation.rowZ() * projected / d.scale;
-    double fy = d.orientation.rowY() * projected / d.scale;
-    int mind = std::min(w, h);
-    *dx = int(w / 2. + 2. * fx * mind);
-    *dy = int(h / 2. + 2. * fy * mind);
-    return std::abs(off);
+    G4ThreeVector local = ori * (point - dcamera);
+    G4double idscale = 1 / dscale;
+    double fy = local.y()*idscale;
+    double fx =  local.z()*idscale;
+    double off = local.x();
+    int dmind = 2*std::min(w, h);
+    *dx = int(0.5*w + fx * dmind);
+    *dy = int(0.5*h + fy * dmind);
+    return off;
 }
 
 static QRgb trackColor(const TrackHeader &h, const TrackPoint &pa,
@@ -499,12 +501,21 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
 
         const TrackHeader &header = headers[i];
         const TrackPoint *tp = &points[header.offset];
+
         // Project calculations 1 point ahead
         TrackPoint sp = tp[0];
         G4ThreeVector spos(sp.x, sp.y, sp.z);
         int sdx, sdy;
         double soff;
-        soff = iproject(spos, d, w, h, &sdx, &sdy);
+        soff = iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
+
+        // Fast clipping for when the track is way out of view
+        int rr = int(2*mind*header.bballradius / d.scale);
+        if (sdx + rr <= xl || sdx - rr > xh
+                || sdy + rr <= yl || sdy - rr > yh) {
+            continue;
+        }
+
         for (int j = 1; j < header.npts; j++) {
             // Adopt previous late point as early point
             TrackPoint ep = sp;
@@ -514,7 +525,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
             // Calculate new late point
             sp = tp[j];
             spos = G4ThreeVector(sp.x, sp.y, sp.z);
-            soff = iproject(spos, d, w, h, &sdx, &sdy);
+            soff = iproject(spos, d.camera, d.scale,  d.orientation, w, h, &sdx, &sdy);
 
             if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
                 (edx >= xh && sdx >= xh) || (edy >= yh && sdy >= yh)) {
@@ -745,6 +756,21 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
     return true;
 }
 
+static void setupBallRadii(TrackHeader *headers, const TrackPoint* points, size_t ntracks) {
+    for (size_t i=0;i<ntracks;i++) {
+        TrackHeader& h = headers[i];
+        const TrackPoint& t0 = points[h.offset];
+        G4ThreeVector p0(t0.x,t0.y,t0.z);
+        G4double radius = 0.0;
+        for (size_t j=h.offset+1;j<h.offset+size_t(h.npts);j++) {
+            const TrackPoint& tj = points[j];
+            G4ThreeVector pj(tj.x,tj.y,tj.z);
+            radius = std::max(radius, (pj - p0).mag());
+        }
+        h.bballradius = radius;
+    }
+}
+
 TrackData::TrackData() {}
 
 TrackData::TrackData(const char *filename) {
@@ -786,6 +812,7 @@ TrackData::TrackData(const char *filename) {
     free(buf);
     //    pd->tree = new LineCollection(headers, points, ntracks);
     pd->tree = NULL;
+    setupBallRadii(headers,points,ntracks);
 
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
@@ -948,6 +975,7 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
     //    pd->tree = new LineCollection(headers, points, qtracks);
     pd->tree = NULL;
+    setupBallRadii(headers,points,qtracks);
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
 

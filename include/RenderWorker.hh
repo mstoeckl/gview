@@ -67,6 +67,7 @@ typedef struct {
     int npts;
     int ptype;
     size_t offset;
+    G4double bballradius;
 } TrackHeader;
 
 typedef struct {
