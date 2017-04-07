@@ -45,14 +45,23 @@ ViewData initVD(const Element &root) {
     return d;
 }
 
-Element convertCreation(G4VPhysicalVolume *phys) {
+static const G4RotationMatrix identityRotation = G4RotationMatrix();
+Element convertCreation(G4VPhysicalVolume *phys,
+                        G4RotationMatrix rot = identityRotation) {
     Element m;
     m.name = phys->GetName();
 
-    m.rotated = phys->GetFrameRotation() != NULL;
-    m.offset = phys->GetFrameTranslation();
-    m.rot = phys->GetFrameRotation() ? *phys->GetFrameRotation()
-                                     : G4RotationMatrix();
+    G4ThreeVector offset = phys->GetFrameTranslation();
+    offset = rot * offset;
+    if (phys->GetFrameRotation()) {
+        const G4RotationMatrix &r = *phys->GetFrameRotation();
+        rot = r * rot;
+    }
+
+    // Only identity has a trace of +3 => norm2 of 0
+    m.rotated = rot.norm2() > 1e-10;
+    m.offset = offset;
+    m.rot = rot;
 
     m.mat = phys->GetLogicalVolume()->GetMaterial();
     m.solid = phys->GetLogicalVolume()->GetSolid();
@@ -64,7 +73,7 @@ Element convertCreation(G4VPhysicalVolume *phys) {
     m.children = std::vector<Element>();
     for (int i = 0; i < phys->GetLogicalVolume()->GetNoDaughters(); i++) {
         m.children.push_back(
-            convertCreation(phys->GetLogicalVolume()->GetDaughter(i)));
+            convertCreation(phys->GetLogicalVolume()->GetDaughter(i), m.rot));
     }
     return m;
 }

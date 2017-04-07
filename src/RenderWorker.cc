@@ -37,18 +37,36 @@ static void recursivelyPrintNCalls(const Element &r, int depth = 0,
     }
 }
 
+static G4ThreeVector condrot(const Element &e, const G4ThreeVector &vec) {
+    if (e.rotated) {
+        return e.rot * vec;
+    }
+    return vec;
+}
+
+static G4ThreeVector condirot(const Element &e, const G4ThreeVector &vec) {
+    if (e.rotated) {
+        return e.rot.inverse() * vec;
+    }
+    return vec;
+}
+
 int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
              Intersection ints[], int maxhits, int iteration) {
     // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
     // Return number of hits recorded.
-
     G4ThreeVector forward = d.orientation.rowX();
     G4ThreeVector updown = d.orientation.rowY();
     G4ThreeVector lright = d.orientation.rowZ();
 
-    // Q: proper camera dynamics...
     G4ThreeVector init =
         d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
+
+    // Pseudorandom number to prevent consistent child ordering
+    // so as to make overlapping children obvious
+    const size_t rotfact = size_t(random());
+    // Minimum feature size, yet still above double discrimination threshold
+    const G4double epsilon = 1e-3 * CLHEP::nanometer;
 
     G4double sdist = 0.0;
     G4double edist = kInfinity;
@@ -116,20 +134,19 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         // check inside on all children, append; stop when no longer dropping
         // levels
         bool found = false;
-        for (const Element &elem : last.children) {
-            G4ThreeVector sub;
-            if (elem.rotated) {
-                sub = elem.rot * (local + elem.offset);
-            } else {
-                sub = local + elem.offset;
-            }
+        for (size_t walk = 0; walk < last.children.size(); walk++) {
             // rotate/offset start point...
+            const Element &elem =
+                last.children[(walk + rotfact) % last.children.size()];
             ++elem.ngeocalls;
-            if (elem.solid->Inside(sub)) {
+            if (elem.solid->Inside(condrot(elem, (local + elem.offset)))) {
                 stack[n] = &elem;
                 ++n;
                 found = true;
-                local = sub;
+                local += elem.offset;
+                // Picking the first intersection can lead to visual glitches
+                // when two or more children overlap at the same point.
+                // One solution: pick a random child order..
                 break;
             }
         }
@@ -137,23 +154,11 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             break;
         }
     }
-    G4ThreeVector directions[maxdepth];
     G4ThreeVector positions[maxdepth];
-    G4RotationMatrix rotations[maxdepth];
-    directions[0] = forward;
     positions[0] = start;
-    rotations[0] = G4RotationMatrix();
     for (size_t i = 1; i < n; i++) {
         const Element &elem = *stack[i];
-        if (elem.rotated) {
-            directions[i] = elem.rot * directions[i - 1];
-            positions[i] = elem.rot * (positions[i - 1] + elem.offset);
-            rotations[i] = elem.rot * rotations[i - 1];
-        } else {
-            directions[i] = directions[i - 1];
-            positions[i] = positions[i - 1] + elem.offset;
-            rotations[i] = rotations[i - 1];
-        }
+        positions[i] = positions[i - 1] + elem.offset;
     }
     int nhits = 1;
     if (clippable) {
@@ -173,32 +178,31 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
 
     for (int iter = 0; iter < 1000; iter++) {
         const Element &curr = *stack[n - 1];
-        const G4ThreeVector &dir = directions[n - 1];
         const G4ThreeVector &pos = positions[n - 1];
 
         ++curr.ngeocalls;
         if (curr.niter != iteration || curr.abs_dist <= sdist /* epsilon ? */) {
-            curr.abs_dist = sdist + curr.solid->DistanceToOut(pos, dir);
+
+            curr.abs_dist = sdist +
+                            curr.solid->DistanceToOut(condrot(curr, pos),
+                                                      condrot(curr, forward));
             curr.niter = iteration;
         }
         G4double exitdist = curr.abs_dist - sdist;
 
         G4double closestDist = 2 * kInfinity;
         const Element *closest = NULL;
-        G4ThreeVector closestDir;
         G4ThreeVector closestPos;
-        for (const Element &elem : curr.children) {
-            G4ThreeVector sub, subdir;
-            if (elem.rotated) {
-                sub = elem.rot * (pos + elem.offset);
-                subdir = elem.rot * dir;
-            } else {
-                sub = pos + elem.offset;
-                subdir = dir;
-            }
+        for (size_t walk = 0; walk < curr.children.size(); walk++) {
+            const Element &elem =
+                curr.children[(walk + rotfact) % curr.children.size()];
+            G4ThreeVector sub = pos + elem.offset;
+
             ++elem.ngeocalls;
             if (elem.niter != iteration || elem.abs_dist <= sdist) {
-                elem.abs_dist = sdist + elem.solid->DistanceToIn(sub, subdir);
+                elem.abs_dist = sdist +
+                                elem.solid->DistanceToIn(
+                                    condrot(elem, sub), condrot(elem, forward));
                 elem.niter = iteration;
             }
             G4double altdist = elem.abs_dist - sdist;
@@ -206,7 +210,6 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
                 // No intersection
                 continue;
             } else if (altdist < closestDist) {
-                closestDir = subdir;
                 closestPos = sub;
                 closest = &elem;
                 closestDist = altdist;
@@ -222,19 +225,19 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             // Transition on leaving vol w/o intersections
             // Advance all levels, why not
             for (size_t j = 0; j < n; j++) {
-                positions[j] += exitdist * directions[j];
+                positions[j] += exitdist * forward;
             }
             sdist += exitdist;
             G4ThreeVector lpos = positions[n - 1];
-            G4RotationMatrix lrot = rotations[n - 1];
             // Drop from stack
             --n;
 
             // Record hit with normal
             ++curr.ngeocalls;
-            G4ThreeVector lnormal = curr.solid->SurfaceNormal(lpos);
+            G4ThreeVector lnormal =
+                curr.solid->SurfaceNormal(condrot(curr, lpos));
             ints[nhits].dist = sdist;
-            ints[nhits].normal = lrot.invert() * lnormal;
+            ints[nhits].normal = condirot(curr, lnormal);
             if (n == 0 || nhits >= maxhits) {
                 return nhits;
             }
@@ -242,28 +245,20 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             nhits++;
         } else {
             // Transition on visiting a child
-            G4RotationMatrix lrot;
-            if (closest->rotated) {
-                lrot = closest->rot * rotations[n - 1];
-            } else {
-                lrot = rotations[n - 1];
-            }
-            positions[n] = closestPos;
-            directions[n] = closestDir;
-            rotations[n] = lrot;
-            for (size_t j = 0; j < n + 1; j++) {
-                positions[j] += closestDist * directions[j];
-            }
             stack[n] = closest;
-            n++;
+            positions[n] = closestPos;
+            for (size_t j = 0; j < n + 1; j++) {
+                positions[j] += closestDist * forward;
+            }
             sdist += closestDist;
+            n++;
 
             // Record hit with normal
             ++closest->ngeocalls;
-            G4ThreeVector lnormal =
-                closest->solid->SurfaceNormal(positions[n - 1]);
+            G4ThreeVector lnormal = closest->solid->SurfaceNormal(
+                condrot(*closest, positions[n - 1]));
             ints[nhits].dist = sdist;
-            ints[nhits].normal = lrot.invert() * lnormal;
+            ints[nhits].normal = condirot(*closest, lnormal);
             if (nhits >= maxhits) {
                 // Don't increment hit counter; ignore last materialc
                 return nhits;
@@ -357,19 +352,19 @@ RenderWorker::~RenderWorker() {}
 void RenderWorker::coAbort() { abort_task = true; }
 void RenderWorker::flushAbort() { abort_task = false; }
 
-static inline double iproject(const G4ThreeVector& point,
-                              const G4ThreeVector& dcamera,
-                              const G4double& dscale,
-                              const G4RotationMatrix& ori, int w,
-                              int h, int *dx, int *dy) {
+static inline double iproject(const G4ThreeVector &point,
+                              const G4ThreeVector &dcamera,
+                              const G4double &dscale,
+                              const G4RotationMatrix &ori, int w, int h,
+                              int *dx, int *dy) {
     G4ThreeVector local = ori * (point - dcamera);
     G4double idscale = 1 / dscale;
-    double fy = local.y()*idscale;
-    double fx =  local.z()*idscale;
+    double fy = local.y() * idscale;
+    double fx = local.z() * idscale;
     double off = local.x();
-    int dmind = 2*std::min(w, h);
-    *dx = int(0.5*w + fx * dmind);
-    *dy = int(0.5*h + fy * dmind);
+    int dmind = 2 * std::min(w, h);
+    *dx = int(0.5 * w + fx * dmind);
+    *dy = int(0.5 * h + fy * dmind);
     return off;
 }
 
@@ -507,12 +502,13 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
         G4ThreeVector spos(sp.x, sp.y, sp.z);
         int sdx, sdy;
         double soff;
-        soff = iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
+        soff =
+            iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
 
         // Fast clipping for when the track is way out of view
-        int rr = int(2*mind*header.bballradius / d.scale);
-        if (sdx + rr <= xl || sdx - rr > xh
-                || sdy + rr <= yl || sdy - rr > yh) {
+        int rr = int(2 * mind * header.bballradius / d.scale);
+        if (sdx + rr <= xl || sdx - rr > xh || sdy + rr <= yl ||
+            sdy - rr > yh) {
             continue;
         }
 
@@ -525,7 +521,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
             // Calculate new late point
             sp = tp[j];
             spos = G4ThreeVector(sp.x, sp.y, sp.z);
-            soff = iproject(spos, d.camera, d.scale,  d.orientation, w, h, &sdx, &sdy);
+            soff = iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx,
+                            &sdy);
 
             if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
                 (edx >= xh && sdx >= xh) || (edy >= yh && sdy >= yh)) {
@@ -756,15 +753,16 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
     return true;
 }
 
-static void setupBallRadii(TrackHeader *headers, const TrackPoint* points, size_t ntracks) {
-    for (size_t i=0;i<ntracks;i++) {
-        TrackHeader& h = headers[i];
-        const TrackPoint& t0 = points[h.offset];
-        G4ThreeVector p0(t0.x,t0.y,t0.z);
+static void setupBallRadii(TrackHeader *headers, const TrackPoint *points,
+                           size_t ntracks) {
+    for (size_t i = 0; i < ntracks; i++) {
+        TrackHeader &h = headers[i];
+        const TrackPoint &t0 = points[h.offset];
+        G4ThreeVector p0(t0.x, t0.y, t0.z);
         G4double radius = 0.0;
-        for (size_t j=h.offset+1;j<h.offset+size_t(h.npts);j++) {
-            const TrackPoint& tj = points[j];
-            G4ThreeVector pj(tj.x,tj.y,tj.z);
+        for (size_t j = h.offset + 1; j < h.offset + size_t(h.npts); j++) {
+            const TrackPoint &tj = points[j];
+            G4ThreeVector pj(tj.x, tj.y, tj.z);
             radius = std::max(radius, (pj - p0).mag());
         }
         h.bballradius = radius;
@@ -812,7 +810,7 @@ TrackData::TrackData(const char *filename) {
     free(buf);
     //    pd->tree = new LineCollection(headers, points, ntracks);
     pd->tree = NULL;
-    setupBallRadii(headers,points,ntracks);
+    setupBallRadii(headers, points, ntracks);
 
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
@@ -975,7 +973,7 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
     //    pd->tree = new LineCollection(headers, points, qtracks);
     pd->tree = NULL;
-    setupBallRadii(headers,points,qtracks);
+    setupBallRadii(headers, points, qtracks);
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
 
