@@ -35,3 +35,23 @@ private:
     enum { aReqd, aCompl, aThere } arrived;
     QTime request_time;
 };
+
+class RenderSaveObject : public QObject {
+    Q_OBJECT
+public:
+    RenderSaveObject(const ViewData &v, const TrackData &t, int w, int h);
+    virtual ~RenderSaveObject();
+    void start();
+public slots:
+    void abort();
+    void aborted();
+    void completed();
+
+private:
+    const ViewData &viewdata;
+    const TrackData &trackdata;
+    QImage target;
+    QThread *thread;
+    RenderWorker *worker;
+    QProgressDialog *progress;
+};

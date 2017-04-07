@@ -1,6 +1,10 @@
 #include "RenderWidget.hh"
 
+#include <QDir>
+#include <QFileDialog>
+#include <QImageWriter>
 #include <QPainter>
+#include <QProgressDialog>
 #include <QThread>
 
 RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
@@ -35,7 +39,15 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     last_level_of_detail = 10000;
 }
 
-RenderWidget::~RenderWidget() {}
+RenderWidget::~RenderWidget() {
+    for (RenderWorker *wor : w) {
+        QMetaObject::invokeMethod(wor, "selfDestruct", Qt::QueuedConnection);
+    }
+    for (QThread *thr : t) {
+        thr->exit(0);
+        thr->deleteLater();
+    }
+}
 
 void RenderWidget::rerender() {
     currView.level_of_detail = 2;
@@ -145,4 +157,56 @@ void RenderWidget::paintEvent(QPaintEvent *) {
                request_time.msecsTo(QTime::currentTime()));
 #endif
     }
+}
+
+RenderSaveObject::RenderSaveObject(const ViewData &v, const TrackData &t, int w,
+                                   int h)
+    : viewdata(v), trackdata(t) {
+    target = QImage(w, h, QImage::Format_RGB32);
+    thread = new QThread();
+    worker = new RenderWorker();
+    progress = new QProgressDialog("Rendering image", "Cancel render", 0, h);
+    progress->setMinimumDuration(1000);
+    worker->moveToThread(thread);
+    connect(worker, SIGNAL(aborted()), this, SLOT(aborted()));
+    connect(worker, SIGNAL(completed()), this, SLOT(completed()));
+    connect(worker, SIGNAL(progressed(int)), progress, SLOT(setValue(int)));
+    connect(progress, SIGNAL(canceled()), this, SLOT(abort()));
+}
+
+RenderSaveObject::~RenderSaveObject() {
+    QMetaObject::invokeMethod(worker, "selfDestruct", Qt::QueuedConnection);
+    thread->exit(0);
+    thread->deleteLater();
+    progress->deleteLater();
+}
+
+void RenderSaveObject::start() {
+    thread->start();
+    QMetaObject::invokeMethod(
+        worker, "render", Qt::QueuedConnection, Q_ARG(ViewData, viewdata),
+        Q_ARG(TrackData, trackdata), Q_ARG(QImage *, &target), Q_ARG(int, 0),
+        Q_ARG(int, 1));
+}
+
+void RenderSaveObject::abort() {
+    worker->abort_task = true;
+    progress->setVisible(false);
+}
+
+void RenderSaveObject::aborted() {
+    this->deleteLater();
+}
+
+void RenderSaveObject::completed() {
+    progress->setVisible(false);
+    QString n = QFileDialog::getSaveFileName(NULL, "Save screenshot",
+                                             QDir::current().canonicalPath());
+    if (!n.isEmpty()) {
+        // Chose a file
+        QImageWriter r(n);
+        r.setDescription("Screenshot of GEANT4 scene");
+        r.write(target);
+    }
+    this->deleteLater();
 }

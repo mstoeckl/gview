@@ -12,24 +12,18 @@
 
 #include <QAction>
 #include <QActionGroup>
-#include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
-#include <QFileDialog>
 #include <QGridLayout>
 #include <QHeaderView>
-#include <QImage>
-#include <QImageWriter>
 #include <QItemSelection>
 #include <QListWidget>
 #include <QListWidget>
 #include <QMenuBar>
-#include <QProgressDialog>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalMapper>
 #include <QTableWidget>
-#include <QTime>
 #include <QTreeView>
 #include <QVBoxLayout>
 
@@ -662,27 +656,7 @@ void Viewer::indicateElement(Element *e) {
 }
 
 void Viewer::screenshot(int sx) {
-    RenderWorker w;
-    QProgressDialog d("Rendering image", "Cancel render", 0,
-                      rwidget->height() * sx);
-    d.setMinimumDuration(1000);
-    ViewData sccopy = vd;
-    sccopy.level_of_detail = -1;
-    connect(&d, SIGNAL(canceled()), &w, SLOT(coAbort()));
-    QImage im(rwidget->width() * sx, rwidget->height() * sx,
-              QImage::Format_RGB32);
-    bool worked = w.render(sccopy, trackdata, &im, 0, 1, &d);
-    d.close();
-    if (!worked) {
-        return;
-    }
-    QString n = QFileDialog::getSaveFileName(this, "Save screenshot",
-                                             QDir::current().canonicalPath());
-    if (n.isEmpty()) {
-        // Didn't choose a file...
-        return;
-    }
-    QImageWriter r(n);
-    r.setDescription("Screenshot of GEANT4 scene");
-    r.write(im);
+    int w = rwidget->width() * sx, h = rwidget->height() * sx;
+    RenderSaveObject *rso = new RenderSaveObject(vd, trackdata, w, h);
+    rso->start();
 }

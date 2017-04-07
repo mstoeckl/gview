@@ -120,11 +120,12 @@ public:
     ~RenderWorker();
     bool abort_task;
 public slots:
-    bool render(ViewData p, TrackData t, QImage *i, int slice, int nslices,
-                QProgressDialog *d = NULL);
+    bool render(ViewData p, TrackData t, QImage *i, int slice, int nslices);
     void coAbort();
     void flushAbort();
+    void selfDestruct();
 signals:
+    void progressed(int);
     void completed();
     void aborted();
 

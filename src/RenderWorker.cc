@@ -8,8 +8,9 @@
 #include <G4VUserDetectorConstruction.hh>
 #include <G4VisExtent.hh>
 
-#include <QCoreApplication>
-#include <QProgressDialog>
+#include <QColor>
+#include <QImage>
+#include <QPointF>
 
 static long recursivelySumNCalls(const Element &r) {
     long s = r.ngeocalls;
@@ -351,6 +352,7 @@ RenderWorker::~RenderWorker() {}
 
 void RenderWorker::coAbort() { abort_task = true; }
 void RenderWorker::flushAbort() { abort_task = false; }
+void RenderWorker::selfDestruct() { this->deleteLater(); }
 
 static inline double iproject(const G4ThreeVector &point,
                               const G4ThreeVector &dcamera,
@@ -488,11 +490,11 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     float r2 = rad * rad;
 
     for (size_t i = 0; i < ntracks; i++) {
-        //        if (this->abort_task) {
-        //            this->abort_task = false;
-        //            emit aborted();
-        //            return false;
-        //        }
+        if (this->abort_task) {
+            this->abort_task = false;
+            emit aborted();
+            return false;
+        }
 
         const TrackHeader &header = headers[i];
         const TrackPoint *tp = &points[header.offset];
@@ -589,7 +591,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
 }
 
 bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
-                          int nslices, QProgressDialog *progdiag) {
+                          int nslices) {
     if (!d.root.solid) {
         return false;
     }
@@ -631,13 +633,13 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
     for (int i = yl; i < yh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
         for (int j = xl; j < xh; j++) {
-            //            if (this->abort_task) {
-            //                this->abort_task = false;
-            //                emit aborted();
-            //                delete[] trackdists;
-            //                delete[] trackcolors;
-            //                return false;
-            //            }
+            if (this->abort_task) {
+                this->abort_task = false;
+                emit aborted();
+                delete[] trackdists;
+                delete[] trackcolors;
+                return false;
+            }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
             int m = traceRay(pt, d, hits, ints, M, iter);
@@ -734,10 +736,7 @@ bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
             }
             pts[j] = col;
         }
-        if (progdiag) {
-            progdiag->setValue(i + 1);
-            QCoreApplication::processEvents();
-        }
+        emit progressed(i + 1);
     }
 #if 1
     if (d.level_of_detail <= -1) {
