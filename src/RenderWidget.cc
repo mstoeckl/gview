@@ -37,6 +37,7 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
         w.append(ww);
     }
     state = NONE;
+    to_full_detail = false;
     last_level_of_detail = 10000;
 }
 
@@ -47,6 +48,16 @@ RenderWidget::~RenderWidget() {
     for (QThread *thr : t) {
         thr->exit(0);
         thr->deleteLater();
+    }
+}
+
+void RenderWidget::setFullDetail(bool b) {
+    if (b == to_full_detail) {
+        return;
+    }
+    to_full_detail = b;
+    if (state == NONE) {
+        rerender_priv();
     }
 }
 
@@ -79,7 +90,7 @@ void RenderWidget::rerender_priv() {
     }
 
     int scl = int(std::pow(3.0, std::max(currView.level_of_detail, 0)));
-    if (currView.level_of_detail == 0) {
+    if (currView.level_of_detail == (to_full_detail ? -1 : 0)) {
         request_time = QTime::currentTime();
         arrived = aReqd;
     }
@@ -95,7 +106,7 @@ void RenderWidget::rerender_priv() {
     response_count = 0;
 
     last_level_of_detail = currView.level_of_detail;
-    if (currView.level_of_detail <= 0) {
+    if (currView.level_of_detail <= (to_full_detail ? -1 : 0)) {
         state = ACTIVE;
     } else {
         state = ACTIVE_AND_QUEUED;

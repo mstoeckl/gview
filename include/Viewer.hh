@@ -1,14 +1,15 @@
 #pragma once
 
-#include "RenderWidget.hh"
 #include "RenderWorker.hh"
 
 #include <QMainWindow>
+#include <QMap>
 
 #include <vector>
 
 class G4VPhysicalVolume;
 class G4VUserDetectorConstruction;
+class G4Material;
 
 class QTableWidget;
 class QTreeView;
@@ -17,15 +18,17 @@ class QComboBox;
 class QPushButton;
 class QListWidget;
 class QSpinBox;
+class QCheckBox;
+class QTableView;
 
 class PlaneEdit;
 class OverView;
 class ExpoSpinBox;
+class RenderWidget;
 
 typedef struct {
     G4String name;
-    G4VUserDetectorConstruction *cons;
-    G4VPhysicalVolume *cache;
+    G4VPhysicalVolume *vol;
 } GeoOption;
 
 typedef struct {
@@ -51,7 +54,10 @@ public slots:
     void restTree();
     void restInfo();
     void restRay();
+    void restMtl();
     void updatePlanes();
+    void updateMaterials();
+    void updateShowLines();
     void screenshot(int sx = 1);
     void changeGeometry(QAction *);
     void changeTracks(QAction *);
@@ -71,6 +77,7 @@ private:
     QDockWidget *dock_tree;
     QDockWidget *dock_info;
     QDockWidget *dock_ray;
+    QDockWidget *dock_mtl;
     PlaneEdit *plane_edit[3];
     QDoubleSpinBox *times_lower;
     QDoubleSpinBox *times_upper;
@@ -82,6 +89,9 @@ private:
     OverView *tree_model;
     QTableWidget *info_table;
     QListWidget *ray_table;
+    QCheckBox *mtl_divchk;
+    QCheckBox *mtl_showlines;
+    QTableView *mtl_table;
 
     QPoint clickpt;
     QPoint lastpt;

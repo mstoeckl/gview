@@ -3,16 +3,17 @@
 #include <QAbstractItemModel>
 #include <QItemDelegate>
 
-struct ViewData_s;
 struct Element_s;
 typedef struct Element_s Element;
+typedef struct ViewData_s ViewData;
 class OverView;
+class MaterialModel;
 class QItemSelection;
 
 class HueSpinBoxDelegate : public QItemDelegate {
     Q_OBJECT
 public:
-    HueSpinBoxDelegate(OverView *model, QObject *parent = 0);
+    HueSpinBoxDelegate(MaterialModel *model, QObject *parent = 0);
     virtual ~HueSpinBoxDelegate() {}
 
     QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
@@ -27,7 +28,31 @@ public:
                               const QModelIndex &index) const;
 
 private:
-    OverView *oneTrueModel;
+    MaterialModel *oneTrueModel;
+};
+
+class MaterialModel : public QAbstractTableModel {
+    Q_OBJECT
+public:
+    MaterialModel(ViewData &c);
+    virtual ~MaterialModel();
+
+    virtual int rowCount(const QModelIndex &p = QModelIndex()) const;
+    virtual int columnCount(const QModelIndex &p = QModelIndex()) const;
+    virtual QVariant headerData(int section, Qt::Orientation orientation,
+                                int role = Qt::DisplayRole) const;
+    virtual QVariant data(const QModelIndex &index,
+                          int role = Qt::DisplayRole) const;
+    virtual bool setData(const QModelIndex &index, const QVariant &value,
+                         int role = Qt::EditRole);
+    Qt::ItemFlags flags(const QModelIndex &index) const;
+signals:
+    void colorChange();
+public slots:
+    void hueUpdate(QWidget *);
+
+private:
+    ViewData_s &currView;
 };
 
 class AlphaBoxDelegate : public QItemDelegate {
@@ -77,7 +102,6 @@ signals:
 public slots:
     void respToActive(const QModelIndex &index);
     void respToSelection(const QItemSelection &, const QItemSelection &);
-    void hueUpdate(QWidget *);
     void alphaUpdate(QWidget *);
 
 private:

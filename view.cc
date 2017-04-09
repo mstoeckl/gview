@@ -42,14 +42,13 @@ int main(int argc, char **argv) {
             G4cout << "Done reading..." << G4endl;
             GeoOption g;
             g.name = G4String(argv[j]);
-            g.cons = NULL;
             // Need to modify volume name to prevent collisions in lookup
-            g.cache = p.GetWorldVolume();
+            g.vol = p.GetWorldVolume();
             char buf[30];
             sprintf(buf, "-%d", j);
-            G4String name = g.cache->GetName() + buf;
-            g.cache->SetName(name);
-            g.cache->GetLogicalVolume()->SetName(name);
+            G4String name = g.vol->GetName() + buf;
+            g.vol->SetName(name);
+            g.vol->GetLogicalVolume()->SetName(name);
             opts.push_back(g);
             G4cout << "Done converting..." << G4endl;
             p.Clear();

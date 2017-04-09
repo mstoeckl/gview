@@ -1,12 +1,13 @@
 #include "Overview.hh"
 
+#include "G4Material.hh"
 #include "RenderWorker.hh"
 
 #include <QDoubleSpinBox>
 #include <QItemSelection>
 #include <QSignalMapper>
 
-HueSpinBoxDelegate::HueSpinBoxDelegate(OverView *model, QObject *parent)
+HueSpinBoxDelegate::HueSpinBoxDelegate(MaterialModel *model, QObject *parent)
     : QItemDelegate(parent) {
     oneTrueModel = model;
 }
@@ -22,10 +23,7 @@ QWidget *HueSpinBoxDelegate::createEditor(QWidget *parent,
     editor->setRange(0., 1.);
     editor->setSingleStep(0.05);
     editor->setWrapping(true);
-    editor->setStyleSheet("QDoubleSpinBox { color : blue; } ");
     // Insert extra parameters in unused fields
-    editor->setToolTipDuration(
-        int(reinterpret_cast<long>(idx.internalPointer())));
     editor->setMaximumHeight(1000 + idx.row());
     QSignalMapper *q = new QSignalMapper(editor);
     connect(editor, SIGNAL(valueChanged(double)), q, SLOT(map()));
@@ -39,7 +37,10 @@ void HueSpinBoxDelegate::setEditorData(QWidget *editor,
                                        const QModelIndex &index) const {
     QDoubleSpinBox *spinBox = static_cast<QDoubleSpinBox *>(editor);
     spinBox->blockSignals(true);
-    spinBox->setValue(index.model()->data(index, Qt::EditRole).toDouble());
+    double v = index.model()->data(index, Qt::EditRole).toDouble();
+    spinBox->setValue(v);
+    spinBox->setStyleSheet("background-color: " +
+                           QColor::fromHslF(v, 0.5, 0.7).name());
     spinBox->blockSignals(false);
 }
 void HueSpinBoxDelegate::setModelData(QWidget *editor,
@@ -54,6 +55,87 @@ void HueSpinBoxDelegate::updateEditorGeometry(
     QWidget *editor, const QStyleOptionViewItem &option,
     const QModelIndex &) const {
     editor->setGeometry(option.rect);
+}
+
+MaterialModel::MaterialModel(ViewData &c) : currView(c) {
+    // calculate on/off corresponding to current element tree ?
+}
+
+MaterialModel::~MaterialModel() {}
+
+int MaterialModel::rowCount(const QModelIndex &) const {
+    return int(currView.matinfo.size());
+}
+int MaterialModel::columnCount(const QModelIndex &) const { return 1; }
+QVariant MaterialModel::data(const QModelIndex &index, int role) const {
+    if (!index.isValid()) {
+        return QVariant();
+    }
+    int r = index.row();
+    const MaterialInfo &m = currView.matinfo[size_t(r)];
+
+    // Assume only valid indices...
+    if (role == Qt::DisplayRole) {
+        if (index.column() == 0) {
+            return QVariant(QString::number(m.hue, 'f', 2));
+        }
+    }
+    if (role == Qt::BackgroundColorRole) {
+        if (index.column() == 0) {
+            return QVariant(QColor::fromHslF(m.hue, 0.5, 0.7));
+        }
+    }
+    if (role == Qt::EditRole) {
+        if (index.column() == 0) {
+            return QVariant(m.hue);
+        }
+    }
+    return QVariant();
+}
+bool MaterialModel::setData(const QModelIndex &index, const QVariant &value,
+                            int role) {
+    if (!index.isValid()) {
+        return false;
+    }
+    int r = index.row();
+    if (role == Qt::EditRole) {
+        if (index.column() == 0) {
+            currView.matinfo[size_t(r)].hue = value.toDouble();
+            QVector<int> roles;
+            roles.push_back(Qt::DisplayRole);
+            emit dataChanged(index, index, roles);
+            emit colorChange();
+            return true;
+        }
+    }
+    return false;
+}
+
+QVariant MaterialModel::headerData(int section, Qt::Orientation orientation,
+                                   int role) const {
+    if (role != Qt::DisplayRole) {
+        return QVariant();
+    }
+    if (orientation == Qt::Horizontal) {
+        return QVariant("Hue");
+    }
+    return QVariant(currView.matinfo[size_t(section)].mtl->GetName().data());
+}
+Qt::ItemFlags MaterialModel::flags(const QModelIndex &) const {
+    return Qt::ItemIsEditable | Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+void MaterialModel::hueUpdate(QWidget *w) {
+    QDoubleSpinBox *e = static_cast<QDoubleSpinBox *>(w);
+    if (!e) {
+        return;
+    }
+    int row = e->maximumHeight() - 1000;
+    currView.matinfo[size_t(row)].hue = e->value();
+    QModelIndex idx = index(row, 0);
+    QVector<int> roles;
+    roles.push_back(Qt::EditRole);
+    emit dataChanged(idx, idx, roles);
+    emit colorChange();
 }
 
 AlphaBoxDelegate::AlphaBoxDelegate(OverView *model, QObject *parent)
@@ -84,7 +166,10 @@ void AlphaBoxDelegate::setEditorData(QWidget *editor,
                                      const QModelIndex &index) const {
     QDoubleSpinBox *spinBox = static_cast<QDoubleSpinBox *>(editor);
     spinBox->blockSignals(true);
-    spinBox->setValue(index.model()->data(index, Qt::EditRole).toDouble());
+    double v = index.model()->data(index, Qt::EditRole).toDouble();
+    spinBox->setValue(v);
+    QColor c = QColor::fromRgbF((3. + v) / 4., (3. + v) / 4., (3. + v) / 4.);
+    spinBox->setStyleSheet("background-color: " + c.name());
     spinBox->blockSignals(false);
 }
 void AlphaBoxDelegate::setModelData(QWidget *editor, QAbstractItemModel *model,
@@ -170,8 +255,6 @@ QVariant OverView::headerData(int section, Qt::Orientation orientation,
         } else if (section == 1) {
             return QVariant("Vis");
         } else if (section == 2) {
-            return QVariant("Hue");
-        } else if (section == 3) {
             return QVariant("Alpha");
         }
     }
@@ -188,7 +271,7 @@ Qt::ItemFlags OverView::flags(const QModelIndex &index) const {
         // ItemIsAutoTristate = 64, govern state
         return base | Qt::ItemIsUserCheckable;
     }
-    if (index.column() == 2 || index.column() == 3) {
+    if (index.column() == 2) {
         return base | Qt::ItemIsEditable;
     }
     return base;
@@ -205,9 +288,6 @@ QVariant OverView::data(const QModelIndex &index, int role) const {
             return QVariant(QString(n.elem->name.c_str()));
         }
         if (index.column() == 2) {
-            return QVariant(QString::number(n.elem->hue, 'f', 2));
-        }
-        if (index.column() == 3) {
             return QVariant(QString::number(n.elem->alpha, 'f', 2));
         }
     }
@@ -216,10 +296,14 @@ QVariant OverView::data(const QModelIndex &index, int role) const {
     }
     if (role == Qt::EditRole) {
         if (index.column() == 2) {
-            return QVariant(n.elem->hue);
-        }
-        if (index.column() == 3) {
             return QVariant(n.elem->alpha);
+        }
+    }
+    if (role == Qt::BackgroundColorRole) {
+        if (index.column() == 2) {
+            return QVariant(QColor::fromRgbF((3. + n.elem->alpha) / 4.,
+                                             (3. + n.elem->alpha) / 4.,
+                                             (3. + n.elem->alpha) / 4.));
         }
     }
 
@@ -234,14 +318,6 @@ bool OverView::setData(const QModelIndex &index, const QVariant &value,
 
     if (role == Qt::EditRole) {
         if (index.column() == 2) {
-            n.elem->hue = value.toDouble();
-            QVector<int> roles;
-            roles.push_back(Qt::DisplayRole);
-            emit dataChanged(index, index, roles);
-            emit colorChange();
-            return true;
-        }
-        if (index.column() == 3) {
             n.elem->alpha = value.toDouble();
             QVector<int> roles;
             roles.push_back(Qt::DisplayRole);
@@ -262,21 +338,7 @@ void OverView::respToActive(const QModelIndex &index) {
         emit colorChange();
     }
 }
-void OverView::hueUpdate(QWidget *w) {
-    QDoubleSpinBox *e = static_cast<QDoubleSpinBox *>(w);
-    if (!e) {
-        return;
-    }
-    int idx = e->toolTipDuration();
-    int row = e->maximumHeight() - 1000;
-    link[idx].elem->hue = e->value();
-    QModelIndex index =
-        createIndex(row, 2, reinterpret_cast<void *>(long(idx)));
-    QVector<int> roles;
-    roles.push_back(Qt::EditRole);
-    emit dataChanged(index, index, roles);
-    emit colorChange();
-}
+
 void OverView::alphaUpdate(QWidget *w) {
     QDoubleSpinBox *e = static_cast<QDoubleSpinBox *>(w);
     if (!e) {
@@ -316,7 +378,7 @@ void OverView::recalculate() {
         QVector<int> chain;
         if (!link.size()) {
             n.parent = 0; // parent is self :-)
-            n.elem = &currView.root;
+            n.elem = &currView.elements;
             chain.push_back(0);
         } else {
             chain.push_back(0);
@@ -354,7 +416,7 @@ void OverView::recalculate() {
             continue;
         }
 
-        // Determine lexical order for kids // todo: get working...
+        // Determine lexical order for kids
         QStringList names;
         for (size_t j = 0; j < nkids; j++) {
             names << QString(n.elem->children[j].name.c_str());

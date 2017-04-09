@@ -14,6 +14,8 @@ public:
     virtual void resizeEvent(QResizeEvent *evt);
     virtual void paintEvent(QPaintEvent *evt);
 public slots:
+    void setFullDetail(bool);
+
     void completed();
     void aborted();
 
@@ -25,6 +27,7 @@ private:
     const TrackData &trackdata;
     enum { NONE, ACTIVE, ACTIVE_AND_QUEUED } state;
     int last_level_of_detail;
+    bool to_full_detail;
 
     QVector<QThread *> t;
     QVector<RenderWorker *> w;

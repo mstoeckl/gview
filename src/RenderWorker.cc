@@ -12,18 +12,18 @@
 #include <QImage>
 #include <QPointF>
 
-static long recursivelySumNCalls(const Element &r) {
-    long s = r.ngeocalls;
+static long recursivelySumNCalls(const Element &r, const ElemMutables e[]) {
+    long s = e[r.ecode].ngeocalls;
     for (size_t k = 0; k < r.children.size(); k++) {
-        s += recursivelySumNCalls(r.children[k]);
+        s += recursivelySumNCalls(r.children[k], e);
     }
     return s;
 }
 
-static void recursivelyPrintNCalls(const Element &r, int depth = 0,
-                                   long net = 0) {
+static void recursivelyPrintNCalls(const Element &r, const ElemMutables e[],
+                                   int depth = 0, long net = 0) {
     if (net == 0) {
-        net = recursivelySumNCalls(r);
+        net = recursivelySumNCalls(r, e);
     }
     char ws[256];
     int i = 0;
@@ -31,10 +31,10 @@ static void recursivelyPrintNCalls(const Element &r, int depth = 0,
         ws[i] = ' ';
     }
     ws[i] = '\0';
-    qDebug("%s%s %.5f %ld", ws, r.name.data(), r.ngeocalls / double(net),
-           r.ngeocalls);
+    qDebug("%s%s %.5f %ld", ws, r.name.data(),
+           e[r.ecode].ngeocalls / double(net), e[r.ecode].ngeocalls);
     for (size_t k = 0; k < r.children.size(); k++) {
-        recursivelyPrintNCalls(r.children[k], depth + 1, net);
+        recursivelyPrintNCalls(r.children[k], e, depth + 1, net);
     }
 }
 
@@ -53,7 +53,8 @@ static G4ThreeVector condirot(const Element &e, const G4ThreeVector &vec) {
 }
 
 int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
-             Intersection ints[], int maxhits, int iteration) {
+             Intersection ints[], int maxhits, int iteration,
+             ElemMutables mutables[]) {
     // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
     // Return number of hits recorded.
     G4ThreeVector forward = d.orientation.rowX();
@@ -101,11 +102,11 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
     }
 
     G4ThreeVector start = init + forward * sdist;
-    ++d.root.ngeocalls;
+    ++mutables[d.elements.ecode].ngeocalls;
     // Ensure ray starts in the root.
     bool clippable = false;
-    if (!d.root.solid->Inside(start)) {
-        G4double jdist = d.root.solid->DistanceToIn(start, forward);
+    if (!d.elements.solid->Inside(start)) {
+        G4double jdist = d.elements.solid->DistanceToIn(start, forward);
         if (jdist >= kInfinity) {
             // Root solid not reachable
             return 0;
@@ -125,7 +126,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
     // Assume we are already in the root element.
     // We statically allocate, because many new/frees are too expensive
     const Element *stack[maxdepth];
-    stack[0] = &d.root;
+    stack[0] = &d.elements;
     size_t n = 1;
     G4ThreeVector local = start;
     for (int iter = 0; iter < 1000; iter++) {
@@ -139,7 +140,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             // rotate/offset start point...
             const Element &elem =
                 last.children[(walk + rotfact) % last.children.size()];
-            ++elem.ngeocalls;
+            ++mutables[elem.ecode].ngeocalls;
             if (elem.solid->Inside(condrot(elem, (local + elem.offset)))) {
                 stack[n] = &elem;
                 ++n;
@@ -169,9 +170,9 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         ints[0].normal = entrynormal;
     } else {
         // Starting point
-        ++d.root.ngeocalls;
-        G4ThreeVector lnormal = d.root.solid->SurfaceNormal(local);
-        hits[0] = &d.root;
+        ++mutables[d.elements.ecode].ngeocalls;
+        G4ThreeVector lnormal = d.elements.solid->SurfaceNormal(local);
+        hits[0] = &d.elements;
         ints[0].dist = sdist;
         ints[0].normal = lnormal;
         // Intersection on entry
@@ -181,15 +182,16 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         const Element &curr = *stack[n - 1];
         const G4ThreeVector &pos = positions[n - 1];
 
-        ++curr.ngeocalls;
-        if (curr.niter != iteration || curr.abs_dist <= sdist /* epsilon ? */) {
+        ElemMutables &cmu = mutables[curr.ecode];
+        ++cmu.ngeocalls;
+        if (cmu.niter != iteration || cmu.abs_dist <= sdist /* epsilon ? */) {
 
-            curr.abs_dist = sdist +
-                            curr.solid->DistanceToOut(condrot(curr, pos),
-                                                      condrot(curr, forward));
-            curr.niter = iteration;
+            cmu.abs_dist = sdist +
+                           curr.solid->DistanceToOut(condrot(curr, pos),
+                                                     condrot(curr, forward));
+            cmu.niter = iteration;
         }
-        G4double exitdist = curr.abs_dist - sdist;
+        G4double exitdist = cmu.abs_dist - sdist;
 
         G4double closestDist = 2 * kInfinity;
         const Element *closest = NULL;
@@ -199,14 +201,15 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
                 curr.children[(walk + rotfact) % curr.children.size()];
             G4ThreeVector sub = pos + elem.offset;
 
-            ++elem.ngeocalls;
-            if (elem.niter != iteration || elem.abs_dist <= sdist) {
-                elem.abs_dist = sdist +
-                                elem.solid->DistanceToIn(
-                                    condrot(elem, sub), condrot(elem, forward));
-                elem.niter = iteration;
+            ElemMutables &emu = mutables[elem.ecode];
+            ++emu.ngeocalls;
+            if (emu.niter != iteration || emu.abs_dist <= sdist) {
+                emu.abs_dist = sdist +
+                               elem.solid->DistanceToIn(condrot(elem, sub),
+                                                        condrot(elem, forward));
+                emu.niter = iteration;
             }
-            G4double altdist = elem.abs_dist - sdist;
+            G4double altdist = emu.abs_dist - sdist;
             if (altdist >= kInfinity) {
                 // No intersection
                 continue;
@@ -234,7 +237,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             --n;
 
             // Record hit with normal
-            ++curr.ngeocalls;
+            ++cmu.ngeocalls;
             G4ThreeVector lnormal =
                 curr.solid->SurfaceNormal(condrot(curr, lpos));
             ints[nhits].dist = sdist;
@@ -255,7 +258,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             n++;
 
             // Record hit with normal
-            ++closest->ngeocalls;
+            ++mutables[closest->ecode].ngeocalls;
             G4ThreeVector lnormal = closest->solid->SurfaceNormal(
                 condrot(*closest, positions[n - 1]));
             ints[nhits].dist = sdist;
@@ -295,7 +298,7 @@ int compressTraces(const Element *hits[], Intersection ints[], int m) {
     // 001122334  =>  0022334
     // |x|x|y|x|  =>  |x|y|x|
     for (int i = 0; i < n; i++) {
-        if (i == 0 || hits[i]->mat != hits[i - 1]->mat ||
+        if (i == 0 || hits[i]->matcode != hits[i - 1]->matcode ||
             hits[i]->visible != hits[i - 1]->visible) {
             hits[p] = hits[i];
             ints[p] = ints[i];
@@ -324,14 +327,18 @@ static QRgb colorMap(const G4ThreeVector &normal, const G4ThreeVector &forward,
     return QColor::fromHsvF(hue, 1.0, 1.0 - cx).rgb();
 }
 
-static int prepareTree(const Element &e) {
-    int d = 0;
-    e.niter = 0;
-    e.abs_dist = 0.0;
+void countTree(const Element &e, int &treedepth, int &nelements) {
+    // Count nelements & depth
+    int t = 0;
+    int n = 0;
     for (const Element &s : e.children) {
-        d = std::max(prepareTree(s), d);
+        int at, an;
+        countTree(s, at, an);
+        t = std::max(at, t);
+        n += an;
     }
-    return d + 1;
+    treedepth = t + 1;
+    nelements = n + 1;
 }
 
 static void sliceBounds(int slice, int nslices, int w, int h, int &xl, int &xh,
@@ -593,10 +600,12 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
 
 bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
                           int slice, int nslices) {
-    if (!d.root.solid) {
+    if (!d.elements.solid) {
         return false;
     }
-    int treedepth = prepareTree(d.root);
+    int treedepth;
+    int nelements;
+    countTree(d.elements, treedepth, nelements);
     // ^ TODO: allocate traceray buffers to match!
     if (treedepth > 10) {
         qFatal("Excessive tree depth, fatal!");
@@ -620,14 +629,17 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
     Intersection ints[M + 1];
     const Element *althits[M];
     Intersection altints[M + 1];
-    int iter = 0;
     G4double *trackdists = new G4double[(xh - xl) * (yh - yl)];
     QRgb *trackcolors = new QRgb[(xh - xl) * (yh - yl)];
+    // Zero construct by default
+    ElemMutables *mutables = new ElemMutables[nelements]();
+    int iter = 1;
     bool s = renderTracks(d, t, trackdists, trackcolors, slice, nslices, w, h);
     if (!s) {
         // aborted
         delete[] trackdists;
         delete[] trackcolors;
+        delete[] mutables;
         return false;
     }
 
@@ -639,11 +651,12 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
                 emit aborted();
                 delete[] trackdists;
                 delete[] trackcolors;
+                delete[] mutables;
                 return false;
             }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
-            int m = traceRay(pt, d, hits, ints, M, iter);
+            int m = traceRay(pt, d, hits, ints, M, iter, mutables);
             iter++;
             m = compressTraces(hits, ints, m);
 
@@ -660,7 +673,8 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
 
                     QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
                                 radius * std::sin(seed + k * CLHEP::pi / 5));
-                    am = traceRay(pt + off, d, althits, altints, M, iter);
+                    am = traceRay(pt + off, d, althits, altints, M, iter,
+                                  mutables);
                     iter++;
                     am = compressTraces(althits, altints, am);
                     // At which intersection have we disagreements?
@@ -670,7 +684,8 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
                             1.0 * radius * d.scale /
                             std::abs(-altints[l].normal * d.orientation.rowX());
                         bool diffmatbehind =
-                            ((l < cm) && althits[l]->mat != hits[l]->mat);
+                            ((l < cm) &&
+                             althits[l]->matcode != hits[l]->matcode);
                         bool edgediff =
                             (std::abs(altints[l].normal * ints[l].normal) <
                                  0.3 || // Q: abs?
@@ -725,8 +740,10 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
             // (p<0 indicates the line dominates)
             for (int k = p; k >= 0; --k) {
                 // We use the intersection before the volume
+                const MaterialInfo &matinfo =
+                    d.matinfo[size_t(hits[k]->matcode)];
                 QRgb altcol = colorMap(ints[k].normal, d.orientation.rowX(),
-                                       hits[k]->hue, ints[k].dist);
+                                       matinfo.hue, ints[k].dist);
                 double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
                 if (!hits[k]->visible) {
                     continue;
@@ -741,7 +758,7 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
     }
 #if 1
     if (d.level_of_detail <= -1) {
-        recursivelyPrintNCalls(d.root);
+        recursivelyPrintNCalls(d.elements, mutables);
     }
 #endif
 #if 0
@@ -750,6 +767,7 @@ bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
     emit completed();
     delete[] trackdists;
     delete[] trackcolors;
+    delete[] mutables;
     return true;
 }
 

@@ -2,6 +2,7 @@
 
 #include "CustomWidgets.hh"
 #include "Overview.hh"
+#include "RenderWidget.hh"
 
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
@@ -12,6 +13,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QCheckBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
@@ -20,28 +22,24 @@
 #include <QListWidget>
 #include <QListWidget>
 #include <QMenuBar>
+#include <QPair>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalMapper>
+#include <QTableView>
 #include <QTableWidget>
 #include <QTreeView>
 #include <QVBoxLayout>
 
-ViewData initVD(const Element &root) {
-    ViewData d;
-    d.root = root;
-    d.scene_radius = d.root.solid->GetExtent().GetExtentRadius();
-    d.scale = 2 * d.scene_radius;
-    d.camera = G4ThreeVector(-4 * d.scene_radius, 0, 0);
-    d.orientation = G4RotationMatrix();
-    d.level_of_detail = 0; // 0 is full; 1 is 1/9, 2 is 1/81; depends on timing
-    d.clipping_planes = std::vector<Plane>();
-    return d;
-}
-
 static const G4RotationMatrix identityRotation = G4RotationMatrix();
-Element convertCreation(G4VPhysicalVolume *phys,
-                        G4RotationMatrix rot = identityRotation) {
+Element convertCreation(const G4VPhysicalVolume *phys,
+                        std::map<const G4Material *, int> &idxs,
+                        G4RotationMatrix rot = identityRotation,
+                        int *counter = NULL) {
+    int cc = 0;
+    if (!counter) {
+        counter = &cc;
+    }
     Element m;
     m.name = phys->GetName();
 
@@ -57,17 +55,19 @@ Element convertCreation(G4VPhysicalVolume *phys,
     m.offset = offset;
     m.rot = rot;
 
-    m.mat = phys->GetLogicalVolume()->GetMaterial();
-    m.solid = phys->GetLogicalVolume()->GetSolid();
-    m.visible = m.mat->GetDensity() > 0.1 * CLHEP::g / CLHEP::cm3;
-    m.hue = reinterpret_cast<long>(m.mat) % 16384 / 16384.0;
+    const G4LogicalVolume *log = phys->GetLogicalVolume();
+    const G4Material *mat = log->GetMaterial();
+    m.matcode = idxs[mat];
+    m.solid = log->GetSolid();
+    m.visible = mat->GetDensity() > 0.1 * CLHEP::g / CLHEP::cm3;
     m.alpha = 0.8;
-    m.ngeocalls = 0;
+    m.ecode = *counter;
+    (*counter)++;
 
     m.children = std::vector<Element>();
-    for (int i = 0; i < phys->GetLogicalVolume()->GetNoDaughters(); i++) {
+    for (int i = 0; i < log->GetNoDaughters(); i++) {
         m.children.push_back(
-            convertCreation(phys->GetLogicalVolume()->GetDaughter(i), m.rot));
+            convertCreation(log->GetDaughter(i), idxs, m.rot, counter));
     }
     return m;
 }
@@ -84,16 +84,50 @@ static int exp10(int exp) {
     return r;
 }
 
+static void includeMaterials(const G4LogicalVolume *p,
+                             QSet<const G4Material *> &mtls) {
+    const G4Material *mtl = p->GetMaterial();
+    mtls.insert(mtl);
+    for (int i = 0; i < p->GetNoDaughters(); i++) {
+        includeMaterials(p->GetDaughter(i)->GetLogicalVolume(), mtls);
+    }
+}
+
 Viewer::Viewer(const std::vector<GeoOption> &options,
                const std::vector<TrackData> &trackopts)
     : QMainWindow() {
     which_geo = 0;
     geo_options = options;
     track_options = trackopts;
-    if (!geo_options[which_geo].cache) {
-        geo_options[which_geo].cache = geo_options[which_geo].cons->Construct();
+    // Construct list of valid materials & lookups
+    QSet<const G4Material *> materials;
+    for (const GeoOption &g : geo_options) {
+        includeMaterials(g.vol->GetLogicalVolume(), materials);
     }
-    vd = initVD(convertCreation(geo_options[which_geo].cache));
+    QList<QPair<QString, const G4Material *>> mlist;
+    for (const G4Material *g : materials) {
+        mlist.append(QPair<QString, const G4Material *>(
+            QString(g->GetName().data()), g));
+    }
+    qStableSort(mlist);
+    int k = 0;
+    vd.matinfo = std::vector<MaterialInfo>();
+    for (const QPair<QString, const G4Material *> &p : mlist) {
+        MaterialInfo mi;
+        mi.mtl = p.second;
+        mi.hue = qrand() / float(RAND_MAX - 1);
+        vd.matinfo.push_back(mi);
+        vd.matcode_map[p.second] = k;
+        k++;
+    }
+    vd.elements = convertCreation(geo_options[which_geo].vol, vd.matcode_map);
+    vd.scene_radius = vd.elements.solid->GetExtent().GetExtentRadius();
+    vd.scale = 2 * vd.scene_radius;
+    vd.camera = G4ThreeVector(-4 * vd.scene_radius, 0, 0);
+    vd.orientation = G4RotationMatrix();
+    vd.level_of_detail = 0; // 0 is full; 1 is 1/9, 2 is 1/81; depends on timing
+    vd.split_by_material = true;
+    vd.clipping_planes = std::vector<Plane>();
     which_tracks = track_options.size() > 0 ? 1 : 0;
 
     TrackData td =
@@ -175,6 +209,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     rayAction->setToolTip("List currently-hovered-over visible objects");
     connect(rayAction, SIGNAL(triggered()), this, SLOT(restRay()));
 
+    QAction *mtlAction = new QAction("Material");
+    mtlAction->setToolTip("Control material view properties");
+    connect(mtlAction, SIGNAL(triggered()), this, SLOT(restMtl()));
+
     QAction *screenAction = new QAction("Screenshot");
     screenAction->setToolTip("Take a screenshot of active scene");
     connect(screenAction, SIGNAL(triggered()), this, SLOT(screenshot()));
@@ -190,13 +228,17 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     clicked = false;
     shift = false;
 
+    // TODO: icons for all actions, esp. screenshot actions
+    // & so on. Bundle?
     this->menuBar()->addMenu(picker);
     this->menuBar()->addMenu(tpicker);
+    // TODO: checkbox by visibility
     QMenu *sub = this->menuBar()->addMenu("View");
     sub->addAction(clipAction);
     sub->addAction(treeAction);
     sub->addAction(infoAction);
     sub->addAction(rayAction);
+    sub->addAction(mtlAction);
     this->menuBar()->addSeparator();
     this->menuBar()->addAction(screenAction);
     this->menuBar()->addAction(screen4Action);
@@ -307,10 +349,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     tree_view->setIndentation(20);
     tree_view->collapseAll();
     tree_view->header()->resizeSections(QHeaderView::ResizeToContents);
-    tree_view->header()->setStretchLastSection(false);
+    tree_view->header()->setStretchLastSection(true);
     tree_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
-    tree_view->setItemDelegateForColumn(2, new HueSpinBoxDelegate(tree_model));
-    tree_view->setItemDelegateForColumn(3, new AlphaBoxDelegate(tree_model));
+    tree_view->setItemDelegateForColumn(2, new AlphaBoxDelegate(tree_model));
     connect(tree_view, SIGNAL(activated(const QModelIndex &)), tree_model,
             SLOT(respToActive(const QModelIndex &)));
     connect(tree_model, SIGNAL(colorChange()), rwidget, SLOT(rerender()));
@@ -349,6 +390,32 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     ray_table = new QListWidget();
     dock_ray->setWidget(ray_table);
 
+    dock_mtl = new QDockWidget("Materials", this);
+    QWidget *mtlc = new QWidget();
+    QVBoxLayout *mla = new QVBoxLayout();
+    mtl_divchk = new QCheckBox("Split by material");
+    mtl_divchk->setCheckState(vd.split_by_material ? Qt::Checked
+                                                   : Qt::Unchecked);
+    connect(mtl_divchk, SIGNAL(stateChanged(int)), this,
+            SLOT(updateMaterials()));
+    mtl_showlines = new QCheckBox("Render lines");
+    mtl_showlines->setCheckState(Qt::Unchecked);
+    connect(mtl_showlines, SIGNAL(stateChanged(int)), this,
+            SLOT(updateShowLines()));
+    mtl_table = new QTableView();
+    mtl_table->setSelectionBehavior(QAbstractItemView::SelectItems);
+    mtl_table->setSelectionMode(QAbstractItemView::NoSelection);
+    MaterialModel *mmod = new MaterialModel(vd);
+    mtl_table->setModel(mmod);
+    mtl_table->horizontalHeader()->setStretchLastSection(true);
+    mtl_table->setItemDelegateForColumn(0, new HueSpinBoxDelegate(mmod));
+    connect(mmod, SIGNAL(colorChange()), this, SLOT(updateMaterials()));
+    mla->addWidget(mtl_divchk);
+    mla->addWidget(mtl_showlines);
+    mla->addWidget(mtl_table);
+    mtlc->setLayout(mla);
+    dock_mtl->setWidget(mtlc);
+
     QDockWidget::DockWidgetFeatures feat = QDockWidget::DockWidgetClosable |
                                            QDockWidget::DockWidgetMovable |
                                            QDockWidget::DockWidgetFloatable;
@@ -372,6 +439,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_ray->setFeatures(feat);
     dock_ray->setVisible(false);
 
+    addDockWidget(Qt::LeftDockWidgetArea, dock_mtl);
+    dock_mtl->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock_mtl->setFeatures(feat);
+    dock_mtl->setVisible(false);
+
     setMouseTracking(true);
 
     this->show();
@@ -383,6 +455,7 @@ void Viewer::restClip() { dock_clip->setVisible(true); }
 void Viewer::restTree() { dock_tree->setVisible(true); }
 void Viewer::restInfo() { dock_info->setVisible(true); }
 void Viewer::restRay() { dock_ray->setVisible(true); }
+void Viewer::restMtl() { dock_mtl->setVisible(true); }
 
 void Viewer::keyPressEvent(QKeyEvent *event) {
     G4double mvd = 0.1;
@@ -464,7 +537,12 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
     const int M = 50;
     Intersection ints[M + 1];
     const Element *elems[M];
-    int m = traceRay(pt, vd, elems, ints, M, rayiter);
+    int td, nelem;
+    countTree(vd.elements, td, nelem);
+    Q_UNUSED(td);
+    ElemMutables *mutables = new ElemMutables[nelem]();
+    int m = traceRay(pt, vd, elems, ints, M, 1, mutables);
+    delete[] mutables;
     rayiter++;
     m = compressTraces(elems, ints, m);
     ray_table->clear();
@@ -542,8 +620,15 @@ void Viewer::updatePlanes() {
         trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
                               res.energy, res.seqno);
     } else {
+        // Q: how to pull QSharedData on the Elements as well
         trackdata = TrackData();
     }
+    rwidget->rerender();
+}
+
+void Viewer::updateMaterials() {
+    vd.split_by_material = mtl_divchk->isChecked();
+    // Model autoupdates others
     rwidget->rerender();
 }
 
@@ -555,12 +640,10 @@ void Viewer::changeGeometry(QAction *act) {
             if (which_geo != i) {
                 // Change geometry
                 which_geo = i;
-                if (!geo_options[which_geo].cache) {
-                    geo_options[which_geo].cache =
-                        geo_options[which_geo].cons->Construct();
-                }
-                vd.root = convertCreation(geo_options[which_geo].cache);
-                vd.scene_radius = vd.root.solid->GetExtent().GetExtentRadius();
+                vd.elements =
+                    convertCreation(geo_options[which_geo].vol, vd.matcode_map);
+                vd.scene_radius =
+                    vd.elements.solid->GetExtent().GetExtentRadius();
                 if (4 * vd.scene_radius > vd.camera.mag()) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
@@ -640,8 +723,9 @@ void Viewer::indicateElement(Element *e) {
     } else {
         // fill info table
         info_table->item(0, 0)->setText(e->name.c_str());
-        info_table->item(1, 0)->setText(e->mat->GetName().c_str());
-        G4double dens = e->mat->GetDensity();
+        const G4Material *mat = vd.matinfo[e->matcode].mtl;
+        info_table->item(1, 0)->setText(mat->GetName().c_str());
+        G4double dens = mat->GetDensity();
         info_table->item(2, 0)->setText(
             QString::number(dens / (CLHEP::g / CLHEP::cm3), 'g', 4) + " g/cm3");
         G4double volume = e->solid->GetCubicVolume();
@@ -653,6 +737,10 @@ void Viewer::indicateElement(Element *e) {
         info_table->item(5, 0)->setText(
             QString::number(surf / CLHEP::cm2, 'g', 4) + " cm2");
     }
+}
+
+void Viewer::updateShowLines() {
+    rwidget->setFullDetail(mtl_showlines->isChecked());
 }
 
 void Viewer::screenshot(int sx) {
