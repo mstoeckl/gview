@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QProcess>
 
 #include "Viewer.hh"
 #include <G4GDMLParser.hh>
@@ -24,7 +25,7 @@ int main(int argc, char **argv) {
         G4String fn(argv[j]);
         if (fn.size() >= 3 &&
             strcmp(fn.substr(fn.size() - 3, 3).data(), ".gz") == 0) {
-            // Undo gzip!
+            system("rm -f /tmp/copy.dat.gz");
             G4String ar = "cp " + fn + " /tmp/copy.dat.gz";
             system(ar.data());
             G4String gu = "gzip -df /tmp/copy.dat.gz";

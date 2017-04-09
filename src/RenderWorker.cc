@@ -565,6 +565,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                 double off = eoff * (1 - b) + soff * b;
                 int ur = int(std::ceil(rad));
                 int cy = int(std::round(y));
+                // NOTE: r2 _could_ vary like (1+log(E)/log(Erange))/2, perhaps
                 for (int ddy = std::max(yl, cy - ur);
                      ddy <= std::min(yh - 1, cy + ur); ddy++) {
                     float lr = std::sqrt(r2 - float((ddy - y) * (ddy - y)));
@@ -590,8 +591,8 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     return true;
 }
 
-bool RenderWorker::render(ViewData d, TrackData t, QImage *next, int slice,
-                          int nslices) {
+bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
+                          int slice, int nslices) {
     if (!d.root.solid) {
         return false;
     }

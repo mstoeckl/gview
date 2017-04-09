@@ -30,8 +30,8 @@ private:
     QVector<RenderWorker *> w;
     int response_count;
 
-    QImage back;
-    QImage next;
+    QSharedPointer<QImage> back;
+    QSharedPointer<QImage> next;
     enum { aReqd, aCompl, aThere } arrived;
     QTime request_time;
 };
@@ -39,7 +39,7 @@ private:
 class RenderSaveObject : public QObject {
     Q_OBJECT
 public:
-    RenderSaveObject(const ViewData &v, const TrackData &t, int w, int h);
+    RenderSaveObject(ViewData &v, const TrackData &t, int w, int h);
     virtual ~RenderSaveObject();
     void start();
 public slots:
@@ -48,9 +48,9 @@ public slots:
     void completed();
 
 private:
-    const ViewData &viewdata;
+    ViewData &viewdata;
     const TrackData &trackdata;
-    QImage target;
+    QSharedPointer<QImage> target;
     QThread *thread;
     RenderWorker *worker;
     QProgressDialog *progress;

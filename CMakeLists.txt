@@ -14,6 +14,10 @@ add_compile_options(-march=native -Ofast)
 #add_compile_options(-O0)
 add_compile_options(-ggdb3)
 
+#set( CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fsanitize=address" )
+#set( CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address" )
+
+
 find_package(Qt5Core REQUIRED)
 find_package(Qt5Widgets REQUIRED)
 find_package(Qt5Gui REQUIRED)
@@ -42,3 +46,4 @@ foreach(mainf ${mainfiles})
     target_link_libraries(${main} ${Geant4_LIBRARIES})
     install(TARGETS ${main} DESTINATION bin)
 endforeach()
+

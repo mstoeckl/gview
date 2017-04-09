@@ -11,8 +11,8 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     : QWidget(), currView(v), trackdata(tdr) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
-    back = QImage(50, 50, QImage::Format_RGB32);
-    back.fill(QColor::fromHslF(0.3, 0.5, 0.7));
+    back = QSharedPointer<QImage>(new QImage(50, 50, QImage::Format_RGB32));
+    back->fill(QColor::fromHslF(0.3, 0.5, 0.7));
 
     t = QVector<QThread *>();
     w = QVector<RenderWorker *>();
@@ -20,6 +20,7 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     qRegisterMetaType<TrackData *>("TrackData*");
     qRegisterMetaType<TrackData>("TrackData");
     qRegisterMetaType<QImage *>("QImage*");
+    qRegisterMetaType<QSharedPointer<QImage>>("QSharedPointer<QImage>");
     int itc = QThread::idealThreadCount();
     itc = itc < 0 ? 2 : itc;
 #if 0
@@ -83,13 +84,13 @@ void RenderWidget::rerender_priv() {
         arrived = aReqd;
     }
     // Q: SharedData on image so delete'ing Renderwidget doesn't crash Worker?
-    next =
-        QImage(this->width() / scl, this->height() / scl, QImage::Format_RGB32);
+    next = QSharedPointer<QImage>(new QImage(
+        this->width() / scl, this->height() / scl, QImage::Format_RGB32));
     for (int i = 0; i < w.size(); i++) {
         QMetaObject::invokeMethod(
             w[i], "render", Qt::QueuedConnection, Q_ARG(ViewData, currView),
-            Q_ARG(TrackData, trackdata), Q_ARG(QImage *, &next), Q_ARG(int, i),
-            Q_ARG(int, w.size()));
+            Q_ARG(TrackData, trackdata), Q_ARG(QSharedPointer<QImage>, next),
+            Q_ARG(int, i), Q_ARG(int, w.size()));
     }
     response_count = 0;
 
@@ -116,7 +117,7 @@ void RenderWidget::completed() {
         state = NONE;
         rerender_priv();
     }
-    if (arrived == aReqd && back.size() == this->size()) {
+    if (arrived == aReqd && back->size() == this->size()) {
         arrived = aCompl;
     }
     this->repaint();
@@ -139,14 +140,14 @@ void RenderWidget::resizeEvent(QResizeEvent *) {
 
 void RenderWidget::paintEvent(QPaintEvent *) {
     QPainter q(this);
-    QRect sz = back.rect();
+    QRect sz = back->rect();
     QImage mvd;
     if (sz.height() == this->height() && sz.width() == this->width()) {
-        mvd = back;
+        mvd = *back;
     } else if (this->width() * sz.height() >= this->height() * sz.width()) {
-        mvd = back.scaledToHeight(this->height(), Qt::FastTransformation);
+        mvd = back->scaledToHeight(this->height(), Qt::FastTransformation);
     } else {
-        mvd = back.scaledToWidth(this->width(), Qt::FastTransformation);
+        mvd = back->scaledToWidth(this->width(), Qt::FastTransformation);
     }
     q.drawImage(
         this->rect().center() - QPoint(mvd.width() / 2, mvd.height() / 2), mvd);
@@ -159,10 +160,10 @@ void RenderWidget::paintEvent(QPaintEvent *) {
     }
 }
 
-RenderSaveObject::RenderSaveObject(const ViewData &v, const TrackData &t, int w,
+RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
                                    int h)
     : viewdata(v), trackdata(t) {
-    target = QImage(w, h, QImage::Format_RGB32);
+    target = QSharedPointer<QImage>(new QImage(w, h, QImage::Format_RGB32));
     thread = new QThread();
     worker = new RenderWorker();
     progress = new QProgressDialog("Rendering image", "Cancel render", 0, h);
@@ -183,10 +184,15 @@ RenderSaveObject::~RenderSaveObject() {
 
 void RenderSaveObject::start() {
     thread->start();
+    // Change happens in main thread, so nothing bad inbetween
+    int lod = viewdata.level_of_detail;
+    viewdata.level_of_detail = -1;
+    // Q: are copy costs too high? make LOD render side effect?
     QMetaObject::invokeMethod(
         worker, "render", Qt::QueuedConnection, Q_ARG(ViewData, viewdata),
-        Q_ARG(TrackData, trackdata), Q_ARG(QImage *, &target), Q_ARG(int, 0),
-        Q_ARG(int, 1));
+        Q_ARG(TrackData, trackdata), Q_ARG(QSharedPointer<QImage>, target),
+        Q_ARG(int, 0), Q_ARG(int, 1));
+    viewdata.level_of_detail = lod;
 }
 
 void RenderSaveObject::abort() {
@@ -194,9 +200,7 @@ void RenderSaveObject::abort() {
     progress->setVisible(false);
 }
 
-void RenderSaveObject::aborted() {
-    this->deleteLater();
-}
+void RenderSaveObject::aborted() { this->deleteLater(); }
 
 void RenderSaveObject::completed() {
     progress->setVisible(false);
@@ -206,7 +210,7 @@ void RenderSaveObject::completed() {
         // Chose a file
         QImageWriter r(n);
         r.setDescription("Screenshot of GEANT4 scene");
-        r.write(target);
+        r.write(*target);
     }
     this->deleteLater();
 }

@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QRgb>
 #include <QSharedData>
+#include <QSharedPointer>
 
 #include <vector>
 
@@ -120,7 +121,8 @@ public:
     ~RenderWorker();
     bool abort_task;
 public slots:
-    bool render(ViewData p, TrackData t, QImage *i, int slice, int nslices);
+    bool render(ViewData p, TrackData t, QSharedPointer<QImage> i, int slice,
+                int nslices);
     void coAbort();
     void flushAbort();
     void selfDestruct();
