@@ -68,7 +68,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
     // so as to make overlapping children obvious
     const size_t rotfact = size_t(random());
     // Minimum feature size, yet still above double discrimination threshold
-    const G4double epsilon = 1e-3 * CLHEP::nanometer;
+    //    const G4double epsilon = 1e-3 * CLHEP::nanometer;
 
     G4double sdist = 0.0;
     G4double edist = kInfinity;
@@ -107,8 +107,8 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
     bool clippable = false;
     if (!d.elements.solid->Inside(start)) {
         G4double jdist = d.elements.solid->DistanceToIn(start, forward);
-        if (jdist >= kInfinity) {
-            // Root solid not reachable
+        if (jdist + sdist >= edist) {
+            // Root solid not reachable with available distance
             return 0;
         }
         sdist += jdist;
@@ -377,23 +377,37 @@ static inline double iproject(const G4ThreeVector &point,
     return off;
 }
 
-static QRgb trackColor(const TrackHeader &h, const TrackPoint &pa,
-                       const TrackPoint &pb, double interp,
-                       const G4ThreeVector &a, const G4ThreeVector &b,
-                       const G4ThreeVector &forward) {
-    Q_UNUSED(h);
+static void trackColors(const TrackHeader &h, const TrackPoint &pa,
+                        const TrackPoint &pb, const G4ThreeVector &a,
+                        const G4ThreeVector &b, const G4ThreeVector &forward,
+                        QRgb &ca, QRgb &cb, float &wa, float &wb) {
     G4ThreeVector normal = b - a;
     double coa = (normal * forward) / normal.mag();
-    // Q fails in fwd dir?? # of tracks changes? raw data modified?
+
     //    double mtime = double(pa.time) * (1. - interp) * double(pb.time) *
-    //    interp;
-    double menergy =
-        double(pa.energy) * (1. - interp) * double(pb.energy) * interp;
     //    double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
-    //    double ptime = std::
-    double loge = std::log10(menergy) / 2.0;
-    double ptime = loge - std::floor(loge);
-    return QColor::fromHsvF(ptime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
+
+    double aloge = std::log10(double(pa.energy)) / 2.0;
+    double patime = aloge - std::floor(aloge);
+    ca = QColor::fromHsvF(patime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
+
+    double bloge = std::log10(double(pb.energy)) / 2.0;
+    double pbtime = bloge - std::floor(bloge);
+    cb = QColor::fromHsvF(pbtime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
+
+    if (h.ptype == 11) {
+        // e-
+        wa = 1.0f;
+        wb = 1.0f;
+    } else if (h.ptype == 22) {
+        // gamma
+        wa = 0.7f;
+        wb = 0.7f;
+    } else {
+        // others (optiphoton)
+        wa = 0.5f;
+        wb = 0.5f;
+    }
 }
 
 static bool trackTrace(const QPointF &scpt, const ViewData &d,
@@ -494,7 +508,6 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     int mind = w > h ? h : w;
     float rad = std::max(mind / 800.0f, 0.5f);
     // ^ ensure minimum 1 pixel brush width
-    float r2 = rad * rad;
 
     for (size_t i = 0; i < ntracks; i++) {
         if (this->abort_task) {
@@ -562,20 +575,33 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
             int near = std::max(std::min(uxl, uxh), std::min(uyl, uyh)) - 1;
             int far = std::min(std::max(uxl, uxh), std::max(uyl, uyh)) + 1;
 
+            if (std::max(near, 0) > std::min(far, n)) {
+                continue;
+            }
+
+            float w1, w2;
+            QRgb c1, c2;
+            trackColors(header, ep, sp, epos, spos, d.orientation.rowX(), c1,
+                        c2, w1, w2);
+
             for (int s = std::max(near, 0); s < std::min(far, n); s++) {
                 float x = ix + s * dx;
                 float y = iy + s * dy;
-                double b = n >= 2 ? s / double(n - 1) : 0.5;
-                // Technically, this is a fast circle rendering technique!
-                QRgb col = qRgb(0, 0, 0);
-                bool hascol = false;
-                double off = eoff * (1 - b) + soff * b;
-                int ur = int(std::ceil(rad));
+
+                float b = n >= 2 ? s / float(n - 1) : 0.5f;
+                float bc = 1.f - b;
+                double off = eoff * double(bc) + soff * double(b);
+                float rws = w1 * (1.0f - b) + w2 * b;
+                QRgb col = qRgb(int(bc * qRed(c1) + b * qRed(c2)),
+                                int(bc * qGreen(c1) + b * qGreen(c2)),
+                                int(bc * qBlue(c1) + b * qBlue(c2)));
+
+                int ur = int(std::ceil(rad * w));
                 int cy = int(std::round(y));
-                // NOTE: r2 _could_ vary like (1+log(E)/log(Erange))/2, perhaps
                 for (int ddy = std::max(yl, cy - ur);
                      ddy <= std::min(yh - 1, cy + ur); ddy++) {
-                    float lr = std::sqrt(r2 - float((ddy - y) * (ddy - y)));
+                    float lr = std::sqrt(rad * rad * rws * rws -
+                                         float((ddy - y) * (ddy - y)));
                     int lx = int(std::round(x - lr));
                     int hx = int(std::round(x + lr));
                     for (int ddx = std::max(xl, lx);
@@ -583,11 +609,6 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                         int sidx = (ddy - yl) * (xh - xl) + (ddx - xl);
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
-                            if (!hascol) {
-                                col = trackColor(header, ep, sp, b, epos, spos,
-                                                 d.orientation.rowX());
-                                hascol = true;
-                            }
                             colors[sidx] = col;
                         }
                     }
@@ -890,13 +911,6 @@ static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
 
 TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
                      Range erange, IRange selidxs) {
-    // TODO: first, clipping plane filtering. A line can be cut at most
-    // twice.
-    // by the convex hull.
-    // So, iterate over lines, trace entry and exit points.
-    // Create a std::vector<> of points, and one of headers.
-    // Finally, reconstruct the whole....
-
     size_t otracks = other.getNTracks();
     const TrackHeader *oheaders = other.getHeaders();
     const TrackPoint *opoints = other.getPoints();
@@ -934,14 +948,12 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
                 (tlow - seq[j].time) / (seq[j + 1].time - seq[j].time);
             float tcuthigh =
                 (thigh - seq[j].time) / (seq[j + 1].time - seq[j].time);
-            low = std::max(double(tcutlow), low);
-            high = std::min(double(tcuthigh), high);
             float ecutlow =
                 (elow - seq[j].energy) / (seq[j + 1].energy - seq[j].energy);
             float ecuthigh =
                 (ehigh - seq[j].energy) / (seq[j + 1].energy - seq[j].energy);
-            low = std::max(double(ecutlow), low);
-            high = std::min(double(ecuthigh), high);
+            low = std::max(double(std::max(tcutlow, ecutlow)), low);
+            high = std::min(double(std::min(tcuthigh, ecuthigh)), high);
 
             if (low <= 0. && high >= 1.) {
                 // Keep point
@@ -960,9 +972,10 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
                     TrackHeader h;
                     h.offset = cp.size();
                     h.ptype = oheaders[i].ptype;
-                    h.npts = 1;
+                    h.npts = 2;
                     ch.push_back(h);
                     cp.push_back(linmix(seq[j], seq[j + 1], low));
+                    cp.push_back(seq[j + 1]);
                 } else {
                     // Not there entirely
                 }
