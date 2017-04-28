@@ -4,6 +4,8 @@
 #include "Overview.hh"
 #include "RenderWidget.hh"
 
+#include <G4BooleanSolid.hh>
+#include <G4DisplacedSolid.hh>
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
 #include <G4VPhysicalVolume.hh>
@@ -19,7 +21,6 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QItemSelection>
-#include <QListWidget>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QPair>
@@ -44,11 +45,11 @@ Element convertCreation(const G4VPhysicalVolume *phys,
     m.name = phys->GetName();
 
     G4ThreeVector offset = phys->GetFrameTranslation();
-    offset = rot * offset;
-    if (phys->GetFrameRotation()) {
-        const G4RotationMatrix &r = *phys->GetFrameRotation();
-        rot = r * rot;
-    }
+    offset = rot.inverse() * offset;
+    const G4RotationMatrix &r = (phys->GetFrameRotation() != NULL)
+                                    ? *phys->GetFrameRotation()
+                                    : identityRotation;
+    rot = r * rot;
 
     // Only identity has a trace of +3 => norm2 of 0
     m.rotated = rot.norm2() > 1e-10;
@@ -96,6 +97,8 @@ static void includeMaterials(const G4LogicalVolume *p,
 Viewer::Viewer(const std::vector<GeoOption> &options,
                const std::vector<TrackData> &trackopts)
     : QMainWindow() {
+    srand(1000 * QTime::currentTime().second() + QTime::currentTime().msec());
+
     which_geo = 0;
     geo_options = options;
     track_options = trackopts;
@@ -115,7 +118,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     for (const QPair<QString, const G4Material *> &p : mlist) {
         MaterialInfo mi;
         mi.mtl = p.second;
-        mi.hue = qrand() / float(RAND_MAX - 1);
+        mi.hue = rand() / float(RAND_MAX - 1);
         vd.matinfo.push_back(mi);
         vd.matcode_map[p.second] = k;
         k++;
@@ -369,13 +372,18 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_info = new QDockWidget("Element info", this);
     info_table = new QTableWidget();
     info_table->setColumnCount(1);
+    // TODO: tooltips, require a model & headerData()
     QStringList keys;
     keys << "Name"
          << "Material"
          << "Density"
          << "Volume"
          << "Mass"
-         << "Surface Area";
+         << "Surface Area"
+         << "Bool roots"
+         << "Bool depth"
+         << "Bool splits";
+    info_table->setEditTriggers(QTableWidget::NoEditTriggers);
     info_table->setRowCount(keys.size());
     info_table->setVerticalHeaderLabels(keys);
     QStringList kv = QStringList() << "Value";
@@ -715,6 +723,28 @@ void Viewer::changeTracks(QAction *act) {
     updatePlanes();
 }
 
+void calculateBooleanProperties(const G4VSolid *sol,
+                                QSet<const G4VSolid *> &roots, int &treedepth,
+                                int &nbooleans, int depth = 0) {
+    const G4BooleanSolid *b = dynamic_cast<const G4BooleanSolid *>(sol);
+    treedepth = std::max(treedepth, depth);
+    if (b) {
+        calculateBooleanProperties(b->GetConstituentSolid(0), roots, treedepth,
+                                   nbooleans, depth + 1);
+        calculateBooleanProperties(b->GetConstituentSolid(1), roots, treedepth,
+                                   nbooleans, depth + 1);
+        nbooleans++;
+        return;
+    }
+    const G4DisplacedSolid *d = dynamic_cast<const G4DisplacedSolid *>(sol);
+    if (d) {
+        calculateBooleanProperties(d->GetConstituentMovedSolid(), roots,
+                                   treedepth, nbooleans, depth + 1);
+        return;
+    }
+    roots.insert(sol);
+}
+
 void Viewer::indicateElement(Element *e) {
     if (!e) {
         for (int i = 0; i < info_table->rowCount(); i++) {
@@ -736,6 +766,14 @@ void Viewer::indicateElement(Element *e) {
         G4double surf = e->solid->GetSurfaceArea();
         info_table->item(5, 0)->setText(
             QString::number(surf / CLHEP::cm2, 'g', 4) + " cm2");
+
+        QSet<const G4VSolid *> roots;
+        int treedepth = 0;
+        int nbooleans = 0;
+        calculateBooleanProperties(e->solid, roots, treedepth, nbooleans);
+        info_table->item(6, 0)->setText(QString::number(roots.size()));
+        info_table->item(7, 0)->setText(QString::number(treedepth));
+        info_table->item(8, 0)->setText(QString::number(nbooleans));
     }
 }
 

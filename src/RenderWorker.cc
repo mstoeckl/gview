@@ -183,9 +183,8 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         const G4ThreeVector &pos = positions[n - 1];
 
         ElemMutables &cmu = mutables[curr.ecode];
-        ++cmu.ngeocalls;
         if (cmu.niter != iteration || cmu.abs_dist <= sdist /* epsilon ? */) {
-
+            ++cmu.ngeocalls;
             cmu.abs_dist = sdist +
                            curr.solid->DistanceToOut(condrot(curr, pos),
                                                      condrot(curr, forward));
@@ -202,11 +201,23 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             G4ThreeVector sub = pos + elem.offset;
 
             ElemMutables &emu = mutables[elem.ecode];
-            ++emu.ngeocalls;
             if (emu.niter != iteration || emu.abs_dist <= sdist) {
-                emu.abs_dist = sdist +
-                               elem.solid->DistanceToIn(condrot(elem, sub),
-                                                        condrot(elem, forward));
+                ++emu.ngeocalls;
+                // Inside case happens when shapes are way out of bounds.
+                // (Note: ought to make this optional, since I doubt
+                //  Geant's regular walking handles this.)
+                if (sdist > emu.abs_dist &&
+                    elem.solid->Inside(condrot(elem, sub))) {
+                    emu.abs_dist = sdist;
+                } else {
+                    if (sdist < emu.abs_dist) {
+                        ++emu.ngeocalls;
+                    }
+                    emu.abs_dist =
+                        sdist +
+                        elem.solid->DistanceToIn(condrot(elem, sub),
+                                                 condrot(elem, forward));
+                }
                 emu.niter = iteration;
             }
             G4double altdist = emu.abs_dist - sdist;
@@ -408,77 +419,6 @@ static void trackColors(const TrackHeader &h, const TrackPoint &pa,
         wa = 0.5f;
         wb = 0.5f;
     }
-}
-
-static bool trackTrace(const QPointF &scpt, const ViewData &d,
-                       const TrackData &t, G4double &hitdist, QRgb &color) {
-    // Ray tracing over all the lines. Can get nasty where
-    // we have the source point, but that only happens once.
-    // a median-based tree partitioner ought to resolve
-    // the source point issue, although one lucky seed
-    // cell gets 10K offsets given 200K lines...
-    // -> 10K iterations, although all of them are
-    // much cheaper...
-
-    // TO test _cylinder_ intersection & perp dist,
-    // (a -> b); rad; init; fwd
-
-    // dy = ((b - a) * init) / ((b - a)*fwd)
-    // if (dy notin [0,1]) skip
-    // p = init - (b-a)*dy
-    // closest point approach: min: ((a-p)+bt)^2, has t: (2*(a-p)/b^2) t = 0
-    // (then t: is dist; min radius is ((a-p)+bt)^2, and we filter
-    // have: p (along b-a),t (along fwd),r (along cross) (basically, a
-    // coordinate transform)
-    // and thus can decide yes/no.
-
-    // Proper order: Cross-test first, to filter by R. Then filter by P;
-    // Finally, calculate T.
-
-    G4ThreeVector forward = d.orientation.rowX();
-    G4ThreeVector updown = d.orientation.rowY();
-    G4ThreeVector lright = d.orientation.rowZ();
-    G4ThreeVector init =
-        d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
-
-    const LineCollection *lc = t.getTree();
-    const TrackHeader *headers = t.getHeaders();
-    const TrackPoint *points = t.getPoints();
-    SimplexIterator iter = lc->followRay(init, forward);
-    do {
-        const std::vector<std::pair<size_t, int>> &pairs =
-            iter.getContainedLines();
-        G4double nearest = kInfinity;
-        std::pair<size_t, int> best;
-        //        qDebug("pairs %lu",pairs.size());
-        for (const std::pair<size_t, int> &p : pairs) {
-            // Pt A, Pt b:
-            const TrackHeader &h = headers[p.first];
-            const TrackPoint &a = points[h.offset + size_t(p.first)];
-            const TrackPoint &b = points[h.offset + size_t(p.first) + 1];
-            G4ThreeVector pa(a.x, a.y, a.z);
-            G4ThreeVector pb(b.x, b.y, b.z);
-            G4ThreeVector dir = pb - pa;
-            G4ThreeVector perp = dir.cross(forward);
-            G4double rad = perp * (init - pa);
-            if (std::abs(rad) < 1.0 * CLHEP::cm) {
-                // TODO calculate distance to center plane!
-                nearest = 10.0 * CLHEP::m;
-                best = p;
-            }
-
-            // TODO: detect intersection, requires either 3 projections
-            // or the use of a basis
-        }
-        if (nearest < kInfinity) {
-            hitdist = nearest;
-            color = qRgb(200, 100, 150);
-            return true;
-        }
-    } while (iter.advance());
-
-    // No intersection
-    return false;
 }
 
 bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
