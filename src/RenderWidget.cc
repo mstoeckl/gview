@@ -5,51 +5,35 @@
 #include <QImageWriter>
 #include <QPainter>
 #include <QProgressDialog>
+#include <QRunnable>
 #include <QThread>
+#include <QThreadPool>
+
+static int threadCount() {
+    int itc = QThread::idealThreadCount();
+    itc = itc < 0 ? 2 : itc;
+#if 0
+     itc = 1; // Debug override
+#endif
+    return itc;
+}
 
 RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
-    : QWidget(), currView(v), trackdata(tdr) {
+    : QWidget(), currView(v), trackdata(tdr), graph(threadCount()) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
     back = QSharedPointer<QImage>(new QImage(50, 50, QImage::Format_RGB32));
     back->fill(QColor::fromHslF(0.3, 0.5, 0.7));
 
-    t = QVector<QThread *>();
-    w = QVector<RenderWorker *>();
-    qRegisterMetaType<ViewData>("ViewData");
-    qRegisterMetaType<TrackData *>("TrackData*");
-    qRegisterMetaType<TrackData>("TrackData");
-    qRegisterMetaType<QImage *>("QImage*");
-    qRegisterMetaType<QSharedPointer<QImage>>("QSharedPointer<QImage>");
-    int itc = QThread::idealThreadCount();
-    itc = itc < 0 ? 2 : itc;
-#if 0
-    itc = 1; // Debug override
-#endif
-    for (int i = 0; i < itc; i++) {
-        QThread *tt = new QThread();
-        RenderWorker *ww = new RenderWorker();
-        ww->moveToThread(tt);
-        connect(ww, SIGNAL(completed()), this, SLOT(completed()));
-        connect(ww, SIGNAL(aborted()), this, SLOT(aborted()));
-        tt->start();
-        t.append(tt);
-        w.append(ww);
-    }
     state = NONE;
     to_full_detail = false;
     last_level_of_detail = 10000;
+
+    connect(&graph, SIGNAL(done()), this, SLOT(completed()));
+    connect(&graph, SIGNAL(aborted()), this, SLOT(aborted()));
 }
 
-RenderWidget::~RenderWidget() {
-    for (RenderWorker *wor : w) {
-        QMetaObject::invokeMethod(wor, "selfDestruct", Qt::QueuedConnection);
-    }
-    for (QThread *thr : t) {
-        thr->exit(0);
-        thr->deleteLater();
-    }
-}
+RenderWidget::~RenderWidget() {}
 
 void RenderWidget::setFullDetail(bool b) {
     if (b == to_full_detail) {
@@ -68,18 +52,7 @@ void RenderWidget::rerender() {
 
 void RenderWidget::rerender_priv() {
     if (currView.level_of_detail > last_level_of_detail && state != NONE) {
-        // don't know which workers have already completed, so abort all,
-        // and queue an abort-clearer on all that ensures the next run
-        // isn't aborted
-        for (RenderWorker *ww : w) {
-            ww->abort_task = true;
-            QMetaObject::invokeMethod(ww, "flushAbort", Qt::QueuedConnection);
-        }
-// current response count indicates completed workers
-// the aborted ones should bring the total up
-#if 0
-        qDebug("abort: response count %d", response_count);
-#endif
+        graph.abort();
         state = ACTIVE_AND_QUEUED;
         last_level_of_detail = 10000;
         return;
@@ -94,16 +67,14 @@ void RenderWidget::rerender_priv() {
         request_time = QTime::currentTime();
         arrived = aReqd;
     }
-    // Q: SharedData on image so delete'ing Renderwidget doesn't crash Worker?
     next = QSharedPointer<QImage>(new QImage(
         this->width() / scl, this->height() / scl, QImage::Format_RGB32));
-    for (int i = 0; i < w.size(); i++) {
-        QMetaObject::invokeMethod(
-            w[i], "render", Qt::QueuedConnection, Q_ARG(ViewData, currView),
-            Q_ARG(TrackData, trackdata), Q_ARG(QSharedPointer<QImage>, next),
-            Q_ARG(int, i), Q_ARG(int, w.size()));
-    }
-    response_count = 0;
+
+    // TODO: temp
+    TrackData d = currView.tracks;
+    currView.tracks = trackdata;
+    graph.start(next, currView);
+    currView.tracks = d;
 
     last_level_of_detail = currView.level_of_detail;
     if (currView.level_of_detail <= (to_full_detail ? -1 : 0)) {
@@ -115,12 +86,6 @@ void RenderWidget::rerender_priv() {
 }
 
 void RenderWidget::completed() {
-    if (response_count < w.size()) {
-        response_count++;
-    }
-    if (response_count < w.size()) {
-        return;
-    }
     back = next;
     if (state == ACTIVE) {
         state = NONE;
@@ -134,12 +99,6 @@ void RenderWidget::completed() {
     this->repaint();
 }
 void RenderWidget::aborted() {
-    if (response_count < w.size()) {
-        response_count++;
-    }
-    if (response_count < w.size()) {
-        return;
-    }
     state = NONE;
     rerender_priv();
 }
@@ -173,41 +132,35 @@ void RenderWidget::paintEvent(QPaintEvent *) {
 
 RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
                                    int h)
-    : viewdata(v), trackdata(t) {
+    : viewdata(v), trackdata(t), graph(1) {
     target = QSharedPointer<QImage>(new QImage(w, h, QImage::Format_RGB32));
-    thread = new QThread();
-    worker = new RenderWorker();
     progress = new QProgressDialog("Rendering image", "Cancel render", 0, h);
     progress->setMinimumDuration(1000);
-    worker->moveToThread(thread);
-    connect(worker, SIGNAL(aborted()), this, SLOT(aborted()));
-    connect(worker, SIGNAL(completed()), this, SLOT(completed()));
-    connect(worker, SIGNAL(progressed(int)), progress, SLOT(setValue(int)));
+    progress->setRange(0, 100);
+    connect(&graph, SIGNAL(aborted()), this, SLOT(aborted()));
+    connect(&graph, SIGNAL(done()), this, SLOT(completed()));
+    connect(&graph, SIGNAL(progressed(int)), progress, SLOT(setValue(int)));
+
     connect(progress, SIGNAL(canceled()), this, SLOT(abort()));
 }
 
-RenderSaveObject::~RenderSaveObject() {
-    QMetaObject::invokeMethod(worker, "selfDestruct", Qt::QueuedConnection);
-    thread->exit(0);
-    thread->deleteLater();
-    progress->deleteLater();
-}
+RenderSaveObject::~RenderSaveObject() { progress->deleteLater(); }
 
 void RenderSaveObject::start() {
-    thread->start();
     // Change happens in main thread, so nothing bad inbetween
     int lod = viewdata.level_of_detail;
     viewdata.level_of_detail = -1;
     // Q: are copy costs too high? make LOD render side effect?
-    QMetaObject::invokeMethod(
-        worker, "render", Qt::QueuedConnection, Q_ARG(ViewData, viewdata),
-        Q_ARG(TrackData, trackdata), Q_ARG(QSharedPointer<QImage>, target),
-        Q_ARG(int, 0), Q_ARG(int, 1));
+    TrackData d = viewdata.tracks;
+    viewdata.tracks = trackdata;
+    graph.start(target, viewdata);
+    viewdata.tracks = d;
+
     viewdata.level_of_detail = lod;
 }
 
 void RenderSaveObject::abort() {
-    worker->abort_task = true;
+    graph.abort();
     progress->setVisible(false);
 }
 

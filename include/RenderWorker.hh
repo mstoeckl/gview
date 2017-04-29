@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RenderGraph.hh"
+
 #include <G4RotationMatrix.hh>
 #include <G4ThreeVector.hh>
 
@@ -139,26 +141,16 @@ typedef struct ViewData_s {
     int level_of_detail;
 } ViewData;
 
-class RenderWorker : public QObject {
-    Q_OBJECT
+class RenderRayTask : public RenderGraphTask {
 public:
-    RenderWorker();
-    ~RenderWorker();
-    bool abort_task;
-public slots:
-    bool render(ViewData p, TrackData t, QSharedPointer<QImage> i, int slice,
-                int nslices);
-    void coAbort();
-    void flushAbort();
-    void selfDestruct();
-signals:
-    void progressed(int);
-    void completed();
-    void aborted();
+    RenderRayTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
+    virtual void run();
+};
 
-private:
-    bool renderTracks(const ViewData &d, const TrackData &t, G4double *dists,
-                      QRgb *colors, int slice, int nslices, int w, int h);
+class RenderTrackTask : public RenderGraphTask {
+public:
+    RenderTrackTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
+    virtual void run();
 };
 
 void countTree(const Element &e, int &treedepth, int &nelements);

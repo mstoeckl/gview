@@ -352,26 +352,6 @@ void countTree(const Element &e, int &treedepth, int &nelements) {
     nelements = n + 1;
 }
 
-static void sliceBounds(int slice, int nslices, int w, int h, int &xl, int &xh,
-                        int &yl, int &yh) {
-    // NOTE: tile system; step 1: prevent partial images at
-    // all costs! step 2: use different tile systems for different
-    // render layers. Requires a request graph/node system with
-    // one entry point; is 1+N control threads :-(
-    xl = 0;
-    xh = w;
-    yl = (slice * h / nslices);
-    yh = slice == nslices - 1 ? h : ((slice + 1) * h / nslices);
-}
-
-RenderWorker::RenderWorker() { abort_task = false; }
-
-RenderWorker::~RenderWorker() {}
-
-void RenderWorker::coAbort() { abort_task = true; }
-void RenderWorker::flushAbort() { abort_task = false; }
-void RenderWorker::selfDestruct() { this->deleteLater(); }
-
 static inline double iproject(const G4ThreeVector &point,
                               const G4ThreeVector &dcamera,
                               const G4double &dscale,
@@ -421,25 +401,190 @@ static void trackColors(const TrackHeader &h, const TrackPoint &pa,
     }
 }
 
-bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
-                                G4double *dists, QRgb *colors, int slice,
-                                int nslices, int w, int h) {
-    // Fixme: the lower edge sometimes displays blank
-    // Exact cause unknown
+RenderRayTask::RenderRayTask(QRect p, RenderGraph &h, QSharedPointer<Context> c,
+                             int i)
+    : RenderGraphTask(p, h, c, i) {}
 
-    // TODO: apply line collection and resolve tracks
-    // via raytracing...
+void RenderRayTask::run() {
+    const ViewData &d = *ctx->viewdata;
 
-    int xl, xh, yl, yh;
-    sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
-    for (int s = 0; s < (yh - yl) * (xh - xl); s++) {
-        dists[s] = kInfinity;
-        double r = 255. * s / ((yh - yl) * (xh - xl) - 1);
-        Q_UNUSED(r);
-        colors[s] = qRgb(255, 255, 255 /*r*/);
+    if (!d.elements.solid) {
+        return;
     }
-    // temp fast abort...
-    //    return true;
+    int treedepth;
+    int nelements;
+    countTree(d.elements, treedepth, nelements);
+    // ^ TODO: allocate traceray buffers to match!
+    if (treedepth > 10) {
+        qFatal("Excessive tree depth, fatal!");
+    }
+    QImage *next = &(*ctx->image);
+    int w = next->width();
+    int h = next->height();
+#if 0
+        QTime t = QTime::currentTime();
+        qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
+               nslices);
+#endif
+
+    int mind = w > h ? h : w;
+
+    int xl = pixels.left();
+    int xh = pixels.right();
+    int yl = pixels.top();
+    int yh = pixels.bottom();
+
+    const G4double radius = 0.8 / mind;
+    const int M = 30;
+    const Element *hits[M];
+    Intersection ints[M + 1];
+    const Element *althits[M];
+    Intersection altints[M + 1];
+    // Zero construct by default
+    ElemMutables *mutables = new ElemMutables[nelements]();
+    int iter = 1;
+
+    QRgb *trackcolors = ctx->colors;
+    G4double *trackdists = ctx->distances;
+
+    for (int i = yl; i < yh; i++) {
+        QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
+        for (int j = xl; j < xh; j++) {
+            if (ctx->abort_flag) {
+                delete[] mutables;
+                return;
+            }
+            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
+
+            int m = traceRay(pt, d, hits, ints, M, iter, mutables);
+            iter++;
+            m = compressTraces(hits, ints, m);
+
+            int p = m - 1;
+            bool line = false;
+            if (d.level_of_detail <= -1) {
+                int ndevs[M + 1];
+                for (int k = 0; k < M + 1; k++) {
+                    ndevs[k] = 0;
+                }
+                G4double seed = CLHEP::pi / 5 * (qrand() >> 16) / 16384.0;
+                for (int k = 0; k < 10; k++) {
+                    QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
+                                radius * std::sin(seed + k * CLHEP::pi / 5));
+                    int am = traceRay(pt + off, d, althits, altints, M, iter,
+                                      mutables);
+                    iter++;
+                    am = compressTraces(althits, altints, am);
+                    // At which intersection have we disagreements?
+                    int cm = std::min(am, m);
+                    for (int l = 0; l < cm + 1; l++) {
+                        const G4double jump =
+                            1.0 * radius * d.scale /
+                            std::abs(-altints[l].normal * d.orientation.rowX());
+                        bool diffmatbehind =
+                            ((l < cm) &&
+                             althits[l]->matcode != hits[l]->matcode);
+                        bool edgediff =
+                            (std::abs(altints[l].normal * ints[l].normal) <
+                                 0.3 || // Q: abs?
+                             std::abs(altints[l].dist - ints[l].dist) > jump);
+                        if (diffmatbehind || edgediff) {
+                            ++ndevs[l];
+                        }
+                    }
+                    // Differing intersection count
+                    for (int l = am; l < m; l++) {
+                        ++ndevs[l];
+                    }
+                    for (int l = m; l < am; l++) {
+                        ++ndevs[l];
+                    }
+                }
+                const int devthresh = 2;
+                for (int k = 0; k < m + 1; ++k) {
+                    if (ndevs[k] >= devthresh) {
+                        p = k - 1;
+                        line = true;
+                        break;
+                    }
+                }
+            }
+
+            int sidx = i * w + j;
+            QRgb trackcol = trackcolors[sidx];
+            // ^ trackcol includes background
+            G4double trackdist = trackdists[sidx];
+
+            bool rayoverride = false;
+            for (int k = 0; k < p; k++) {
+                if (ints[k].dist > trackdist) {
+                    p = k - 1;
+                    // WARNING: there exist exceptions!
+                    // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
+                    rayoverride = true;
+                    break;
+                }
+            }
+
+            QRgb col = (line && !rayoverride) ? qRgb(0, 0, 0) : trackcol;
+            // p indicates the first volume to use the color rule on
+            // (p<0 indicates the line dominates)
+            for (int k = p; k >= 0; --k) {
+                // We use the intersection before the volume
+                const MaterialInfo &matinfo =
+                    d.matinfo[size_t(hits[k]->matcode)];
+                QRgb altcol = colorMap(ints[k].normal, d.orientation.rowX(),
+                                       matinfo.hue, ints[k].dist);
+                double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
+                if (!hits[k]->visible) {
+                    continue;
+                }
+                col = qRgb(int(e * qRed(altcol) + f * qRed(col)),
+                           int(e * qGreen(altcol) + f * qGreen(col)),
+                           int(e * qBlue(altcol) + f * qBlue(col)));
+            }
+            pts[j] = col;
+        }
+        QMetaObject::invokeMethod(&home, "progUpdate", Qt::QueuedConnection,
+                                  Q_ARG(int, yh - yl + 1),
+                                  Q_ARG(int, ctx->renderno));
+    }
+    if (d.level_of_detail <= -1) {
+        recursivelyPrintNCalls(d.elements, mutables);
+    }
+
+    delete[] mutables;
+    QMetaObject::invokeMethod(&home, "queueNext", Qt::QueuedConnection,
+                              Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
+}
+
+RenderTrackTask::RenderTrackTask(QRect p, RenderGraph &h,
+                                 QSharedPointer<Context> c, int i)
+    : RenderGraphTask(p, h, c, i) {}
+
+void RenderTrackTask::run() {
+    int xl = pixels.left();
+    int xh = pixels.right();
+    int yl = pixels.top();
+    int yh = pixels.bottom();
+
+    double *dists = ctx->distances;
+    QRgb *colors = ctx->colors;
+    int w = ctx->image->width();
+    int h = ctx->image->height();
+    const ViewData &d = *ctx->viewdata;
+    const TrackData &t = d.tracks;
+
+    for (int y = yl; y < yh; y++) {
+        for (int x = xl; x < xh; x++) {
+            // Scale up to be beyond anything traceRay produces
+            dists[y * w + x] = 4 * kInfinity;
+            double r = 255. * ((x - xl) * (yh - yl) + (y - yl)) /
+                       ((xh - xl) * (yh - yl));
+            Q_UNUSED(r);
+            colors[y * w + x] = qRgb(255, 255, 255 /*r*/);
+        }
+    }
 
     size_t ntracks = t.getNTracks();
     const TrackHeader *headers = t.getHeaders();
@@ -450,10 +595,13 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
     // ^ ensure minimum 1 pixel brush width
 
     for (size_t i = 0; i < ntracks; i++) {
-        if (this->abort_task) {
-            this->abort_task = false;
-            emit aborted();
-            return false;
+        if (ctx->abort_flag) {
+            return;
+        }
+        if (i % ((ntracks / 20) + 1) == 0) {
+            QMetaObject::invokeMethod(&home, "progUpdate", Qt::QueuedConnection,
+                                      Q_ARG(int, 20 > ntracks ? ntracks : 20),
+                                      Q_ARG(int, ctx->renderno));
         }
 
         const TrackHeader &header = headers[i];
@@ -546,7 +694,7 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
                     int hx = int(std::round(x + lr));
                     for (int ddx = std::max(xl, lx);
                          ddx <= std::min(xh - 1, hx); ddx++) {
-                        int sidx = (ddy - yl) * (xh - xl) + (ddx - xl);
+                        int sidx = ddy * w + ddx;
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
                             colors[sidx] = col;
@@ -556,180 +704,9 @@ bool RenderWorker::renderTracks(const ViewData &d, const TrackData &t,
             }
         }
     }
-    return true;
-}
 
-bool RenderWorker::render(ViewData d, TrackData t, QSharedPointer<QImage> next,
-                          int slice, int nslices) {
-    if (!d.elements.solid) {
-        return false;
-    }
-    int treedepth;
-    int nelements;
-    countTree(d.elements, treedepth, nelements);
-    // ^ TODO: allocate traceray buffers to match!
-    if (treedepth > 10) {
-        qFatal("Excessive tree depth, fatal!");
-    }
-    int w = next->width();
-    int h = next->height();
-#if 0
-    QTime t = QTime::currentTime();
-    qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
-           nslices);
-#endif
-
-    int mind = w > h ? h : w;
-
-    int xl, xh, yl, yh;
-    sliceBounds(slice, nslices, w, h, xl, xh, yl, yh);
-
-    const G4double radius = 0.8 / mind;
-    const int M = 30;
-    const Element *hits[M];
-    Intersection ints[M + 1];
-    const Element *althits[M];
-    Intersection altints[M + 1];
-    G4double *trackdists = new G4double[(xh - xl) * (yh - yl)];
-    QRgb *trackcolors = new QRgb[(xh - xl) * (yh - yl)];
-    // Zero construct by default
-    ElemMutables *mutables = new ElemMutables[nelements]();
-    int iter = 1;
-    bool s = renderTracks(d, t, trackdists, trackcolors, slice, nslices, w, h);
-    if (!s) {
-        // aborted
-        delete[] trackdists;
-        delete[] trackcolors;
-        delete[] mutables;
-        return false;
-    }
-
-    for (int i = yl; i < yh; i++) {
-        QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
-        for (int j = xl; j < xh; j++) {
-            if (this->abort_task) {
-                this->abort_task = false;
-                emit aborted();
-                delete[] trackdists;
-                delete[] trackcolors;
-                delete[] mutables;
-                return false;
-            }
-            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
-
-            int m = traceRay(pt, d, hits, ints, M, iter, mutables);
-            iter++;
-            m = compressTraces(hits, ints, m);
-
-            int p = m - 1;
-            bool line = false;
-            if (d.level_of_detail <= -1) {
-                int ndevs[M + 1];
-                for (int k = 0; k < M + 1; k++) {
-                    ndevs[k] = 0;
-                }
-                G4double seed = CLHEP::pi / 5 * (qrand() >> 16) / 16384.0;
-                int am;
-                for (int k = 0; k < 10; k++) {
-
-                    QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
-                                radius * std::sin(seed + k * CLHEP::pi / 5));
-                    am = traceRay(pt + off, d, althits, altints, M, iter,
-                                  mutables);
-                    iter++;
-                    am = compressTraces(althits, altints, am);
-                    // At which intersection have we disagreements?
-                    int cm = std::min(am, m);
-                    for (int l = 0; l < cm + 1; l++) {
-                        const G4double jump =
-                            1.0 * radius * d.scale /
-                            std::abs(-altints[l].normal * d.orientation.rowX());
-                        bool diffmatbehind =
-                            ((l < cm) &&
-                             althits[l]->matcode != hits[l]->matcode);
-                        bool edgediff =
-                            (std::abs(altints[l].normal * ints[l].normal) <
-                                 0.3 || // Q: abs?
-                             std::abs(altints[l].dist - ints[l].dist) > jump);
-                        if (diffmatbehind || edgediff) {
-                            ++ndevs[l];
-                        }
-                    }
-                    // Differing intersection count
-                    for (int l = am; l < m; l++) {
-                        ++ndevs[l];
-                    }
-                    for (int l = m; l < am; l++) {
-                        ++ndevs[l];
-                    }
-                }
-                const int devthresh = 2;
-                for (int k = 0; k < m + 1; ++k) {
-                    if (ndevs[k] >= devthresh) {
-                        p = k - 1;
-                        line = true;
-                        break;
-                    }
-                }
-            }
-
-            int sidx = (i - yl) * (xh - xl) + (j - xl);
-            QRgb trackcol = trackcolors[sidx];
-            // ^ trackcol includes background
-            G4double trackdist = trackdists[sidx];
-            //            QRgb trackcol;
-            //            G4double trackdist;
-            //            bool hit = trackTrace(pt, d, t, trackdist, trackcol);
-            //            if (!hit) {
-            //                trackcol = qRgb(255,255,255);
-            //                trackdist = kInfinity;
-            //            }
-
-            bool rayoverride = false;
-            for (int k = 0; k < p; k++) {
-                if (ints[k].dist > trackdist) {
-                    p = k - 1;
-                    // WARNING: there exist exceptions!
-                    // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
-                    rayoverride = true;
-                    break;
-                }
-            }
-
-            QRgb col = (line && !rayoverride) ? qRgb(0, 0, 0) : trackcol;
-            // p indicates the first volume to use the color rule on
-            // (p<0 indicates the line dominates)
-            for (int k = p; k >= 0; --k) {
-                // We use the intersection before the volume
-                const MaterialInfo &matinfo =
-                    d.matinfo[size_t(hits[k]->matcode)];
-                QRgb altcol = colorMap(ints[k].normal, d.orientation.rowX(),
-                                       matinfo.hue, ints[k].dist);
-                double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
-                if (!hits[k]->visible) {
-                    continue;
-                }
-                col = qRgb(int(e * qRed(altcol) + f * qRed(col)),
-                           int(e * qGreen(altcol) + f * qGreen(col)),
-                           int(e * qBlue(altcol) + f * qBlue(col)));
-            }
-            pts[j] = col;
-        }
-        emit progressed(i + 1);
-    }
-#if 1
-    if (d.level_of_detail <= -1) {
-        recursivelyPrintNCalls(d.elements, mutables);
-    }
-#endif
-#if 0
-    qDebug("portion done after %d ms", t.msecsTo(QTime::currentTime()));
-#endif
-    emit completed();
-    delete[] trackdists;
-    delete[] trackcolors;
-    delete[] mutables;
-    return true;
+    QMetaObject::invokeMethod(&home, "queueNext", Qt::QueuedConnection,
+                              Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
 }
 
 static void setupBallRadii(TrackHeader *headers, const TrackPoint *points,
@@ -796,17 +773,7 @@ TrackData::TrackData(const char *filename) {
 
 TrackData::TrackData(const TrackData &other) : data(other.data) {}
 
-static bool insideConvex(std::vector<Plane> clips, G4ThreeVector point) {
-    // The empty convex hull by default contains everything
-    for (const Plane &p : clips) {
-        if (p.normal * point - p.offset < 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static void lineCuts(std::vector<Plane> clips, G4ThreeVector from,
+static void lineCuts(const std::vector<Plane> &clips, G4ThreeVector from,
                      G4ThreeVector to, G4double &lowE, G4double &highE) {
     G4double low = -kInfinity;
     G4double high = kInfinity;
@@ -836,6 +803,13 @@ static void lineCuts(std::vector<Plane> clips, G4ThreeVector from,
     }
     lowE = low;
     highE = high;
+}
+
+static bool insideConvex(const std::vector<Plane> &clips, G4ThreeVector point) {
+    // Optimizer will resolve to simple form anyway; & this is error free
+    double lowE, highE;
+    lineCuts(clips, point, point, lowE, highE);
+    return lowE < highE;
 }
 
 static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
@@ -870,13 +844,16 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
         G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);
         bool intime = seq[0].time >= tlow && seq[0].time <= thigh;
         bool inenergy = seq[0].energy >= elow && seq[0].energy <= ehigh;
-        if (insideConvex(vd.clipping_planes, fts) && intime && inenergy) {
+        bool inconvex = insideConvex(vd.clipping_planes, fts);
+        bool started = false;
+        if (inconvex && intime && inenergy) {
             TrackHeader h;
             h.offset = cp.size();
             h.ptype = oheaders[i].ptype;
             h.npts = 1;
             ch.push_back(h);
             cp.push_back(seq[0]);
+            started = true;
         }
 
         for (int j = 0; j < npts - 1; j++) {
@@ -884,23 +861,42 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
             G4ThreeVector pl(seq[j].x, seq[j].y, seq[j].z);
             G4ThreeVector ph(seq[j + 1].x, seq[j + 1].y, seq[j + 1].z);
             lineCuts(vd.clipping_planes, pl, ph, low, high);
-            float tcutlow =
-                (tlow - seq[j].time) / (seq[j + 1].time - seq[j].time);
-            float tcuthigh =
-                (thigh - seq[j].time) / (seq[j + 1].time - seq[j].time);
-            float ecutlow =
-                (elow - seq[j].energy) / (seq[j + 1].energy - seq[j].energy);
-            float ecuthigh =
-                (ehigh - seq[j].energy) / (seq[j + 1].energy - seq[j].energy);
+            float itrange = (seq[j + 1].time - seq[j].time == 0.f)
+                                ? float(kInfinity)
+                                : 1 / (seq[j + 1].time - seq[j].time);
+            float tcutlow = (tlow - seq[j].time) * itrange;
+            float tcuthigh = (thigh - seq[j].time) * itrange;
+            float ierange = (seq[j + 1].energy - seq[j].energy == 0.f)
+                                ? float(kInfinity)
+                                : 1 / (seq[j + 1].energy - seq[j].energy);
+            float ecutlow = (elow - seq[j].energy) * ierange;
+            float ecuthigh = (ehigh - seq[j].energy) * ierange;
             low = std::max(double(std::max(tcutlow, ecutlow)), low);
             high = std::min(double(std::min(tcuthigh, ecuthigh)), high);
 
+            // TODO: modify casework to localize results, not inputs
             if (low <= 0. && high >= 1.) {
                 // Keep point
+                if (!started) {
+                    TrackHeader h;
+                    h.offset = cp.size();
+                    h.ptype = oheaders[i].ptype;
+                    h.npts = 1;
+                    ch.push_back(h);
+                    cp.push_back(seq[j]);
+                }
                 ch[ch.size() - 1].npts++;
                 cp.push_back(seq[j + 1]);
             } else if (low <= 0. && high < 1.) {
                 if (high > 0.) {
+                    if (!started) {
+                        TrackHeader h;
+                        h.offset = cp.size();
+                        h.ptype = oheaders[i].ptype;
+                        h.npts = 1;
+                        ch.push_back(h);
+                        cp.push_back(seq[j]);
+                    }
                     ch[ch.size() - 1].npts++;
                     cp.push_back(linmix(seq[j], seq[j + 1], high));
                 } else {

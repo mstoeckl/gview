@@ -10,6 +10,28 @@ class OverView;
 class MaterialModel;
 class QItemSelection;
 
+class InfoModel : public QAbstractTableModel {
+    Q_OBJECT
+public:
+    InfoModel();
+    virtual ~InfoModel();
+    void setElement(const Element *e, const ViewData &vd);
+    virtual int rowCount(const QModelIndex &p = QModelIndex()) const;
+    virtual int columnCount(const QModelIndex &p = QModelIndex()) const;
+    virtual QVariant headerData(int section, Qt::Orientation orientation,
+                                int role = Qt::DisplayRole) const;
+    virtual QVariant data(const QModelIndex &index,
+                          int role = Qt::DisplayRole) const;
+    virtual bool setData(const QModelIndex &index, const QVariant &value,
+                         int role = Qt::EditRole);
+    Qt::ItemFlags flags(const QModelIndex &index) const;
+
+private:
+    QVector<QString> opts;
+    QVector<QString> tooltips;
+    QVector<QString> vals;
+};
+
 class HueSpinBoxDelegate : public QItemDelegate {
     Q_OBJECT
 public:
@@ -94,11 +116,12 @@ public:
                           int role = Qt::DisplayRole) const;
     virtual bool setData(const QModelIndex &index, const QVariant &value,
                          int role = Qt::EditRole);
+    QModelIndex indexFromElement(const Element *e);
 
     void recalculate();
 signals:
     void colorChange();
-    void selectedElement(Element *e);
+    void selectedElement(const Element *e);
 public slots:
     void respToActive(const QModelIndex &index);
     void respToSelection(const QItemSelection &, const QItemSelection &);

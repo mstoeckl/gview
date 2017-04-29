@@ -29,9 +29,7 @@ private:
     int last_level_of_detail;
     bool to_full_detail;
 
-    QVector<QThread *> t;
-    QVector<RenderWorker *> w;
-    int response_count;
+    RenderGraph graph;
 
     QSharedPointer<QImage> back;
     QSharedPointer<QImage> next;
@@ -54,7 +52,6 @@ private:
     ViewData &viewdata;
     const TrackData &trackdata;
     QSharedPointer<QImage> target;
-    QThread *thread;
-    RenderWorker *worker;
+    RenderGraph graph;
     QProgressDialog *progress;
 };

@@ -25,6 +25,7 @@ class PlaneEdit;
 class OverView;
 class ExpoSpinBox;
 class RenderWidget;
+class InfoModel;
 
 typedef struct {
     G4String name;
@@ -61,7 +62,8 @@ public slots:
     void screenshot(int sx = 1);
     void changeGeometry(QAction *);
     void changeTracks(QAction *);
-    void indicateElement(Element *);
+    void indicateElement(const Element *);
+    void rayLookup();
 
 private:
     std::vector<GeoOption> geo_options;
@@ -87,8 +89,10 @@ private:
     QSpinBox *count_upper;
     QTreeView *tree_view;
     OverView *tree_model;
-    QTableWidget *info_table;
+    QTableView *info_table;
+    InfoModel *info_model;
     QListWidget *ray_table;
+    QVector<const Element *> ray_list;
     QCheckBox *mtl_divchk;
     QCheckBox *mtl_showlines;
     QTableView *mtl_table;

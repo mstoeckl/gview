@@ -4,8 +4,6 @@
 #include "Overview.hh"
 #include "RenderWidget.hh"
 
-#include <G4BooleanSolid.hh>
-#include <G4DisplacedSolid.hh>
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
 #include <G4VPhysicalVolume.hh>
@@ -364,39 +362,23 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
                                     const QItemSelection &)),
             tree_model, SLOT(respToSelection(const QItemSelection &,
                                              const QItemSelection &)));
-    connect(tree_model, SIGNAL(selectedElement(Element *)), this,
-            SLOT(indicateElement(Element *)));
+    connect(tree_model, SIGNAL(selectedElement(const Element *)), this,
+            SLOT(indicateElement(const Element *)));
     dock_tree->setWidget(tree_view);
 
     // Info for a particular item (mass, volume, mtl specs; table...)
     dock_info = new QDockWidget("Element info", this);
-    info_table = new QTableWidget();
-    info_table->setColumnCount(1);
-    // TODO: tooltips, require a model & headerData()
-    QStringList keys;
-    keys << "Name"
-         << "Material"
-         << "Density"
-         << "Volume"
-         << "Mass"
-         << "Surface Area"
-         << "Bool roots"
-         << "Bool depth"
-         << "Bool splits";
-    info_table->setEditTriggers(QTableWidget::NoEditTriggers);
-    info_table->setRowCount(keys.size());
-    info_table->setVerticalHeaderLabels(keys);
-    QStringList kv = QStringList() << "Value";
-    info_table->setHorizontalHeaderLabels(kv);
+    info_table = new QTableView();
+    info_model = new InfoModel();
+    info_table->setModel(info_model);
     info_table->horizontalHeader()->setStretchLastSection(true);
-    for (int i = 0; i < keys.size(); i++) {
-        info_table->setItem(i, 0, new QTableWidgetItem(""));
-    }
+    info_table->horizontalHeader()->hide();
     dock_info->setWidget(info_table);
 
     dock_ray = new QDockWidget("Ray table", this);
     ray_table = new QListWidget();
     dock_ray->setWidget(ray_table);
+    connect(ray_table, SIGNAL(itemSelectionChanged()), this, SLOT(rayLookup()));
 
     dock_mtl = new QDockWidget("Materials", this);
     QWidget *mtlc = new QWidget();
@@ -554,9 +536,11 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
     rayiter++;
     m = compressTraces(elems, ints, m);
     ray_table->clear();
+    ray_list.clear();
     for (int j = 0; j < m; j++) {
         QString name(elems[j]->name.data());
         ray_table->addItem(name);
+        ray_list.push_back(elems[j]);
     }
 
     if (!clicked)
@@ -723,58 +707,23 @@ void Viewer::changeTracks(QAction *act) {
     updatePlanes();
 }
 
-void calculateBooleanProperties(const G4VSolid *sol,
-                                QSet<const G4VSolid *> &roots, int &treedepth,
-                                int &nbooleans, int depth = 0) {
-    const G4BooleanSolid *b = dynamic_cast<const G4BooleanSolid *>(sol);
-    treedepth = std::max(treedepth, depth);
-    if (b) {
-        calculateBooleanProperties(b->GetConstituentSolid(0), roots, treedepth,
-                                   nbooleans, depth + 1);
-        calculateBooleanProperties(b->GetConstituentSolid(1), roots, treedepth,
-                                   nbooleans, depth + 1);
-        nbooleans++;
-        return;
-    }
-    const G4DisplacedSolid *d = dynamic_cast<const G4DisplacedSolid *>(sol);
-    if (d) {
-        calculateBooleanProperties(d->GetConstituentMovedSolid(), roots,
-                                   treedepth, nbooleans, depth + 1);
-        return;
-    }
-    roots.insert(sol);
+void Viewer::indicateElement(const Element *e) {
+    info_model->setElement(e, vd);
 }
 
-void Viewer::indicateElement(Element *e) {
-    if (!e) {
-        for (int i = 0; i < info_table->rowCount(); i++) {
-            info_table->item(i, 0)->setText("");
-        }
-    } else {
-        // fill info table
-        info_table->item(0, 0)->setText(e->name.c_str());
-        const G4Material *mat = vd.matinfo[e->matcode].mtl;
-        info_table->item(1, 0)->setText(mat->GetName().c_str());
-        G4double dens = mat->GetDensity();
-        info_table->item(2, 0)->setText(
-            QString::number(dens / (CLHEP::g / CLHEP::cm3), 'g', 4) + " g/cm3");
-        G4double volume = e->solid->GetCubicVolume();
-        info_table->item(3, 0)->setText(
-            QString::number(volume / CLHEP::cm3, 'g', 4) + " cm3");
-        info_table->item(4, 0)->setText(
-            QString::number(volume * dens / CLHEP::kg, 'g', 4) + " kg");
-        G4double surf = e->solid->GetSurfaceArea();
-        info_table->item(5, 0)->setText(
-            QString::number(surf / CLHEP::cm2, 'g', 4) + " cm2");
-
-        QSet<const G4VSolid *> roots;
-        int treedepth = 0;
-        int nbooleans = 0;
-        calculateBooleanProperties(e->solid, roots, treedepth, nbooleans);
-        info_table->item(6, 0)->setText(QString::number(roots.size()));
-        info_table->item(7, 0)->setText(QString::number(treedepth));
-        info_table->item(8, 0)->setText(QString::number(nbooleans));
+void Viewer::rayLookup() {
+    QList<QListWidgetItem *> li = ray_table->selectedItems();
+    if (li.size() != 1) {
+        return;
     }
+    int r = ray_table->row(li[0]);
+    const Element *e = ray_list[r];
+
+    QModelIndex index = tree_model->indexFromElement(e);
+    tree_view->scrollTo(index, QAbstractItemView::PositionAtCenter);
+    tree_view->selectionModel()->clearSelection();
+    tree_view->selectionModel()->select(index, QItemSelectionModel::Select);
+    // ^ Triggers indicateElement
 }
 
 void Viewer::updateShowLines() {

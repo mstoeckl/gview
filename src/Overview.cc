@@ -1,11 +1,130 @@
 #include "Overview.hh"
 
 #include "G4Material.hh"
+#include <G4BooleanSolid.hh>
+#include <G4DisplacedSolid.hh>
+
 #include "RenderWorker.hh"
 
 #include <QDoubleSpinBox>
 #include <QItemSelection>
 #include <QSignalMapper>
+
+InfoModel::InfoModel() {
+    QStringList keys;
+    keys << "Name"
+         << "Material"
+         << "Density"
+         << "Volume"
+         << "Mass"
+         << "Surface Area"
+         << "Bool roots"
+         << "Bool depth"
+         << "Bool splits";
+    opts = keys.toVector();
+    QStringList tool;
+    tool << "Element name (from physical volume)"
+         << "Material associated with the logical volume"
+         << "Density taken from material property"
+         << "Estimated solid volume"
+         << "Product of estimated volume and material density"
+         << "Estimated solid surface area"
+         << "Number of distinct leaves in the tree formed by boolean solid "
+            "composition"
+         << "Depth of the boolean solid tree (incl. displacements) for this "
+            "element"
+         << "Number of boolean operations (counting duplicates) in boolean "
+            "solid tree";
+    tooltips = tool.toVector();
+    vals = QVector<QString>(opts.size());
+}
+InfoModel::~InfoModel() {}
+
+void calculateBooleanProperties(const G4VSolid *sol,
+                                QSet<const G4VSolid *> &roots, int &treedepth,
+                                int &nbooleans, int depth = 0) {
+    const G4BooleanSolid *b = dynamic_cast<const G4BooleanSolid *>(sol);
+    treedepth = std::max(treedepth, depth);
+    if (b) {
+        calculateBooleanProperties(b->GetConstituentSolid(0), roots, treedepth,
+                                   nbooleans, depth + 1);
+        calculateBooleanProperties(b->GetConstituentSolid(1), roots, treedepth,
+                                   nbooleans, depth + 1);
+        nbooleans++;
+        return;
+    }
+    const G4DisplacedSolid *d = dynamic_cast<const G4DisplacedSolid *>(sol);
+    if (d) {
+        calculateBooleanProperties(d->GetConstituentMovedSolid(), roots,
+                                   treedepth, nbooleans, depth + 1);
+        return;
+    }
+    roots.insert(sol);
+}
+
+void InfoModel::setElement(const Element *e, const ViewData &vd) {
+    if (!e) {
+        vals = QVector<QString>(opts.size());
+    } else {
+        // fill info table
+        vals[0] = e->name;
+        const G4Material *mat = vd.matinfo[size_t(e->matcode)].mtl;
+        vals[1] = mat->GetName();
+        G4double dens = mat->GetDensity();
+        vals[2] =
+            QString::number(dens / (CLHEP::g / CLHEP::cm3), 'g', 4) + " g/cm3";
+        G4double volume = e->solid->GetCubicVolume();
+        vals[3] = QString::number(volume / CLHEP::cm3, 'g', 4) + " cm3";
+        vals[4] = QString::number(volume * dens / CLHEP::kg, 'g', 4) + " kg";
+        G4double surf = e->solid->GetSurfaceArea();
+        vals[5] = QString::number(surf / CLHEP::cm2, 'g', 4) + " cm2";
+
+        QSet<const G4VSolid *> roots;
+        int treedepth = 0;
+        int nbooleans = 0;
+        calculateBooleanProperties(e->solid, roots, treedepth, nbooleans);
+        vals[6] = QString::number(roots.size());
+        vals[7] = QString::number(treedepth);
+        vals[8] = QString::number(nbooleans);
+    }
+    QVector<int> roles;
+    roles.push_back(Qt::DisplayRole);
+    emit dataChanged(index(0, 0), index(0, opts.size() - 1), roles);
+}
+int InfoModel::rowCount(const QModelIndex &) const { return int(opts.size()); }
+int InfoModel::columnCount(const QModelIndex &) const { return 1; }
+QVariant InfoModel::data(const QModelIndex &index, int role) const {
+    if (!index.isValid()) {
+        return QVariant();
+    }
+    // Assume only valid indices...
+    if (role == Qt::DisplayRole) {
+        if (index.column() == 0) {
+            return QVariant(vals[index.row()]);
+        }
+    }
+    return QVariant();
+}
+bool InfoModel::setData(const QModelIndex &, const QVariant &, int) {
+    return false;
+}
+
+QVariant InfoModel::headerData(int section, Qt::Orientation orientation,
+                               int role) const {
+    if (orientation == Qt::Horizontal) {
+        return QVariant();
+    }
+    if (role == Qt::DisplayRole) {
+        return QVariant(opts[section]);
+    }
+    if (role == Qt::ToolTipRole) {
+        return QVariant(tooltips[section]);
+    }
+    return QVariant();
+}
+Qt::ItemFlags InfoModel::flags(const QModelIndex &) const {
+    return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
 
 HueSpinBoxDelegate::HueSpinBoxDelegate(MaterialModel *model, QObject *parent)
     : QItemDelegate(parent) {
@@ -364,6 +483,23 @@ void OverView::respToSelection(const QItemSelection &ns,
             link[int(reinterpret_cast<long>(idxs[0].internalPointer()))];
         emit selectedElement(n.elem);
     }
+}
+
+QModelIndex OverView::indexFromElement(const Element *e) {
+    for (int i = 0; i < link.size(); i++) {
+        const Node &n = link[i];
+        if (n.elem == e) {
+            const Node &p = link[n.parent];
+            // Locate position relative to parent
+            for (int k = 0; k < p.lexi.size(); k++) {
+                int sidx = p.sub[p.lexi[k]];
+                if (sidx == i) {
+                    return createIndex(k, 0, reinterpret_cast<void *>(long(i)));
+                }
+            }
+        }
+    }
+    return QModelIndex();
 }
 
 void OverView::recalculate() {
