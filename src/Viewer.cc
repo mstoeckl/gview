@@ -4,6 +4,7 @@
 #include "Overview.hh"
 #include "RenderWidget.hh"
 
+#include <G4GDMLParser.hh>
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
 #include <G4VPhysicalVolume.hh>
@@ -16,6 +17,7 @@
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QItemSelection>
@@ -155,45 +157,6 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     }
     rayiter = 0;
 
-    QMenu *picker = new QMenu("Choose Geometry");
-    QActionGroup *opts = new QActionGroup(this);
-    for (size_t i = 0; i < geo_options.size(); i++) {
-        QString s = QString(geo_options[i].name.c_str());
-        QAction *ch = new QAction(s);
-        ch->setToolTip(s);
-        ch->setCheckable(true);
-        opts->addAction(ch);
-        if (i == 0) {
-            ch->setChecked(true);
-        }
-        picker->addAction(ch);
-    }
-    connect(opts, SIGNAL(triggered(QAction *)), this,
-            SLOT(changeGeometry(QAction *)));
-    QMenu *tpicker = new QMenu("Choose Tracks");
-    QActionGroup *topts = new QActionGroup(this);
-    QAction *base = new QAction("None");
-    base->setToolTip(base->text());
-    base->setCheckable(true);
-    if (track_options.size() == 0) {
-        base->setChecked(true);
-    }
-    topts->addAction(base);
-    tpicker->addAction(base);
-    for (size_t i = 0; i < track_options.size(); i++) {
-        QString s = QString("%1").arg(i + 1);
-        QAction *ch = new QAction(s);
-        ch->setToolTip(s);
-        ch->setCheckable(true);
-        topts->addAction(ch);
-        if (i == 0) {
-            ch->setChecked(true);
-        }
-        tpicker->addAction(ch);
-    }
-    connect(topts, SIGNAL(triggered(QAction *)), this,
-            SLOT(changeTracks(QAction *)));
-
     QAction *clipAction = new QAction("Clipping");
     clipAction->setToolTip("Edit geometry clipping planes and track limits");
     connect(clipAction, SIGNAL(triggered()), this, SLOT(restClip()));
@@ -231,8 +194,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
 
     // TODO: icons for all actions, esp. screenshot actions
     // & so on. Bundle?
-    this->menuBar()->addMenu(picker);
-    this->menuBar()->addMenu(tpicker);
+    gpicker_menu = this->menuBar()->addMenu("Choose Geometry");
+    tpicker_menu = this->menuBar()->addMenu("Choose Tracks");
+    reloadChoiceMenus();
     // TODO: checkbox by visibility
     QMenu *sub = this->menuBar()->addMenu("View");
     sub->addAction(clipAction);
@@ -734,4 +698,125 @@ void Viewer::screenshot(int sx) {
     int w = rwidget->width() * sx, h = rwidget->height() * sx;
     RenderSaveObject *rso = new RenderSaveObject(vd, trackdata, w, h);
     rso->start();
+}
+
+void Viewer::reloadChoiceMenus() {
+    gpicker_menu->clear();
+    tpicker_menu->clear();
+
+    QActionGroup *opts = new QActionGroup(this);
+    for (size_t i = 0; i < geo_options.size(); i++) {
+        QString s = QString(geo_options[i].name.c_str());
+        QAction *ch = new QAction(s);
+        ch->setToolTip(s);
+        ch->setCheckable(true);
+        opts->addAction(ch);
+        if (i == which_geo) {
+            ch->setChecked(true);
+        }
+        gpicker_menu->addAction(ch);
+    }
+    QAction *gadd = gpicker_menu->addAction("Open Geometry");
+    connect(opts, SIGNAL(triggered(QAction *)), this,
+            SLOT(changeGeometry(QAction *)));
+    QActionGroup *topts = new QActionGroup(this);
+    QAction *base = new QAction("None");
+    base->setToolTip(base->text());
+    base->setCheckable(true);
+    if (track_options.size() == 0) {
+        base->setChecked(true);
+    }
+    topts->addAction(base);
+    tpicker_menu->addAction(base);
+    if (which_tracks == 0) {
+        base->setChecked(true);
+    }
+    for (size_t i = 0; i < track_options.size(); i++) {
+        QString s = QString("%1").arg(i + 1);
+        QAction *ch = new QAction(s);
+        ch->setToolTip(s);
+        ch->setCheckable(true);
+        topts->addAction(ch);
+        if (i == which_tracks - 1) {
+            ch->setChecked(true);
+        }
+        tpicker_menu->addAction(ch);
+    }
+    QAction *tadd = tpicker_menu->addAction("Open Tracks");
+    connect(topts, SIGNAL(triggered(QAction *)), this,
+            SLOT(changeTracks(QAction *)));
+    connect(gadd, SIGNAL(triggered()), this, SLOT(openGeometry()));
+    connect(tadd, SIGNAL(triggered()), this, SLOT(openTracks()));
+}
+
+void Viewer::openGeometry() {
+    QString selected = "GDML (*.gdml *.gdml.gz)";
+    QString fn = QFileDialog::getOpenFileName(
+        NULL, "Open Geometry", QDir::currentPath(),
+        "All files (*.*);;GDML (*.gdml *.gdml.gz)", &selected);
+    if (fn.size() >= 8 && fn.right(8) == ".gdml.gz") {
+        system("rm -f /tmp/copy.gdml.gz");
+        QString ar = "cp " + fn + " /tmp/copy.gdml.gz";
+        system(ar.toUtf8().constData());
+        QString gu = "gzip -df /tmp/copy.gdml.gz";
+        system(gu.toUtf8().constData());
+        fn = "/tmp/copy.gdml";
+    }
+    if (fn.size() >= 5 && fn.right(5) == ".gdml") {
+
+        G4GDMLParser p;
+        p.SetAddPointerToName(true);
+        G4cout << "Started reading (may take a while)..." << G4endl;
+        GeoOption g;
+        g.name = G4String(fn.toUtf8().constData());
+        p.Read(g.name, false);
+        G4cout << "Done reading..." << G4endl;
+        // Need to modify volume name to prevent collisions in lookup
+        g.vol = p.GetWorldVolume();
+        char buf[30];
+        sprintf(buf, "-%d", int(geo_options.size()));
+        G4String name = g.vol->GetName() + buf;
+        g.vol->SetName(name);
+        g.vol->GetLogicalVolume()->SetName(name);
+        geo_options.push_back(g);
+        G4cout << "Done converting..." << G4endl;
+        p.Clear();
+        reloadChoiceMenus();
+    } else {
+        qDebug("File not a GDML file!");
+    }
+}
+
+void Viewer::openTracks() {
+    QString selected = "Track data (*.dat *.dat.gz *.track *.track.gz)";
+    QString fn =
+        QFileDialog::getOpenFileName(NULL, "Open Tracks", QDir::currentPath(),
+                                     "All files (*.*);;" + selected, &selected);
+    if (fn.size() >= 3 && fn.right(3) == ".gz") {
+        system("rm -f /tmp/copy.dat.gz");
+        QString ar = "cp " + fn + " /tmp/copy.dat.gz";
+        system(ar.toUtf8().constData());
+        QString gu = "gzip -df /tmp/copy.dat.gz";
+        system(gu.toUtf8().constData());
+        fn = "/tmp/copy.dat";
+    }
+    if ((fn.size() >= 4 && fn.right(4) == ".dat") ||
+        (fn.size() >= 6 && fn.right(4) == ".track")) {
+        TrackData nxt = TrackData(fn.toUtf8().constData());
+        TrackRestriction rests;
+        nxt.calcTimeBounds(rests.time.low, rests.time.high);
+        rests.time.high += 0.01 * CLHEP::ns;
+        nxt.calcEnergyBounds(rests.energy.low, rests.energy.high);
+        rests.energy.high *= 1.2;
+        rests.energy.low /= 1.2;
+        rests.energy.low = std::max(1.0 * CLHEP::eV, rests.energy.low);
+        rests.seqno.low = 1;
+        rests.seqno.high = nxt.getNTracks();
+        track_res_actual.push_back(rests);
+        track_res_bounds.push_back(rests);
+        track_options.push_back(nxt);
+        reloadChoiceMenus();
+    } else {
+        qDebug("File not a track data file!");
+    }
 }

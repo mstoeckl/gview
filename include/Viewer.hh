@@ -64,8 +64,12 @@ public slots:
     void changeTracks(QAction *);
     void indicateElement(const Element *);
     void rayLookup();
+    void openGeometry();
+    void openTracks();
 
 private:
+    void reloadChoiceMenus();
+
     std::vector<GeoOption> geo_options;
     std::vector<TrackData> track_options;
     std::vector<TrackRestriction> track_res_bounds;
@@ -96,6 +100,8 @@ private:
     QCheckBox *mtl_divchk;
     QCheckBox *mtl_showlines;
     QTableView *mtl_table;
+    QMenu *gpicker_menu;
+    QMenu *tpicker_menu;
 
     QPoint clickpt;
     QPoint lastpt;

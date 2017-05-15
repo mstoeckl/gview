@@ -5,7 +5,7 @@
 #include <G4GDMLParser.hh>
 
 int usage() {
-    fprintf(stderr, "Usage: view [filename.gdml]+ [trace.dat]*\n");
+    fprintf(stderr, "Usage: view [filename.gdml(.gz)]+ [trace.dat(.gz)]*\n");
     return -1;
 }
 
