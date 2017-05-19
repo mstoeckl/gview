@@ -1,6 +1,11 @@
 #include "CustomWidgets.hh"
 
 #include <QComboBox>
+#include <QGraphicsLineItem>
+#include <QGraphicsPathItem>
+#include <QGraphicsRectItem>
+#include <QGraphicsScene>
+#include <QGraphicsView>
 #include <QGridLayout>
 #include <QPushButton>
 
@@ -102,14 +107,182 @@ QString ExpoSpinBox::textFromValue(int i) const {
     return QString("%1.%2e%3").arg((i % 90) / 10 + 1).arg(i % 10).arg(i / 90);
 }
 
-double ExpoSpinBox::expFromInt(int r) const {
+double ExpoSpinBox::expFromInt(int r) {
     int e = r / 90;
     double s = (r % 90) / 10. + 1.;
     return s * std::pow(10., e);
 }
-int ExpoSpinBox::nearestIntFromExp(double d) const {
+int ExpoSpinBox::nearestIntFromExp(double d) {
     int base = int(std::floor(std::log10(d)));
     double mant = d / std::pow(10., base);
     int imt = int(std::round(mant * 10.)) - 10;
     return 90 * base + imt;
+}
+
+HistogrammicRangeSlider::HistogrammicRangeSlider(bool exponential) {
+    isexp = exponential;
+    if (exponential) {
+        espinLow = new ExpoSpinBox();
+        espinHigh = new ExpoSpinBox();
+        espinLow->setSingleStep(10);
+        espinHigh->setSingleStep(10);
+    } else {
+        lspinLow = new QDoubleSpinBox();
+        lspinHigh = new QDoubleSpinBox();
+        lspinLow->setDecimals(3);
+        lspinHigh->setDecimals(3);
+        lspinLow->setSingleStep(0.1);
+        lspinHigh->setSingleStep(0.1);
+    }
+    gv = new QGraphicsView();
+    gv->setBaseSize(QSize(3, 1));
+    scene = new QGraphicsScene();
+    scene->setSceneRect(QRectF(0., 0., 200., 100.0));
+    gv->setScene(scene);
+    gv->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    gv->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    gv->setFixedHeight(2 * espinLow->minimumSizeHint().height());
+    gv->fitInView(scene->sceneRect(), Qt::IgnoreAspectRatio);
+    gv->setMinimumSize(QSize(0, 0));
+    gv->setBaseSize(QSize(0, 0));
+    gv->setSizePolicy(
+        QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding));
+
+    // TODO: construct and add a histogram...
+    scene->addRect(QRectF(1., 1., 20., 50.), QPen(Qt::black));
+    // TODO: create a custom range - cover element
+    // which slides if you click/drag center, and resizes
+    // if you get act close to end points, and limits motion
+    // at X and Y coordinates. Must be _semitransparent_
+    limitLeft = scene->addLine(QLineF(QPointF(30., -300.), QPointF(30., 300.)),
+                               QPen(Qt::red));
+    limitRight = scene->addLine(QLineF(QPointF(70., -300.), QPointF(70., 300.)),
+                                QPen(Qt::blue));
+    limitLeft->setFlag(QGraphicsItem::ItemIsMovable, true);
+    limitLeft->setFlag(QGraphicsItem::ItemIsSelectable, true);
+    limitRight->setFlag(QGraphicsItem::ItemIsMovable, true);
+    limitRight->setFlag(QGraphicsItem::ItemIsSelectable, true);
+
+    QHBoxLayout *hlayout = new QHBoxLayout();
+    hlayout->addWidget(espinLow);
+    hlayout->addWidget(espinHigh);
+
+    QVBoxLayout *vlayout = new QVBoxLayout();
+    vlayout->addWidget(gv);
+    vlayout->addLayout(hlayout);
+
+    this->setLayout(vlayout);
+
+    if (isexp) {
+        connect(espinLow, SIGNAL(valueChanged(int)), this,
+                SLOT(handleUpdate()));
+        connect(espinHigh, SIGNAL(valueChanged(int)), this,
+                SLOT(handleUpdate()));
+    } else {
+        connect(lspinLow, SIGNAL(valueChanged(double)), this,
+                SLOT(handleUpdate()));
+        connect(lspinHigh, SIGNAL(valueChanged(double)), this,
+                SLOT(handleUpdate()));
+    }
+}
+HistogrammicRangeSlider::~HistogrammicRangeSlider() {}
+void HistogrammicRangeSlider::setRange(double left, double right) {
+    double low = std::min(left, right);
+    double high = std::max(left, right);
+    if (isexp) {
+        espinLow->setRange(ExpoSpinBox::nearestIntFromExp(low),
+                           ExpoSpinBox::nearestIntFromExp(high));
+        espinHigh->setRange(ExpoSpinBox::nearestIntFromExp(low),
+                            ExpoSpinBox::nearestIntFromExp(high));
+    } else {
+        lspinLow->setRange(low, high);
+        lspinHigh->setRange(low, high);
+    }
+}
+void HistogrammicRangeSlider::setHistogram(const QVector<QPointF> &pts) {
+    // Linear transform the points & display
+    scene->clear();
+
+    double low, high;
+    range(low, high);
+    double mh = 0;
+    double my = 0;
+    for (QPointF p : pts) {
+        mh = std::max(mh, p.y());
+        my = std::max(my, p.x());
+    }
+    if (isexp) {
+        low = std::log(low);
+        high = std::log(high);
+    }
+
+    QPainterPath pp;
+    pp.moveTo(QPointF(0, 0));
+    for (QPointF p : pts) {
+        if (isexp && p.x() <= 0.) {
+            continue;
+        }
+        qreal z = isexp ? std::log(p.x()) : p.x();
+        qreal x = 0.05 + 0.9 * scene->width() * (z - low) / (high - low);
+        qreal y = scene->height() - 0.9 * scene->height() * p.y() / mh;
+        pp.lineTo(QPointF(x, y));
+    }
+
+    scene->addPath(pp, QPen(Qt::black));
+
+    // Q: need to resize viewport to actually show?
+    gv->setUpdatesEnabled(true);
+    gv->update();
+}
+void HistogrammicRangeSlider::value(double &left, double &right) const {
+    double a, b;
+    if (isexp) {
+        a = ExpoSpinBox::expFromInt(espinLow->value());
+        b = ExpoSpinBox::expFromInt(espinHigh->value());
+    } else {
+        a = lspinLow->value();
+        b = lspinHigh->value();
+    }
+    left = std::min(a, b);
+    right = std::max(a, b);
+}
+void HistogrammicRangeSlider::range(double &left, double &right) const {
+    double a, b;
+    if (isexp) {
+        a = ExpoSpinBox::expFromInt(espinLow->minimum());
+        b = ExpoSpinBox::expFromInt(espinHigh->maximum());
+    } else {
+        a = lspinLow->minimum();
+        b = lspinHigh->maximum();
+    }
+    left = std::min(a, b);
+    right = std::max(a, b);
+}
+void HistogrammicRangeSlider::setValue(double left, double right) {
+    if (isexp) {
+        int a = ExpoSpinBox::nearestIntFromExp(left);
+        int b = ExpoSpinBox::nearestIntFromExp(right);
+        espinLow->setValue(std::min(a, b));
+        espinHigh->setValue(std::max(a, b));
+    } else {
+        lspinLow->setValue(std::min(left, right));
+        lspinHigh->setValue(std::max(left, right));
+    }
+}
+void HistogrammicRangeSlider::setSuffix(const QString &suff) {
+    if (isexp) {
+        espinLow->setSuffix(suff);
+        espinHigh->setSuffix(suff);
+    } else {
+        lspinLow->setSuffix(suff);
+        lspinHigh->setSuffix(suff);
+    }
+}
+void HistogrammicRangeSlider::handleUpdate() {
+    if (!this->signalsBlocked()) {
+        emit valueChanged();
+    }
+}
+void HistogrammicRangeSlider::resizeEvent(QResizeEvent *) {
+    gv->fitInView(scene->sceneRect(), Qt::IgnoreAspectRatio);
 }

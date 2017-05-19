@@ -26,6 +26,7 @@
 #include <QPair>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QSignalMapper>
 #include <QTableView>
 #include <QTableWidget>
@@ -61,7 +62,7 @@ Element convertCreation(const G4VPhysicalVolume *phys,
     m.matcode = idxs[mat];
     m.solid = log->GetSolid();
     m.visible = mat->GetDensity() > 0.1 * CLHEP::g / CLHEP::cm3;
-    m.alpha = 0.8;
+    m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
     m.ecode = *counter;
     (*counter)++;
 
@@ -228,36 +229,22 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         vb->addWidget(plane_edit[i], 0);
         connect(plane_edit[i], SIGNAL(updated()), this, SLOT(updatePlanes()));
     }
-    times_lower = new QDoubleSpinBox();
-    times_upper = new QDoubleSpinBox();
-    times_lower->setSuffix("ns");
-    times_upper->setSuffix("ns");
-    times_lower->setDecimals(3);
-    times_upper->setDecimals(3);
-    times_lower->setSingleStep(0.1);
-    times_upper->setSingleStep(0.1);
-    energy_lower = new ExpoSpinBox();
-    energy_upper = new ExpoSpinBox();
-    energy_lower->setSingleStep(10);
-    energy_upper->setSingleStep(10);
-    energy_lower->setSuffix("eV");
-    energy_upper->setSuffix("eV");
+    times_range = new HistogrammicRangeSlider(false);
+    times_range->setSuffix("ns");
+    energy_range = new HistogrammicRangeSlider(true);
+    energy_range->setSuffix("eV");
     count_lower = new QSpinBox();
     count_upper = new QSpinBox();
     if (which_tracks > 0) {
         const TrackRestriction &res = track_res_actual[which_tracks - 1];
-        times_lower->setRange(res.time.low / CLHEP::ns,
+        times_range->setRange(res.time.low / CLHEP::ns,
                               res.time.high / CLHEP::ns);
-        times_upper->setRange(res.time.low / CLHEP::ns,
+        times_range->setValue(res.time.low / CLHEP::ns,
                               res.time.high / CLHEP::ns);
-        times_lower->setValue(res.time.low / CLHEP::ns);
-        times_upper->setValue(res.time.high / CLHEP::ns);
-        int el = energy_lower->nearestIntFromExp(res.energy.low / CLHEP::eV);
-        int eh = energy_lower->nearestIntFromExp(res.energy.high / CLHEP::eV);
-        energy_lower->setRange(el, eh);
-        energy_upper->setRange(el, eh);
-        energy_lower->setValue(el);
-        energy_upper->setValue(eh);
+        energy_range->setRange(res.energy.low / CLHEP::eV,
+                               res.energy.high / CLHEP::eV);
+        energy_range->setValue(res.energy.low / CLHEP::eV,
+                               res.energy.high / CLHEP::eV);
         count_lower->setRange(1, int(res.seqno.high));
         count_upper->setRange(1, int(res.seqno.high));
         count_lower->setValue(0);
@@ -267,40 +254,35 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         count_lower->setSingleStep(step);
         count_upper->setSingleStep(step);
     } else {
-        times_lower->setDisabled(true);
-        times_upper->setDisabled(true);
-        energy_lower->setRange(0, 900 - 1);
-        energy_upper->setRange(0, 900 - 1);
-        energy_lower->setDisabled(true);
-        energy_upper->setDisabled(true);
+        times_range->setDisabled(true);
+        energy_range->setDisabled(true);
         count_lower->setDisabled(true);
         count_upper->setDisabled(true);
     }
     connect(count_lower, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
     connect(count_upper, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
-    connect(times_lower, SIGNAL(valueChanged(double)), this,
-            SLOT(updatePlanes()));
-    connect(times_upper, SIGNAL(valueChanged(double)), this,
-            SLOT(updatePlanes()));
-    connect(energy_lower, SIGNAL(valueChanged(int)), this,
-            SLOT(updatePlanes()));
-    connect(energy_upper, SIGNAL(valueChanged(int)), this,
-            SLOT(updatePlanes()));
-    QHBoxLayout *trb = new QHBoxLayout();
-    trb->addWidget(times_lower);
-    trb->addWidget(times_upper);
-    vb->addLayout(trb, 0);
-    QHBoxLayout *erb = new QHBoxLayout();
-    erb->addWidget(energy_lower);
-    erb->addWidget(energy_upper);
-    vb->addLayout(erb, 0);
+    connect(times_range, SIGNAL(valueChanged()), this, SLOT(updatePlanes()));
+    connect(energy_range, SIGNAL(valueChanged()), this, SLOT(updatePlanes()));
+    vb->addWidget(times_range);
+    vb->addWidget(energy_range);
+    times_range->setMaximumWidth(plane_edit[0]->sizeHint().width());
+    energy_range->setMaximumWidth(plane_edit[0]->sizeHint().width());
     QHBoxLayout *crb = new QHBoxLayout();
     crb->addWidget(count_lower);
     crb->addWidget(count_upper);
     vb->addLayout(crb, 0);
     vb->addStretch(1);
     cont->setLayout(vb);
-    dock_clip->setWidget(cont);
+    QScrollArea *asf = new QScrollArea();
+    asf->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    asf->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    asf->setWidget(cont);
+    asf->setWidgetResizable(true);
+    cont->setSizePolicy(
+        QSizePolicy(QSizePolicy::Maximum, QSizePolicy::Maximum));
+    asf->setSizePolicy(
+        QSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred));
+    dock_clip->setWidget(asf);
 
     // Tree view (with vis/novis, hue control
     dock_tree = new QDockWidget("Element tree", this);
@@ -313,6 +295,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     tree_view->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree_view->setIndentation(20);
     tree_view->collapseAll();
+    tree_view->expandToDepth(1);
     tree_view->header()->resizeSections(QHeaderView::ResizeToContents);
     tree_view->header()->setStretchLastSection(true);
     tree_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
@@ -400,6 +383,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
 
     setMouseTracking(true);
 
+    this->setMinimumSize(QSize(400, 400));
     this->show();
 }
 
@@ -560,12 +544,14 @@ void Viewer::updatePlanes() {
         }
     }
     if (which_tracks > 0) {
-        double tlow = times_lower->value() * CLHEP::ns;
-        double thigh = times_upper->value() * CLHEP::ns;
-        double elow =
-            energy_lower->expFromInt(energy_lower->value()) * CLHEP::eV;
-        double ehigh =
-            energy_upper->expFromInt(energy_upper->value()) * CLHEP::eV;
+        double tlow, thigh;
+        times_range->value(tlow, thigh);
+        tlow *= CLHEP::ns;
+        thigh *= CLHEP::ns;
+        double elow, ehigh;
+        energy_range->value(elow, ehigh);
+        elow *= CLHEP::eV;
+        ehigh *= CLHEP::eV;
         size_t nlow = size_t(count_lower->value());
         size_t nhigh = size_t(count_upper->value());
 
@@ -575,6 +561,13 @@ void Viewer::updatePlanes() {
         res.seqno = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
         trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
                               res.energy, res.seqno);
+        // Issue: we want marginal distributions, so must pass
+        // ranges into CRH
+        QVector<QPointF> ep, tp;
+        track_options[which_tracks - 1].constructRangeHistograms(
+            tp, ep, res.time, res.energy);
+        energy_range->setHistogram(ep);
+        times_range->setHistogram(tp);
     } else {
         // Q: how to pull QSharedData on the Elements as well
         trackdata = TrackData();
@@ -605,6 +598,7 @@ void Viewer::changeGeometry(QAction *act) {
                 }
                 tree_model->recalculate();
                 tree_view->collapseAll();
+                tree_view->expandToDepth(1);
                 indicateElement(NULL);
                 rwidget->rerender();
                 return;
@@ -625,28 +619,20 @@ void Viewer::changeTracks(QAction *act) {
     which_tracks = c;
     bool active = which_tracks > 0;
     if (active) {
-        times_lower->blockSignals(true);
-        times_upper->blockSignals(true);
-        energy_lower->blockSignals(true);
-        energy_upper->blockSignals(true);
+        times_range->blockSignals(true);
+        energy_range->blockSignals(true);
         count_lower->blockSignals(true);
         count_upper->blockSignals(true);
         const TrackRestriction &res = track_res_bounds[which_tracks - 1];
         const TrackRestriction &cur = track_res_actual[which_tracks - 1];
-        times_lower->setRange(res.time.low / CLHEP::ns,
+        times_range->setRange(res.time.low / CLHEP::ns,
                               res.time.high / CLHEP::ns);
-        times_upper->setRange(res.time.low / CLHEP::ns,
-                              res.time.high / CLHEP::ns);
-        times_lower->setValue(cur.time.low / CLHEP::ns);
-        times_upper->setValue(cur.time.high / CLHEP::ns);
-        int el = energy_lower->nearestIntFromExp(res.energy.low / CLHEP::eV);
-        int eh = energy_lower->nearestIntFromExp(res.energy.high / CLHEP::eV);
-        int cl = energy_lower->nearestIntFromExp(cur.energy.low / CLHEP::eV);
-        int ch = energy_lower->nearestIntFromExp(cur.energy.high / CLHEP::eV);
-        energy_lower->setRange(el, eh);
-        energy_upper->setRange(el, eh);
-        energy_lower->setValue(cl);
-        energy_upper->setValue(ch);
+        times_range->setValue(cur.time.low / CLHEP::ns,
+                              cur.time.high / CLHEP::ns);
+        energy_range->setRange(res.energy.low / CLHEP::eV,
+                               res.energy.high / CLHEP::eV);
+        energy_range->setValue(cur.energy.low / CLHEP::eV,
+                               cur.energy.high / CLHEP::eV);
         count_lower->setRange(1, int(res.seqno.high));
         count_upper->setRange(1, int(res.seqno.high));
         count_lower->setValue(int(cur.seqno.low));
@@ -655,17 +641,13 @@ void Viewer::changeTracks(QAction *act) {
             std::max(0, int(std::floor(std::log10(res.seqno.high / 15.)))));
         count_lower->setSingleStep(step);
         count_upper->setSingleStep(step);
-        times_lower->blockSignals(false);
-        times_upper->blockSignals(false);
-        energy_lower->blockSignals(false);
-        energy_upper->blockSignals(false);
+        times_range->blockSignals(false);
+        energy_range->blockSignals(false);
         count_lower->blockSignals(false);
         count_upper->blockSignals(false);
     }
-    times_lower->setEnabled(active);
-    times_upper->setEnabled(active);
-    energy_lower->setEnabled(active);
-    energy_upper->setEnabled(active);
+    times_range->setEnabled(active);
+    energy_range->setEnabled(active);
     count_lower->setEnabled(active);
     count_upper->setEnabled(active);
     updatePlanes();

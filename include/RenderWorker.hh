@@ -75,6 +75,8 @@ public:
     const LineCollection *getTree() const;
     void calcTimeBounds(double &lower, double &upper) const;
     void calcEnergyBounds(double &lower, double &upper) const;
+    void constructRangeHistograms(QVector<QPointF> &tp, QVector<QPointF> &ep,
+                                  const Range &tr, const Range &er) const;
 
 private:
     QSharedDataPointer<TrackPrivateData> data;

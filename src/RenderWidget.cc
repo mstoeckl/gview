@@ -5,6 +5,7 @@
 #include <QImageWriter>
 #include <QPainter>
 #include <QProgressDialog>
+#include <QResizeEvent>
 #include <QRunnable>
 #include <QThread>
 #include <QThreadPool>
@@ -103,12 +104,19 @@ void RenderWidget::aborted() {
     rerender_priv();
 }
 
-void RenderWidget::resizeEvent(QResizeEvent *) {
+void RenderWidget::resizeEvent(QResizeEvent *evt) {
+    if (evt->size().width() <= 0 || evt->size().height() <= 0) {
+        // Don't bother rendering empty images
+        return;
+    }
     currView.level_of_detail = 2;
     rerender_priv();
 }
 
 void RenderWidget::paintEvent(QPaintEvent *) {
+    if (this->height() <= 0 || this->width() <= 0) {
+        return;
+    }
     QPainter q(this);
     QRect sz = back->rect();
     QImage mvd;

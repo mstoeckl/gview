@@ -26,6 +26,7 @@ class OverView;
 class ExpoSpinBox;
 class RenderWidget;
 class InfoModel;
+class HistogrammicRangeSlider;
 
 typedef struct {
     G4String name;
@@ -85,10 +86,8 @@ private:
     QDockWidget *dock_ray;
     QDockWidget *dock_mtl;
     PlaneEdit *plane_edit[3];
-    QDoubleSpinBox *times_lower;
-    QDoubleSpinBox *times_upper;
-    ExpoSpinBox *energy_lower;
-    ExpoSpinBox *energy_upper;
+    HistogrammicRangeSlider *times_range;
+    HistogrammicRangeSlider *energy_range;
     QSpinBox *count_lower;
     QSpinBox *count_upper;
     QTreeView *tree_view;

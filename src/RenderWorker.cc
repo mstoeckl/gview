@@ -1007,6 +1007,110 @@ void TrackData::calcEnergyBounds(double &lower, double &upper) const {
     }
 }
 
+static std::map<float, int> mapdedup(const std::vector<float> &a) {
+    std::map<float, int> c;
+    for (float b : a) {
+        if (c.count(b)) {
+            c[b] += 1;
+        } else {
+            c[b] = 1;
+        }
+    }
+    return c;
+}
+
+static void constructRangeHistogram(const std::vector<float> &starts,
+                                    const std::vector<float> &ends,
+                                    const std::vector<float> &spikes,
+                                    QVector<QPointF> &pts) {
+    std::map<float, int> mup = mapdedup(starts);
+    std::map<float, int> mdown = mapdedup(ends);
+    std::map<float, int> mdelt = mapdedup(spikes);
+    mup[kInfinity] = 0;
+    mdown[kInfinity] = 0;
+    mdelt[kInfinity] = 0;
+    std::map<float, int>::iterator upiter = mup.begin();
+    std::map<float, int>::iterator downiter = mdown.begin();
+    std::map<float, int>::iterator deltaiter = mdelt.begin();
+    int height = 0;
+    while (upiter != mup.end() || downiter != mdown.end() ||
+           deltaiter != mdelt.end()) {
+        // Pick next from all three; add least point
+        std::pair<float, int> up = *upiter;
+        std::pair<float, int> down = *downiter;
+        std::pair<float, int> delta = *deltaiter;
+        // Casework by number of ties for first
+        float pos = std::min(up.first, std::min(down.first, delta.first));
+        if (pos >= kInfinity) {
+            break;
+        }
+
+        pts.push_back(QPointF(pos, height));
+        if (up.first == pos) {
+            height += up.second;
+            ++upiter;
+        }
+        if (delta.first == pos) {
+            pts.push_back(QPointF(pos, height + delta.second));
+            ++deltaiter;
+        }
+        if (down.first == pos) {
+            height -= down.second;
+            ++downiter;
+        }
+        pts.push_back(QPointF(pos, height));
+    }
+}
+
+void TrackData::constructRangeHistograms(QVector<QPointF> &tp,
+                                         QVector<QPointF> &ep, const Range &tr,
+                                         const Range &er) const {
+    TrackPoint *pts = data.constData()->points;
+    TrackHeader *headers = data.constData()->headers;
+    size_t nheaders = data.constData()->ntracks;
+    std::vector<float> tstarts, tends, tspikes;
+    std::vector<float> estarts, eends, espikes;
+    for (size_t i = 0; i < nheaders; i++) {
+        const TrackHeader &h = headers[i];
+        for (size_t j = i; j < i + h.npts - 1; j++) {
+            float ta = pts[j].time, tb = pts[j + 1].time;
+            float ea = pts[j].energy, eb = pts[j + 1].energy;
+            float stl = std::max(
+                0.f, (float(tr.low) - ta) / (ta == tb ? 1e38f : tb - ta));
+            float sth = std::min(
+                1.f, (float(tr.high) - ta) / (ta == tb ? 1e38f : tb - ta));
+            float sel = std::max(
+                0.f, (float(er.low) - ea) / (ea == eb ? 1e38f : eb - ea));
+            float seh = std::min(
+                1.f, (float(er.high) - ea) / (ea == eb ? 1e38f : eb - ea));
+            float cta, ctb, cea, ceb;
+            // restrict one by the other and vica versa
+            cta = sel * ta + (1 - sel) * tb;
+            ctb = (1 - seh) * ta + seh * tb;
+            cea = stl * ea + (1 - stl) * eb;
+            ceb = (1 - sth) * ea + sth * eb;
+            //            cta = ta;
+            //            ctb = tb;
+            //            cea = ea;
+            //            ceb = eb;
+            if (cta == ctb) {
+                //                tspikes.push_back(cta/CLHEP::ns);
+            } else {
+                tstarts.push_back(std::min(cta, ctb) / CLHEP::ns);
+                tends.push_back(std::max(cta, ctb) / CLHEP::ns);
+            }
+            if (cea == ceb) {
+                //                espikes.push_back(ea/CLHEP::eV);
+            } else {
+                estarts.push_back(std::min(cea, ceb) / CLHEP::eV);
+                eends.push_back(std::max(cea, ceb) / CLHEP::eV);
+            }
+        }
+    }
+    constructRangeHistogram(estarts, eends, espikes, ep);
+    constructRangeHistogram(tstarts, tends, tspikes, tp);
+}
+
 TrackPrivateData::TrackPrivateData(size_t itracks, size_t ipoints) {
     ntracks = itracks;
     npoints = ipoints;
