@@ -29,7 +29,7 @@ file(GLOB mainfiles ${PROJECT_SOURCE_DIR}/*.cc)
 foreach(mainf ${mainfiles})
     get_filename_component(main ${mainf} NAME_WE)
     add_executable(${main} ${mainf} $<TARGET_OBJECTS:_base>)
-    target_link_libraries(${main} ${Geant4_LIBRARIES})
+    target_link_libraries(${main} ${Geant4_LIBRARIES} Qt5::Widgets Qt5::Core Qt5::Gui)
     install(TARGETS ${main} DESTINATION bin)
 endforeach()
 
