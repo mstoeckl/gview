@@ -15,6 +15,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QCheckBox>
+#include <QCollator>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
@@ -34,6 +35,16 @@
 #include <QVBoxLayout>
 
 static const G4RotationMatrix identityRotation = G4RotationMatrix();
+
+static bool sortbyname(const Element &l, const Element &r) {
+    static QCollator coll;
+    coll.setNumericMode(true);
+
+    const char *lname = l.name ? l.name.data() : "";
+    const char *rname = r.name ? r.name.data() : "";
+    return coll.compare(lname, rname) < 0;
+}
+
 Element convertCreation(const G4VPhysicalVolume *phys,
                         std::map<const G4Material *, int> &idxs,
                         G4RotationMatrix rot = identityRotation,
@@ -71,6 +82,7 @@ Element convertCreation(const G4VPhysicalVolume *phys,
         m.children.push_back(
             convertCreation(log->GetDaughter(i), idxs, m.rot, counter));
     }
+    std::sort(m.children.begin(), m.children.end(), sortbyname);
     return m;
 }
 
@@ -561,13 +573,14 @@ void Viewer::updatePlanes() {
         res.seqno = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
         trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
                               res.energy, res.seqno);
-        // Issue: we want marginal distributions, so must pass
-        // ranges into CRH
-        QVector<QPointF> ep, tp;
-        track_options[which_tracks - 1].constructRangeHistograms(
-            tp, ep, res.time, res.energy);
-        energy_range->setHistogram(ep);
-        times_range->setHistogram(tp);
+        if (0) {
+            // Temp disabled on grounds of lag
+            QVector<QPointF> ep, tp;
+            track_options[which_tracks - 1].constructRangeHistograms(
+                tp, ep, res.time, res.energy);
+            energy_range->setHistogram(ep);
+            times_range->setHistogram(tp);
+        }
     } else {
         // Q: how to pull QSharedData on the Elements as well
         trackdata = TrackData();
