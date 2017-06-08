@@ -19,6 +19,7 @@ class QPushButton;
 class QListWidget;
 class QSpinBox;
 class QCheckBox;
+class QLabel;
 class QTableView;
 
 class PlaneEdit;
@@ -101,6 +102,7 @@ private:
     QTableView *mtl_table;
     QMenu *gpicker_menu;
     QMenu *tpicker_menu;
+    QLabel *linecount_label;
 
     QPoint clickpt;
     QPoint lastpt;

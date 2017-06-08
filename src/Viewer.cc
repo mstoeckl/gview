@@ -22,6 +22,7 @@
 #include <QGridLayout>
 #include <QHeaderView>
 #include <QItemSelection>
+#include <QLabel>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QPair>
@@ -283,6 +284,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     crb->addWidget(count_lower);
     crb->addWidget(count_upper);
     vb->addLayout(crb, 0);
+    linecount_label = new QLabel("Lines: 0");
+    vb->addWidget(linecount_label);
     vb->addStretch(1);
     cont->setLayout(vb);
     QScrollArea *asf = new QScrollArea();
@@ -585,6 +588,7 @@ void Viewer::updatePlanes() {
         // Q: how to pull QSharedData on the Elements as well
         trackdata = TrackData();
     }
+    linecount_label->setText(QString("Lines: %1").arg(trackdata.getNTracks()));
     rwidget->rerender();
 }
 
