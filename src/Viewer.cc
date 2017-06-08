@@ -191,6 +191,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     mtlAction->setToolTip("Control material view properties");
     connect(mtlAction, SIGNAL(triggered()), this, SLOT(restMtl()));
 
+    QAction *oriAction = new QAction("Orientation");
+    oriAction->setToolTip("Select a camera direction");
+    connect(oriAction, SIGNAL(triggered()), this, SLOT(restOrient()));
+
     QAction *screenAction = new QAction("Screenshot");
     screenAction->setToolTip("Take a screenshot of active scene");
     connect(screenAction, SIGNAL(triggered()), this, SLOT(screenshot()));
@@ -218,6 +222,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     sub->addAction(infoAction);
     sub->addAction(rayAction);
     sub->addAction(mtlAction);
+    sub->addAction(oriAction);
     this->menuBar()->addSeparator();
     this->menuBar()->addAction(screenAction);
     this->menuBar()->addAction(screen4Action);
@@ -368,6 +373,53 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     mtlc->setLayout(mla);
     dock_mtl->setWidget(mtlc);
 
+    dock_orient = new QDockWidget("Orientation", this);
+    QPushButton *orp1 = new QPushButton("X+");
+    QPushButton *orp2 = new QPushButton("Y+");
+    QPushButton *orp3 = new QPushButton("Z+");
+    QPushButton *orm1 = new QPushButton("X-");
+    QPushButton *orm2 = new QPushButton("Y-");
+    QPushButton *orm3 = new QPushButton("Z-");
+    QPushButton *orr1 = new QPushButton("+45");
+    QPushButton *orr2 = new QPushButton("-45");
+    QHBoxLayout *prow = new QHBoxLayout();
+    QSignalMapper *sqm = new QSignalMapper();
+    connect(sqm, SIGNAL(mapped(int)), this, SLOT(setViewRotation(int)));
+    sqm->setMapping(orp1, 0);
+    sqm->setMapping(orp2, 1);
+    sqm->setMapping(orp3, 2);
+    sqm->setMapping(orm1, 3);
+    sqm->setMapping(orm2, 4);
+    sqm->setMapping(orm3, 5);
+    sqm->setMapping(orr1, 6);
+    sqm->setMapping(orr2, 7);
+    connect(orp1, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orp2, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orp3, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orm1, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orm2, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orm3, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orr1, SIGNAL(clicked()), sqm, SLOT(map()));
+    connect(orr2, SIGNAL(clicked()), sqm, SLOT(map()));
+    prow->addWidget(orp1);
+    prow->addWidget(orp2);
+    prow->addWidget(orp3);
+    QHBoxLayout *mrow = new QHBoxLayout();
+    mrow->addWidget(orm1);
+    mrow->addWidget(orm2);
+    mrow->addWidget(orm3);
+    QHBoxLayout *rrow = new QHBoxLayout();
+    rrow->addWidget(orr1);
+    rrow->addWidget(orr2);
+    QVBoxLayout *vbr = new QVBoxLayout();
+    vbr->addLayout(prow, 0);
+    vbr->addLayout(mrow, 0);
+    vbr->addLayout(rrow, 0);
+    vbr->addStretch(5);
+    QWidget *ornt = new QWidget();
+    ornt->setLayout(vbr);
+    dock_orient->setWidget(ornt);
+
     QDockWidget::DockWidgetFeatures feat = QDockWidget::DockWidgetClosable |
                                            QDockWidget::DockWidgetMovable |
                                            QDockWidget::DockWidgetFloatable;
@@ -396,6 +448,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_mtl->setFeatures(feat);
     dock_mtl->setVisible(false);
 
+    addDockWidget(Qt::LeftDockWidgetArea, dock_orient);
+    dock_orient->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock_orient->setFeatures(feat);
+    dock_orient->setVisible(false);
+
     setMouseTracking(true);
 
     this->setMinimumSize(QSize(400, 400));
@@ -409,6 +466,7 @@ void Viewer::restTree() { dock_tree->setVisible(true); }
 void Viewer::restInfo() { dock_info->setVisible(true); }
 void Viewer::restRay() { dock_ray->setVisible(true); }
 void Viewer::restMtl() { dock_mtl->setVisible(true); }
+void Viewer::restOrient() { dock_orient->setVisible(true); }
 
 void Viewer::keyPressEvent(QKeyEvent *event) {
     G4double mvd = 0.1;
@@ -818,4 +876,35 @@ void Viewer::openTracks() {
     } else {
         qDebug("File not a track data file!");
     }
+}
+
+void Viewer::setViewRotation(int sel) {
+    if (sel < 6) {
+        const CLHEP::Hep3Vector atv[6] = {
+            G4ThreeVector(1, 0, 0),  G4ThreeVector(0, 1, 0),
+            G4ThreeVector(0, 0, 1),  G4ThreeVector(-1, 0, 0),
+            G4ThreeVector(0, -1, 0), G4ThreeVector(0, 0, -1)};
+        const CLHEP::Hep3Vector upv[6] = {
+            G4ThreeVector(0, 1, 0),  G4ThreeVector(0, 0, 1),
+            G4ThreeVector(1, 0, 0),  G4ThreeVector(0, -1, 0),
+            G4ThreeVector(0, 0, -1), G4ThreeVector(-1, 0, 0)};
+        G4ThreeVector a = atv[sel];
+        G4ThreeVector b = upv[sel];
+        G4ThreeVector c = atv[sel].cross(upv[sel]);
+        vd.orientation = CLHEP::HepRotation(a, b, c).inverse();
+        vd.camera = -a * 2 * vd.scale;
+    } else {
+        G4RotationMatrix rot;
+        if (sel == 6) {
+            rot = CLHEP::HepRotationX(CLHEP::pi / 4);
+        } else {
+            rot = CLHEP::HepRotationX(-CLHEP::pi / 4);
+        }
+        vd.camera =
+            (vd.orientation.inverse() * rot.inverse() * vd.orientation) *
+            vd.camera;
+        vd.orientation = rot * vd.orientation;
+    }
+
+    rwidget->rerender();
 }

@@ -58,6 +58,7 @@ public slots:
     void restInfo();
     void restRay();
     void restMtl();
+    void restOrient();
     void updatePlanes();
     void updateMaterials();
     void updateShowLines();
@@ -68,6 +69,7 @@ public slots:
     void rayLookup();
     void openGeometry();
     void openTracks();
+    void setViewRotation(int);
 
 private:
     void reloadChoiceMenus();
@@ -86,6 +88,7 @@ private:
     QDockWidget *dock_info;
     QDockWidget *dock_ray;
     QDockWidget *dock_mtl;
+    QDockWidget *dock_orient;
     PlaneEdit *plane_edit[3];
     HistogrammicRangeSlider *times_range;
     HistogrammicRangeSlider *energy_range;
