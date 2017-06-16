@@ -11,6 +11,7 @@ class QTableView;
 class QVBoxLayout;
 class QPushButton;
 class QLabel;
+class QListWidget;
 
 typedef struct {
     double inflow_val;
@@ -19,6 +20,28 @@ typedef struct {
     double deposit_err;
     long nsamples;
 } FlowData;
+
+class NameSelector : public QWidget {
+    Q_OBJECT
+public:
+    NameSelector(QString label, QWidget *parent = Q_NULLPTR);
+    ~NameSelector();
+
+    void setNames(const QSet<QString> &);
+    QSet<QString> getSelected();
+signals:
+    void selectionChanged();
+public slots:
+    void clear();
+private slots:
+    void addElement(int);
+
+private:
+    QList<QString> names;
+    QComboBox *search;
+    QPushButton *wipe;
+    QListWidget *collected;
+};
 
 class ColorConfig : public QWidget {
     Q_OBJECT
@@ -64,5 +87,8 @@ private:
     QLabel *flow_label;
     QMap<QStringList, FlowData> flow_db;
     QSet<QString> flow_names;
+    NameSelector *flow_target;
+    NameSelector *flow_skip;
+    NameSelector *flow_require;
     long flow_base_n;
 };

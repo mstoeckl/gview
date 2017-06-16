@@ -39,6 +39,7 @@ InfoModel::InfoModel() {
          << "Current color with which the object is displayed";
     tooltips = tool.toVector();
     vals = QVector<QString>(opts.size());
+    col = QColor(Qt::white);
 }
 InfoModel::~InfoModel() {}
 
