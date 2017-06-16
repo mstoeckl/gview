@@ -309,7 +309,7 @@ int compressTraces(const Element *hits[], Intersection ints[], int m) {
     // 001122334  =>  0022334
     // |x|x|y|x|  =>  |x|y|x|
     for (int i = 0; i < n; i++) {
-        if (i == 0 || hits[i]->matcode != hits[i - 1]->matcode ||
+        if (i == 0 || hits[i]->ccode != hits[i - 1]->ccode ||
             hits[i]->visible != hits[i - 1]->visible) {
             hits[p] = hits[i];
             ints[p] = ints[i];
@@ -329,13 +329,15 @@ int compressTraces(const Element *hits[], Intersection ints[], int m) {
 }
 
 static QRgb colorMap(const G4ThreeVector &normal, const G4ThreeVector &forward,
-                     G4double hue, G4double dist) {
+                     const QColor &base, G4double dist) {
     // Opposed normals (i.e, for transp backsides) are mirrored
     G4double cx = 0.7 * std::abs(std::acos(-normal * forward) / CLHEP::pi);
-    cx = std::max(0.0, std::min(1.0, cx));
-    // note: need faster, less crashy hsv->rgb
+    cx = 1.0 - std::max(0.0, std::min(1.0, cx));
     Q_UNUSED(dist);
-    return QColor::fromHsvF(hue, 1.0, 1.0 - cx).rgb();
+
+    return QColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
+                            cx * base.blueF())
+        .rgb();
 }
 
 void countTree(const Element &e, int &treedepth, int &nelements) {
@@ -482,8 +484,7 @@ void RenderRayTask::run() {
                             1.0 * radius * d.scale /
                             std::abs(-altints[l].normal * d.orientation.rowX());
                         bool diffmatbehind =
-                            ((l < cm) &&
-                             althits[l]->matcode != hits[l]->matcode);
+                            ((l < cm) && althits[l]->ccode != hits[l]->ccode);
                         bool edgediff =
                             (std::abs(altints[l].normal * ints[l].normal) <
                                  0.3 || // Q: abs?
@@ -531,10 +532,9 @@ void RenderRayTask::run() {
             // (p<0 indicates the line dominates)
             for (int k = p; k >= 0; --k) {
                 // We use the intersection before the volume
-                const MaterialInfo &matinfo =
-                    d.matinfo[size_t(hits[k]->matcode)];
+                const QColor &base_color = d.color_table[hits[k]->ccode];
                 QRgb altcol = colorMap(ints[k].normal, d.orientation.rowX(),
-                                       matinfo.hue, ints[k].dist);
+                                       base_color, ints[k].dist);
                 double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
                 if (!hits[k]->visible) {
                     continue;

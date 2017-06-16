@@ -5,6 +5,7 @@
 #include <G4RotationMatrix.hh>
 #include <G4ThreeVector.hh>
 
+#include <QColor>
 #include <QObject>
 #include <QRgb>
 #include <QSharedData>
@@ -94,11 +95,12 @@ typedef struct Element_s {
     G4ThreeVector offset;
     G4RotationMatrix rot;
 
-    G4VSolid *solid;
+    const G4VSolid *solid;
+    const G4Material *material;
 
-    // To index element mutables and material properties
+    // To index element mutables and color properties
     int ecode;
-    int matcode;
+    int ccode;
 
     // Is rotation matrix nontrivial
     bool rotated;
@@ -121,11 +123,6 @@ typedef struct Element_s {
     std::vector<struct Element_s> children;
 } Element;
 
-typedef struct {
-    const G4Material *mtl;
-    double hue;
-} MaterialInfo;
-
 typedef struct ViewData_s {
     // What is being viewed
     Element elements;
@@ -136,8 +133,7 @@ typedef struct ViewData_s {
     std::vector<Plane> clipping_planes;
     G4double scale;
     G4double scene_radius;
-    std::vector<MaterialInfo> matinfo;
-    std::map<const G4Material *, int> matcode_map;
+    std::vector<QColor> color_table;
     bool split_by_material;
     // Simplification level
     int level_of_detail;

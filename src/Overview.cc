@@ -20,7 +20,8 @@ InfoModel::InfoModel() {
          << "Surface Area"
          << "Bool roots"
          << "Bool depth"
-         << "Bool splits";
+         << "Bool splits"
+         << "Color";
     opts = keys.toVector();
     QStringList tool;
     tool << "Element name (from physical volume)"
@@ -34,7 +35,8 @@ InfoModel::InfoModel() {
          << "Depth of the boolean solid tree (incl. displacements) for this "
             "element"
          << "Number of boolean operations (counting duplicates) in boolean "
-            "solid tree";
+            "solid tree"
+         << "Current color with which the object is displayed";
     tooltips = tool.toVector();
     vals = QVector<QString>(opts.size());
 }
@@ -42,7 +44,7 @@ InfoModel::~InfoModel() {}
 
 void calculateBooleanProperties(const G4VSolid *sol,
                                 QSet<const G4VSolid *> &roots, int &treedepth,
-                                int &nbooleans, int depth = 0) {
+                                int &nbooleans, int depth) {
     const G4BooleanSolid *b = dynamic_cast<const G4BooleanSolid *>(sol);
     treedepth = std::max(treedepth, depth);
     if (b) {
@@ -65,18 +67,19 @@ void calculateBooleanProperties(const G4VSolid *sol,
 void InfoModel::setElement(const Element *e, const ViewData &vd) {
     if (!e) {
         vals = QVector<QString>(opts.size());
+        col = QColor(Qt::white);
     } else {
         // fill info table
         vals[0] = e->name;
-        const G4Material *mat = vd.matinfo[size_t(e->matcode)].mtl;
+        const G4Material *mat = e->material;
         vals[1] = mat->GetName();
         G4double dens = mat->GetDensity();
         vals[2] =
             QString::number(dens / (CLHEP::g / CLHEP::cm3), 'g', 4) + " g/cm3";
-        G4double volume = e->solid->GetCubicVolume();
+        G4double volume = const_cast<G4VSolid *>(e->solid)->GetCubicVolume();
         vals[3] = QString::number(volume / CLHEP::cm3, 'g', 4) + " cm3";
         vals[4] = QString::number(volume * dens / CLHEP::kg, 'g', 4) + " kg";
-        G4double surf = e->solid->GetSurfaceArea();
+        G4double surf = const_cast<G4VSolid *>(e->solid)->GetSurfaceArea();
         vals[5] = QString::number(surf / CLHEP::cm2, 'g', 4) + " cm2";
 
         QSet<const G4VSolid *> roots;
@@ -86,6 +89,7 @@ void InfoModel::setElement(const Element *e, const ViewData &vd) {
         vals[6] = QString::number(roots.size());
         vals[7] = QString::number(treedepth);
         vals[8] = QString::number(nbooleans);
+        col = vd.color_table[e->ccode];
     }
     QVector<int> roles;
     roles.push_back(Qt::DisplayRole);
@@ -100,9 +104,19 @@ QVariant InfoModel::data(const QModelIndex &index, int role) const {
     // Assume only valid indices...
     if (role == Qt::DisplayRole) {
         if (index.column() == 0) {
-            return QVariant(vals[index.row()]);
+            if (index.row() != 9) {
+                return QVariant(vals[index.row()]);
+            } else {
+                return QVariant("");
+            }
         }
     }
+    if (index.row() == 9 && index.column() == 0) {
+        if (role == Qt::BackgroundColorRole) {
+            return QVariant(col);
+        }
+    }
+
     return QVariant();
 }
 bool InfoModel::setData(const QModelIndex &, const QVariant &, int) {
@@ -176,14 +190,14 @@ void HueSpinBoxDelegate::updateEditorGeometry(
     editor->setGeometry(option.rect);
 }
 
-MaterialModel::MaterialModel(ViewData &c) : currView(c) {
-    // calculate on/off corresponding to current element tree ?
-}
+MaterialModel::MaterialModel(std::vector<QColor> &c,
+                             std::vector<const G4Material *> &m)
+    : colors(c), materials(m) {}
 
 MaterialModel::~MaterialModel() {}
 
 int MaterialModel::rowCount(const QModelIndex &) const {
-    return int(currView.matinfo.size());
+    return int(colors.size());
 }
 int MaterialModel::columnCount(const QModelIndex &) const { return 1; }
 QVariant MaterialModel::data(const QModelIndex &index, int role) const {
@@ -191,22 +205,23 @@ QVariant MaterialModel::data(const QModelIndex &index, int role) const {
         return QVariant();
     }
     int r = index.row();
-    const MaterialInfo &m = currView.matinfo[size_t(r)];
+    qreal hue = 0., sat = 0., light = 0.;
+    colors[size_t(r)].getHslF(&hue, &sat, &light);
 
     // Assume only valid indices...
     if (role == Qt::DisplayRole) {
         if (index.column() == 0) {
-            return QVariant(QString::number(m.hue, 'f', 2));
+            return QVariant(QString::number(hue, 'f', 2));
         }
     }
     if (role == Qt::BackgroundColorRole) {
         if (index.column() == 0) {
-            return QVariant(QColor::fromHslF(m.hue, 0.5, 0.7));
+            return QVariant(QColor::fromHslF(hue, 0.5, 0.7));
         }
     }
     if (role == Qt::EditRole) {
         if (index.column() == 0) {
-            return QVariant(m.hue);
+            return QVariant(hue);
         }
     }
     return QVariant();
@@ -219,7 +234,7 @@ bool MaterialModel::setData(const QModelIndex &index, const QVariant &value,
     int r = index.row();
     if (role == Qt::EditRole) {
         if (index.column() == 0) {
-            currView.matinfo[size_t(r)].hue = value.toDouble();
+            colors[size_t(r)] = QColor::fromHslF(value.toDouble(), 1, 0.5);
             QVector<int> roles;
             roles.push_back(Qt::DisplayRole);
             emit dataChanged(index, index, roles);
@@ -238,7 +253,12 @@ QVariant MaterialModel::headerData(int section, Qt::Orientation orientation,
     if (orientation == Qt::Horizontal) {
         return QVariant("Hue");
     }
-    return QVariant(currView.matinfo[size_t(section)].mtl->GetName().data());
+    const G4Material *m = materials[size_t(section)];
+    if (m) {
+        return QVariant(m->GetName().data());
+    } else {
+        return QVariant("(null)");
+    }
 }
 Qt::ItemFlags MaterialModel::flags(const QModelIndex &) const {
     return Qt::ItemIsEditable | Qt::ItemIsEnabled | Qt::ItemIsSelectable;
@@ -249,7 +269,7 @@ void MaterialModel::hueUpdate(QWidget *w) {
         return;
     }
     int row = e->maximumHeight() - 1000;
-    currView.matinfo[size_t(row)].hue = e->value();
+    colors[size_t(row)] = QColor::fromHslF(e->value(), 1, 0.5);
     QModelIndex idx = index(row, 0);
     QVector<int> roles;
     roles.push_back(Qt::EditRole);
@@ -425,7 +445,6 @@ QVariant OverView::data(const QModelIndex &index, int role) const {
                                              (3. + n.elem->alpha) / 4.));
         }
     }
-
     return QVariant();
 }
 bool OverView::setData(const QModelIndex &index, const QVariant &value,

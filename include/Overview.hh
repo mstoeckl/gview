@@ -9,6 +9,12 @@ typedef struct ViewData_s ViewData;
 class OverView;
 class MaterialModel;
 class QItemSelection;
+class G4Material;
+class G4VSolid;
+
+void calculateBooleanProperties(const G4VSolid *sol,
+                                QSet<const G4VSolid *> &roots, int &treedepth,
+                                int &nbooleans, int depth = 0);
 
 class InfoModel : public QAbstractTableModel {
     Q_OBJECT
@@ -30,6 +36,7 @@ private:
     QVector<QString> opts;
     QVector<QString> tooltips;
     QVector<QString> vals;
+    QColor col;
 };
 
 class HueSpinBoxDelegate : public QItemDelegate {
@@ -56,7 +63,8 @@ private:
 class MaterialModel : public QAbstractTableModel {
     Q_OBJECT
 public:
-    MaterialModel(ViewData &c);
+    MaterialModel(std::vector<QColor> &colors,
+                  std::vector<const G4Material *> &materials);
     virtual ~MaterialModel();
 
     virtual int rowCount(const QModelIndex &p = QModelIndex()) const;
@@ -74,7 +82,8 @@ public slots:
     void hueUpdate(QWidget *);
 
 private:
-    ViewData_s &currView;
+    std::vector<QColor> &colors;
+    std::vector<const G4Material *> &materials;
 };
 
 class AlphaBoxDelegate : public QItemDelegate {

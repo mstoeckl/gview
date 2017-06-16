@@ -21,6 +21,7 @@ class QSpinBox;
 class QCheckBox;
 class QLabel;
 class QTableView;
+class ColorConfig;
 
 class PlaneEdit;
 class OverView;
@@ -57,10 +58,10 @@ public slots:
     void restTree();
     void restInfo();
     void restRay();
-    void restMtl();
+    void restColor();
     void restOrient();
     void updatePlanes();
-    void updateMaterials();
+    void updateColors();
     void updateShowLines();
     void screenshot(int sx = 1);
     void changeGeometry(QAction *);
@@ -87,7 +88,7 @@ private:
     QDockWidget *dock_tree;
     QDockWidget *dock_info;
     QDockWidget *dock_ray;
-    QDockWidget *dock_mtl;
+    QDockWidget *dock_color;
     QDockWidget *dock_orient;
     PlaneEdit *plane_edit[3];
     HistogrammicRangeSlider *times_range;
@@ -100,9 +101,9 @@ private:
     InfoModel *info_model;
     QListWidget *ray_table;
     QVector<const Element *> ray_list;
-    QCheckBox *mtl_divchk;
     QCheckBox *mtl_showlines;
-    QTableView *mtl_table;
+    ColorConfig *color_config;
+
     QMenu *gpicker_menu;
     QMenu *tpicker_menu;
     QLabel *linecount_label;

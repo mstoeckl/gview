@@ -1,5 +1,6 @@
 #include "Viewer.hh"
 
+#include "ColorConfig.hh"
 #include "CustomWidgets.hh"
 #include "Overview.hh"
 #include "RenderWidget.hh"
@@ -47,7 +48,6 @@ static bool sortbyname(const Element &l, const Element &r) {
 }
 
 Element convertCreation(const G4VPhysicalVolume *phys,
-                        std::map<const G4Material *, int> &idxs,
                         G4RotationMatrix rot = identityRotation,
                         int *counter = NULL) {
     int cc = 0;
@@ -71,7 +71,8 @@ Element convertCreation(const G4VPhysicalVolume *phys,
 
     const G4LogicalVolume *log = phys->GetLogicalVolume();
     const G4Material *mat = log->GetMaterial();
-    m.matcode = idxs[mat];
+    m.ccode = 0;
+    m.material = mat;
     m.solid = log->GetSolid();
     m.visible = mat->GetDensity() > 0.1 * CLHEP::g / CLHEP::cm3;
     m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
@@ -81,7 +82,7 @@ Element convertCreation(const G4VPhysicalVolume *phys,
     m.children = std::vector<Element>();
     for (int i = 0; i < log->GetNoDaughters(); i++) {
         m.children.push_back(
-            convertCreation(log->GetDaughter(i), idxs, m.rot, counter));
+            convertCreation(log->GetDaughter(i), m.rot, counter));
     }
     std::sort(m.children.begin(), m.children.end(), sortbyname);
     return m;
@@ -127,17 +128,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
             QString(g->GetName().data()), g));
     }
     qStableSort(mlist);
-    int k = 0;
-    vd.matinfo = std::vector<MaterialInfo>();
+    std::vector<const G4Material *> mtl_list;
     for (const QPair<QString, const G4Material *> &p : mlist) {
-        MaterialInfo mi;
-        mi.mtl = p.second;
-        mi.hue = rand() / float(RAND_MAX - 1);
-        vd.matinfo.push_back(mi);
-        vd.matcode_map[p.second] = k;
-        k++;
+        mtl_list.push_back(p.second);
     }
-    vd.elements = convertCreation(geo_options[which_geo].vol, vd.matcode_map);
+    vd.elements = convertCreation(geo_options[which_geo].vol);
     vd.scene_radius = vd.elements.solid->GetExtent().GetExtentRadius();
     vd.scale = 2 * vd.scene_radius;
     vd.camera = G4ThreeVector(-4 * vd.scene_radius, 0, 0);
@@ -187,9 +182,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     rayAction->setToolTip("List currently-hovered-over visible objects");
     connect(rayAction, SIGNAL(triggered()), this, SLOT(restRay()));
 
-    QAction *mtlAction = new QAction("Material");
-    mtlAction->setToolTip("Control material view properties");
-    connect(mtlAction, SIGNAL(triggered()), this, SLOT(restMtl()));
+    QAction *mtlAction = new QAction("Color");
+    mtlAction->setToolTip("Control volume colors");
+    connect(mtlAction, SIGNAL(triggered()), this, SLOT(restColor()));
 
     QAction *oriAction = new QAction("Orientation");
     oriAction->setToolTip("Select a camera direction");
@@ -347,31 +342,20 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_ray->setWidget(ray_table);
     connect(ray_table, SIGNAL(itemSelectionChanged()), this, SLOT(rayLookup()));
 
-    dock_mtl = new QDockWidget("Materials", this);
+    dock_color = new QDockWidget("Color", this);
     QWidget *mtlc = new QWidget();
     QVBoxLayout *mla = new QVBoxLayout();
-    mtl_divchk = new QCheckBox("Split by material");
-    mtl_divchk->setCheckState(vd.split_by_material ? Qt::Checked
-                                                   : Qt::Unchecked);
-    connect(mtl_divchk, SIGNAL(stateChanged(int)), this,
-            SLOT(updateMaterials()));
     mtl_showlines = new QCheckBox("Render lines");
     mtl_showlines->setCheckState(Qt::Unchecked);
     connect(mtl_showlines, SIGNAL(stateChanged(int)), this,
             SLOT(updateShowLines()));
-    mtl_table = new QTableView();
-    mtl_table->setSelectionBehavior(QAbstractItemView::SelectItems);
-    mtl_table->setSelectionMode(QAbstractItemView::NoSelection);
-    MaterialModel *mmod = new MaterialModel(vd);
-    mtl_table->setModel(mmod);
-    mtl_table->horizontalHeader()->setStretchLastSection(true);
-    mtl_table->setItemDelegateForColumn(0, new HueSpinBoxDelegate(mmod));
-    connect(mmod, SIGNAL(colorChange()), this, SLOT(updateMaterials()));
-    mla->addWidget(mtl_divchk);
+    color_config = new ColorConfig(vd, mtl_list);
+    color_config->reassignColors();
+    connect(color_config, SIGNAL(colorChange()), this, SLOT(updateColors()));
     mla->addWidget(mtl_showlines);
-    mla->addWidget(mtl_table);
+    mla->addWidget(color_config);
     mtlc->setLayout(mla);
-    dock_mtl->setWidget(mtlc);
+    dock_color->setWidget(mtlc);
 
     dock_orient = new QDockWidget("Orientation", this);
     QPushButton *orp1 = new QPushButton("X+");
@@ -443,10 +427,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_ray->setFeatures(feat);
     dock_ray->setVisible(false);
 
-    addDockWidget(Qt::LeftDockWidgetArea, dock_mtl);
-    dock_mtl->setAllowedAreas(Qt::AllDockWidgetAreas);
-    dock_mtl->setFeatures(feat);
-    dock_mtl->setVisible(false);
+    addDockWidget(Qt::LeftDockWidgetArea, dock_color);
+    dock_color->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock_color->setFeatures(feat);
+    dock_color->setVisible(false);
 
     addDockWidget(Qt::LeftDockWidgetArea, dock_orient);
     dock_orient->setAllowedAreas(Qt::AllDockWidgetAreas);
@@ -465,7 +449,7 @@ void Viewer::restClip() { dock_clip->setVisible(true); }
 void Viewer::restTree() { dock_tree->setVisible(true); }
 void Viewer::restInfo() { dock_info->setVisible(true); }
 void Viewer::restRay() { dock_ray->setVisible(true); }
-void Viewer::restMtl() { dock_mtl->setVisible(true); }
+void Viewer::restColor() { dock_color->setVisible(true); }
 void Viewer::restOrient() { dock_orient->setVisible(true); }
 
 void Viewer::keyPressEvent(QKeyEvent *event) {
@@ -650,9 +634,9 @@ void Viewer::updatePlanes() {
     rwidget->rerender();
 }
 
-void Viewer::updateMaterials() {
-    vd.split_by_material = mtl_divchk->isChecked();
-    // Model autoupdates others
+void Viewer::updateColors() {
+    // ColorConfig handles ViewData updates
+    color_config->reassignColors();
     rwidget->rerender();
 }
 
@@ -664,13 +648,13 @@ void Viewer::changeGeometry(QAction *act) {
             if (which_geo != i) {
                 // Change geometry
                 which_geo = i;
-                vd.elements =
-                    convertCreation(geo_options[which_geo].vol, vd.matcode_map);
+                vd.elements = convertCreation(geo_options[which_geo].vol);
                 vd.scene_radius =
                     vd.elements.solid->GetExtent().GetExtentRadius();
                 if (4 * vd.scene_radius > vd.camera.mag()) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
+                color_config->reassignColors();
                 tree_model->recalculate();
                 tree_view->collapseAll();
                 tree_view->expandToDepth(1);
