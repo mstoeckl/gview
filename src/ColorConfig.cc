@@ -292,25 +292,71 @@ void recsetMatchColors(Element &e, const QSet<QString> &n) {
     }
 }
 
-void recsetFlowColors(Element &e, const QSet<QString> &names,
-                      const QMap<QStringList, FlowData> &flows,
-                      const QSet<QString> &targets, const QSet<QString> &skip,
-                      const QSet<QString> &reqd, double total,
+class SortedStaticArraySet {
+public:
+    /* Very efficient for a small number of total elements
+     * Alternatively, use sorted unique arrays */
+    SortedStaticArraySet(const QVector<short> &in, short code_max) {
+        sz = code_max;
+        buf = new uint8_t[code_max];
+        setSet(in);
+    }
+    SortedStaticArraySet(short code_max) {
+        sz = code_max;
+        buf = new uint8_t[code_max];
+    }
+    void setSet(const QVector<short> &in) {
+        memset(buf, 0, sz * sizeof(uint8_t));
+        for (short s : in) {
+            buf[s] = 1;
+        }
+    }
+    ~SortedStaticArraySet() { delete[] buf; }
+    bool contains(short e) const { return buf[e] > 0; }
+    bool contains(const SortedStaticArraySet &e) const {
+        for (int i = 0; i < sz; i++) {
+            if (e.buf[i] && !buf[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+    bool intersects(const SortedStaticArraySet &e) const {
+        for (int i = 0; i < sz; i++) {
+            if (e.buf[i] && buf[i]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+private:
+    uint8_t *buf;
+    int sz;
+};
+
+void recsetFlowColors(Element &e, const QMap<QString, short> &names,
+                      const QVector<QPair<QVector<short>, FlowData>> &flows,
+                      const SortedStaticArraySet &targets,
+                      const SortedStaticArraySet &skip,
+                      const SortedStaticArraySet &reqd, double total,
                       std::vector<QColor> &colors) {
-    /* todo: develop short code intermediates & dual list-string handling
-       for keys, to speed this all up*/
-    QString label(e.name.data());
+    /* todo: speed up ! */
+    QString lstr(e.name.data());
+    short label = -1;
+    if (names.count(lstr)) {
+        label = names[lstr];
+    }
     if (skip.contains(label)) {
         e.ccode = 1;
-    } else if (names.contains(label)) {
+    } else if (label > 0) {
         double tv = 0;
-        for (const QStringList p : flows.keys()) {
-            if (targets.contains(p.last())) {
-                QSet<QString> sset = p.toSet();
-                if (!sset.intersects(skip) && sset.contains(reqd) &&
-                    sset.contains(label)) {
-                    tv += flows[p].deposit_val;
-                }
+        SortedStaticArraySet as(names.size());
+        for (const QPair<QVector<short>, FlowData> &p : flows) {
+            as.setSet(p.first);
+            if (targets.contains(p.first.last()) && as.contains(label) &&
+                !as.intersects(skip) && as.contains(reqd)) {
+                tv += p.second.deposit_val;
             }
         }
         /* span 5 orders of magnitude */
@@ -372,16 +418,37 @@ void ColorConfig::reassignColors() {
         delete[] vals;
     } break;
     case ColorFromFlowmap: {
-        QSet<QString> targets = flow_target->getSelected();
-        QSet<QString> skip = flow_skip->getSelected();
-        QSet<QString> req = flow_require->getSelected();
+        QMap<QString, short> cmap;
+        for (QString s : flow_names) {
+            cmap[s] = cmap.size();
+        }
+
+        QSet<short> targets, skip, req;
+        for (QString s : flow_target->getSelected())
+            targets.insert(cmap[s]);
+        for (QString s : flow_skip->getSelected())
+            skip.insert(cmap[s]);
+        for (QString s : flow_require->getSelected())
+            req.insert(cmap[s]);
 
         double total = 0.;
-        for (const QStringList p : flow_db.keys()) {
-            if (targets.contains(p.last())) {
-                QSet<QString> sset = p.toSet();
+        QVector<QPair<QVector<short>, FlowData>> cdb;
+        cdb.reserve(flow_db.size());
+        for (const QPair<QStringList, FlowData> &p : flow_db) {
+            QVector<short> scode(p.first.size());
+            QSet<short> sset;
+            for (int i = 0; i < p.first.size(); i++) {
+                short v = cmap[p.first[i]];
+                scode[i] = v;
+                sset.insert(v);
+            }
+            if (targets.contains(scode.last())) {
                 if (!sset.intersects(skip) && sset.contains(req)) {
-                    total += flow_db[p].deposit_val;
+                    total += p.second.deposit_val;
+                    /* We restrict cdb to the set actually reaching the
+                     * detector. No point in filtering twice. */
+                    cdb.push_back(
+                        QPair<QVector<short>, FlowData>(scode, p.second));
                 }
             }
         }
@@ -395,8 +462,12 @@ void ColorConfig::reassignColors() {
             vd.color_table.clear();
             vd.color_table.push_back(QColor::fromRgbF(0.4, 0.4, 0.4));
             vd.color_table.push_back(QColor::fromRgbF(1.0, 0., 0.));
-            recsetFlowColors(vd.elements, flow_names, flow_db, targets, skip,
-                             req, total, vd.color_table);
+            recsetFlowColors(
+                vd.elements, cmap, cdb,
+                SortedStaticArraySet(targets.toList().toVector(), cmap.size()),
+                SortedStaticArraySet(skip.toList().toVector(), cmap.size()),
+                SortedStaticArraySet(req.toList().toVector(), cmap.size()),
+                total, vd.color_table);
         }
     } break;
     }
@@ -449,7 +520,8 @@ void ColorConfig::loadFlowMap() {
     flow_names.clear();
     while (!tf.atEnd()) {
         QString line = tf.readLine();
-        QStringList segments = line.split(" ");
+        QByteArray dt = line.toUtf8();
+        QList<QByteArray> segments = dt.split(' ');
         if (segments.size() != 10) {
             continue;
         }
@@ -462,8 +534,9 @@ void ColorConfig::loadFlowMap() {
         f.deposit_err = segments[7].toDouble();
         f.nsamples = segments[9].mid(1, segments[9].size() - 2).toLong();
 
-        QStringList key = segments[0].mid(2, segments[0].size() - 3).split('>');
-        flow_db[key] = f;
+        QString a(segments[0].mid(2, segments[0].size() - 3));
+        QStringList key = a.split('>');
+        flow_db.append(QPair<QStringList, FlowData>(key, f));
         for (QString s : key) {
             flow_names.insert(s);
         }
