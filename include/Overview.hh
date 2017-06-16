@@ -31,12 +31,14 @@ public:
     virtual bool setData(const QModelIndex &index, const QVariant &value,
                          int role = Qt::EditRole);
     Qt::ItemFlags flags(const QModelIndex &index) const;
+    const Element *curE() const { return last; }
 
 private:
     QVector<QString> opts;
     QVector<QString> tooltips;
     QVector<QString> vals;
     QColor col;
+    const Element *last;
 };
 
 class HueSpinBoxDelegate : public QItemDelegate {
@@ -76,6 +78,7 @@ public:
     virtual bool setData(const QModelIndex &index, const QVariant &value,
                          int role = Qt::EditRole);
     Qt::ItemFlags flags(const QModelIndex &index) const;
+    void recalculate();
 signals:
     void colorChange();
 public slots:

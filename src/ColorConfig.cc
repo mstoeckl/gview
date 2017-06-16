@@ -103,7 +103,6 @@ QIcon iconFromColor(QColor c) {
 ColorConfig::ColorConfig(ViewData &ivd,
                          const std::vector<const G4Material *> &mtl_list)
     : vd(ivd) {
-    material_list = mtl_list;
     active_mode = ColorByMaterial;
     mode_chooser = new QComboBox();
     mode_chooser->addItem("Material");
@@ -121,22 +120,20 @@ ColorConfig::ColorConfig(ViewData &ivd,
     mtl_table = new QTableView();
     mtl_table->setSelectionBehavior(QAbstractItemView::SelectItems);
     mtl_table->setSelectionMode(QAbstractItemView::NoSelection);
-
-    for (int i = 0; i < int(material_list.size()); i++) {
-        mtl_color_table.push_back(
-            QColor::fromHslF(rand() / float(RAND_MAX - 1), 1., 0.5));
-    }
-    MaterialModel *mmod = new MaterialModel(mtl_color_table, material_list);
-    mtl_table->setModel(mmod);
+    mtl_model = new MaterialModel(mtl_color_table, material_list);
+    mergeMaterials(mtl_list);
+    mtl_table->setModel(mtl_model);
     mtl_table->horizontalHeader()->setStretchLastSection(true);
-    mtl_table->setItemDelegateForColumn(0, new HueSpinBoxDelegate(mmod));
-    connect(mmod, SIGNAL(colorChange()), this, SIGNAL(colorChange()));
+    mtl_table->setItemDelegateForColumn(0, new HueSpinBoxDelegate(mtl_model));
+    connect(mtl_model, SIGNAL(colorChange()), this, SIGNAL(colorChange()));
 
     prop_select = new QComboBox();
     prop_select->addItems(QStringList() << "Density"
                                         << "Log Volume"
                                         << "Bool Tree"
-                                        << "Atomic Z");
+                                        << "Atomic Z"
+                                        << "SA3/V2"
+                                        << "Neighbors");
     connect(prop_select, SIGNAL(currentIndexChanged(int)), this,
             SIGNAL(colorChange()));
     prop_base = QColor::fromRgbF(1, 1, 1);
@@ -222,53 +219,69 @@ inline qreal mix(qreal a, qreal b, qreal i) {
     return (1. - i) * a + i * b;
 }
 
-void recsetPropColors(Element &e, int m, std::vector<QColor> &c, QColor f,
-                      QColor t) {
-    e.ccode = c.size();
+void recgetProp(Element &e, const Element &p, int m, double *v) {
     double amp = 0;
     switch (m) {
     default:
     case 0:
-        /* todo: make a two-pass system that has sets equal-density classes....
-         */
         /* Tungsten has density 19.25 g/cm3, and Osmium wins at 22.59 g/cm3 */
-        amp = 1 / 20. * e.material->GetDensity() / CLHEP::g * CLHEP::cm3;
+        amp = e.material->GetDensity() / CLHEP::g * CLHEP::cm3;
         break;
     case 1:
-        amp = 1 / 5. *
-              std::log10(const_cast<G4VSolid *>(e.solid)->GetCubicVolume() /
+        amp = std::log10(const_cast<G4VSolid *>(e.solid)->GetCubicVolume() /
                          CLHEP::cm3);
         break;
     case 2: {
         QSet<const G4VSolid *> roots;
         int td = 0, nb = 0;
         calculateBooleanProperties(e.solid, roots, td, nb);
-        amp = nb / 13.;
+        amp = nb;
         break;
     }
     case 3: {
         /* Z is important w.r.t shielding */
-        // TODO FIXME CRASHES
-        int net = 0;
+        double net = 0;
         double nz = 0;
         for (size_t i = 0; i < e.material->GetNumberOfElements(); i++) {
             G4Element *h = e.material->GetElementVector()->at(i);
-            int g = e.material->GetAtomsVector()[i];
-            net += g;
-            nz += h->GetZ() * g;
+            double w =
+                e.material->GetFractionVector()[i] / h->GetAtomicMassAmu();
+            net += w;
+            nz += h->GetZ() * w;
         }
-        amp = (nz / net) / 100.;
+        amp = (nz / net);
+        break;
+    }
+    case 4: {
+        /* SA3/V2 ratio as (horrible) roundness measure */
+        double vol = const_cast<G4VSolid *>(e.solid)->GetCubicVolume();
+        double sa = const_cast<G4VSolid *>(e.solid)->GetSurfaceArea();
+        double sav = sa * sa * sa / vol / vol;
+        amp = std::log10(sav);
+        break;
+    }
+    case 5: {
+        /* Neighbors */
+        amp = (e.children.size() + p.children.size());
         break;
     }
     }
+    v[e.ecode] = amp;
+    for (Element &d : e.children) {
+        recgetProp(d, e, m, v);
+    }
+}
+
+void recsetProp(Element &e, const double *v, const QColor &f, const QColor &t,
+                std::vector<QColor> &c) {
+    e.ccode = c.size();
     /* linear interplation; looks bad for lots of combinations,
      * but works well for classes white-to-shade, black-to-shade */
-    c.push_back(QColor::fromRgbF(mix(f.redF(), t.redF(), amp),
-                                 mix(f.greenF(), t.greenF(), amp),
-                                 mix(f.blueF(), t.blueF(), amp)));
-
+    c.push_back(QColor::fromRgbF(mix(f.redF(), t.redF(), v[e.ecode]),
+                                 mix(f.greenF(), t.greenF(), v[e.ecode]),
+                                 mix(f.blueF(), t.blueF(), v[e.ecode])));
     for (Element &d : e.children) {
-        recsetPropColors(d, m, c, f, t);
+        recsetProp(d, v, f, t, c);
     }
 }
 
@@ -332,9 +345,31 @@ void ColorConfig::reassignColors() {
         recsetMtlColors(vd.elements, idxs);
     } break;
     case ColorByProperty: {
+        int td = 0, ne = 0;
+        countTree(vd.elements, td, ne);
+        double *vals = new double[ne];
+        int ci = prop_select->currentIndex();
+        recgetProp(vd.elements, vd.elements, ci, vals);
+        double mn = kInfinity, mx = -kInfinity;
+        for (int i = 0; i < ne; i++) {
+            mn = std::min(vals[i], mn);
+            mx = std::max(vals[i], mx);
+        }
+        if (mx - mn <= 0.) {
+            mx = 1.;
+            mn = 0.;
+        }
+        if (ci == 0 || ci == 2 || ci == 3 || ci == 5) {
+            /* if not logarithmic, base at 0 */
+            mn = 0.;
+        }
+        for (int i = 0; i < ne; i++) {
+            vals[i] = (vals[i] - mn) / (mx - mn);
+        }
+        /* Q: establish classes for equal vals ? */
         vd.color_table.clear();
-        recsetPropColors(vd.elements, prop_select->currentIndex(),
-                         vd.color_table, prop_base, prop_target);
+        recsetProp(vd.elements, vals, prop_base, prop_target, vd.color_table);
+        delete[] vals;
     } break;
     case ColorFromFlowmap: {
         QSet<QString> targets = flow_target->getSelected();
@@ -442,4 +477,28 @@ void ColorConfig::loadFlowMap() {
     qDebug("Loaded flow map %s with %d samples and %d names",
            pth.toUtf8().constData(), int(flow_base_n), flow_names.size());
     emit colorChange();
+}
+
+void ColorConfig::mergeMaterials(
+    const std::vector<const G4Material *> &mtl_list) {
+    std::vector<const G4Material *> old_list = material_list;
+    material_list = mtl_list;
+    std::vector<QColor> old_colors = mtl_color_table;
+    mtl_color_table.clear();
+
+    for (size_t i = 0; i < material_list.size(); i++) {
+        bool found = false;
+        for (size_t j = 0; j < old_list.size(); j++) {
+            if (old_list[j] == material_list[i]) {
+                mtl_color_table.push_back(old_colors[j]);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            mtl_color_table.push_back(
+                QColor::fromHslF(rand() / float(RAND_MAX - 1), 1., 0.5));
+        }
+    }
+    mtl_model->recalculate();
 }

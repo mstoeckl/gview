@@ -109,15 +109,8 @@ static void includeMaterials(const G4LogicalVolume *p,
     }
 }
 
-Viewer::Viewer(const std::vector<GeoOption> &options,
-               const std::vector<TrackData> &trackopts)
-    : QMainWindow() {
-    srand(1000 * QTime::currentTime().second() + QTime::currentTime().msec());
-
-    which_geo = 0;
-    geo_options = options;
-    track_options = trackopts;
-    // Construct list of valid materials & lookups
+std::vector<const G4Material *>
+constructMaterialList(const std::vector<GeoOption> &geo_options) {
     QSet<const G4Material *> materials;
     for (const GeoOption &g : geo_options) {
         includeMaterials(g.vol->GetLogicalVolume(), materials);
@@ -132,6 +125,17 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     for (const QPair<QString, const G4Material *> &p : mlist) {
         mtl_list.push_back(p.second);
     }
+    return mtl_list;
+}
+
+Viewer::Viewer(const std::vector<GeoOption> &options,
+               const std::vector<TrackData> &trackopts)
+    : QMainWindow() {
+    srand(1000 * QTime::currentTime().second() + QTime::currentTime().msec());
+
+    which_geo = 0;
+    geo_options = options;
+    track_options = trackopts;
     vd.elements = convertCreation(geo_options[which_geo].vol);
     vd.scene_radius = vd.elements.solid->GetExtent().GetExtentRadius();
     vd.scale = 2 * vd.scene_radius;
@@ -349,6 +353,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     mtl_showlines->setCheckState(Qt::Unchecked);
     connect(mtl_showlines, SIGNAL(stateChanged(int)), this,
             SLOT(updateShowLines()));
+    std::vector<const G4Material *> mtl_list =
+        constructMaterialList(geo_options);
     color_config = new ColorConfig(vd, mtl_list);
     color_config->reassignColors();
     connect(color_config, SIGNAL(colorChange()), this, SLOT(updateColors()));
@@ -637,6 +643,7 @@ void Viewer::updatePlanes() {
 void Viewer::updateColors() {
     // ColorConfig handles ViewData updates
     color_config->reassignColors();
+    info_model->setElement(info_model->curE(), vd);
     rwidget->rerender();
 }
 
@@ -654,6 +661,9 @@ void Viewer::changeGeometry(QAction *act) {
                 if (4 * vd.scene_radius > vd.camera.mag()) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
+                std::vector<const G4Material *> mtl_list =
+                    constructMaterialList(geo_options);
+                color_config->mergeMaterials(mtl_list);
                 color_config->reassignColors();
                 tree_model->recalculate();
                 tree_view->collapseAll();

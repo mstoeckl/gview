@@ -40,6 +40,7 @@ InfoModel::InfoModel() {
     tooltips = tool.toVector();
     vals = QVector<QString>(opts.size());
     col = QColor(Qt::white);
+    last = NULL;
 }
 InfoModel::~InfoModel() {}
 
@@ -92,6 +93,7 @@ void InfoModel::setElement(const Element *e, const ViewData &vd) {
         vals[8] = QString::number(nbooleans);
         col = vd.color_table[e->ccode];
     }
+    last = e;
     QVector<int> roles;
     roles.push_back(Qt::DisplayRole);
     emit dataChanged(index(0, 0), index(0, opts.size() - 1), roles);
@@ -196,6 +198,10 @@ MaterialModel::MaterialModel(std::vector<QColor> &c,
     : colors(c), materials(m) {}
 
 MaterialModel::~MaterialModel() {}
+void MaterialModel::recalculate() {
+    beginResetModel();
+    endResetModel();
+}
 
 int MaterialModel::rowCount(const QModelIndex &) const {
     return int(colors.size());

@@ -12,6 +12,7 @@ class QVBoxLayout;
 class QPushButton;
 class QLabel;
 class QListWidget;
+class MaterialModel;
 
 typedef struct {
     double inflow_val;
@@ -54,6 +55,7 @@ public:
 
     ColorConfig(ViewData &ivd, const std::vector<const G4Material *> &mtl_list);
     ~ColorConfig();
+    void mergeMaterials(const std::vector<const G4Material *> &mtl_list);
 public slots:
     void reassignColors();
 private slots:
@@ -74,6 +76,7 @@ private:
     QWidget *stretch_widget;
 
     QTableView *mtl_table;
+    MaterialModel *mtl_model;
     std::vector<const G4Material *> material_list;
     std::vector<QColor> mtl_color_table;
 
