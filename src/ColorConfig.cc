@@ -272,16 +272,10 @@ void recgetProp(Element &e, const Element &p, int m, double *v) {
     }
 }
 
-void recsetProp(Element &e, const double *v, const QColor &f, const QColor &t,
-                std::vector<QColor> &c) {
-    e.ccode = c.size();
-    /* linear interplation; looks bad for lots of combinations,
-     * but works well for classes white-to-shade, black-to-shade */
-    c.push_back(QColor::fromRgbF(mix(f.redF(), t.redF(), v[e.ecode]),
-                                 mix(f.greenF(), t.greenF(), v[e.ecode]),
-                                 mix(f.blueF(), t.blueF(), v[e.ecode])));
+void recsetProp(Element &e, const int *m) {
+    e.ccode = m[e.ecode];
     for (Element &d : e.children) {
-        recsetProp(d, v, f, t, c);
+        recsetProp(d, m);
     }
 }
 
@@ -393,7 +387,7 @@ void ColorConfig::reassignColors() {
     case ColorByProperty: {
         int td = 0, ne = 0;
         countTree(vd.elements, td, ne);
-        double *vals = new double[ne];
+        double *vals = new double[ne]();
         int ci = prop_select->currentIndex();
         recgetProp(vd.elements, vd.elements, ci, vals);
         double mn = kInfinity, mx = -kInfinity;
@@ -409,13 +403,29 @@ void ColorConfig::reassignColors() {
             /* if not logarithmic, base at 0 */
             mn = 0.;
         }
-        for (int i = 0; i < ne; i++) {
-            vals[i] = (vals[i] - mn) / (mx - mn);
-        }
         /* Q: establish classes for equal vals ? */
         vd.color_table.clear();
-        recsetProp(vd.elements, vals, prop_base, prop_target, vd.color_table);
+
+        int *refs = new int[ne]();
+        QMap<double, int> vmatches;
+        for (int i = 0; i < ne; i++) {
+            if (vmatches.count(vals[i])) {
+                refs[i] = vmatches[vals[i]];
+                continue;
+            }
+            vmatches[vals[i]] = vd.color_table.size();
+            refs[i] = vd.color_table.size();
+            double v = (vals[i] - mn) / (mx - mn);
+            /* linear interplation; looks bad for lots of combinations,
+             * but works well for classes white-to-shade, black-to-shade */
+            vd.color_table.push_back(QColor::fromRgbF(
+                mix(prop_base.redF(), prop_target.redF(), v),
+                mix(prop_base.greenF(), prop_target.greenF(), v),
+                mix(prop_base.blueF(), prop_target.blueF(), v)));
+        }
+        recsetProp(vd.elements, refs);
         delete[] vals;
+        delete[] refs;
     } break;
     case ColorFromFlowmap: {
         QMap<QString, short> cmap;
