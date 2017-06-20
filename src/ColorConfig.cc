@@ -293,16 +293,22 @@ public:
     SortedStaticArraySet(const QVector<short> &in, short code_max) {
         sz = code_max;
         buf = new uint8_t[code_max];
+        cnt = 0;
         setSet(in);
     }
     SortedStaticArraySet(short code_max) {
         sz = code_max;
         buf = new uint8_t[code_max];
+        cnt = 0;
     }
     void setSet(const QVector<short> &in) {
         memset(buf, 0, sz * sizeof(uint8_t));
         for (short s : in) {
             buf[s] = 1;
+        }
+        cnt = 0;
+        for (int i = 0; i < sz; i++) {
+            cnt += buf[i];
         }
     }
     ~SortedStaticArraySet() { delete[] buf; }
@@ -323,10 +329,12 @@ public:
         }
         return false;
     }
+    int size() const { return cnt; }
 
 private:
     uint8_t *buf;
     int sz;
+    int cnt;
 };
 
 void recsetFlowColors(Element &e, const QMap<QString, short> &names,
@@ -348,8 +356,9 @@ void recsetFlowColors(Element &e, const QMap<QString, short> &names,
         SortedStaticArraySet as(names.size());
         for (const QPair<QVector<short>, FlowData> &p : flows) {
             as.setSet(p.first);
-            if (targets.contains(p.first.last()) && as.contains(label) &&
-                !as.intersects(skip) && as.contains(reqd)) {
+            if ((!targets.size() || targets.contains(p.first.last())) &&
+                as.contains(label) && !as.intersects(skip) &&
+                as.contains(reqd)) {
                 tv += p.second.deposit_val;
             }
         }
@@ -452,7 +461,7 @@ void ColorConfig::reassignColors() {
                 scode[i] = v;
                 sset.insert(v);
             }
-            if (targets.contains(scode.last())) {
+            if (!targets.size() || targets.contains(scode.last())) {
                 if (!sset.intersects(skip) && sset.contains(req)) {
                     total += p.second.deposit_val;
                     /* We restrict cdb to the set actually reaching the

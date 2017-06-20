@@ -140,7 +140,7 @@ void RenderWidget::paintEvent(QPaintEvent *) {
 
 RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
                                    int h)
-    : viewdata(v), trackdata(t), graph(1) {
+    : viewdata(v), trackdata(t), graph(QThread::idealThreadCount() / 4 + 1) {
     target = QSharedPointer<QImage>(new QImage(w, h, QImage::Format_RGB32));
     progress = new QProgressDialog("Rendering image", "Cancel render", 0, h);
     progress->setMinimumDuration(1000);
