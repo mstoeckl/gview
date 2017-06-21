@@ -88,8 +88,8 @@ private:
 
     QPushButton *flow_load;
     QLabel *flow_label;
-    QVector<QPair<QStringList, FlowData>> flow_db;
-    QSet<QString> flow_names;
+    QVector<QPair<QVector<short>, FlowData>> flow_db;
+    QMap<QString, short> flow_names;
     NameSelector *flow_target;
     NameSelector *flow_skip;
     NameSelector *flow_require;

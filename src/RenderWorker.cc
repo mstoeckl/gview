@@ -687,13 +687,17 @@ void RenderTrackTask::run() {
                 int ur = int(std::ceil(rad * w));
                 int cy = int(std::round(y));
                 for (int ddy = std::max(yl, cy - ur);
-                     ddy <= std::min(yh - 1, cy + ur); ddy++) {
+                     ddy <=
+                     std::max(std::max(yl, cy - ur), std::min(yh - 1, cy + ur));
+                     ddy++) {
                     float lr = std::sqrt(rad * rad * rws * rws -
                                          float((ddy - y) * (ddy - y)));
                     int lx = int(std::round(x - lr));
                     int hx = int(std::round(x + lr));
                     for (int ddx = std::max(xl, lx);
-                         ddx <= std::min(xh - 1, hx); ddx++) {
+                         ddx <=
+                         std::max(std::max(xl, lx), std::min(xh - 1, hx));
+                         ddx++) {
                         int sidx = ddy * w + ddx;
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
