@@ -22,6 +22,7 @@ typedef struct {
     long nsamples;
 } FlowData;
 
+class NameComp;
 class NameSelector : public QWidget {
     Q_OBJECT
 public:
@@ -38,6 +39,7 @@ private slots:
     void addElement(int);
 
 private:
+    static NameComp *nc;
     QList<QString> names;
     QComboBox *search;
     QPushButton *wipe;

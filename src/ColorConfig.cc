@@ -9,6 +9,7 @@
 #include <QCollator>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QCompleter>
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -19,13 +20,29 @@
 #include <QTableView>
 #include <QVBoxLayout>
 
+class NameComp {
+private:
+    QCollator q;
+
+public:
+    NameComp() { q.setNumericMode(true); }
+    bool operator()(const QString &l, const QString &r) const {
+        return q.compare(l, r) < 0;
+    }
+};
+NameComp *NameSelector::nc = NULL;
+
 NameSelector::NameSelector(QString label, QWidget *parent) : QWidget(parent) {
+    if (!nc) {
+        nc = new NameComp();
+    }
 
     search = new QComboBox();
     search->addItem("");
     search->setEditable(true);
     search->setAutoCompletion(true);
     search->setInsertPolicy(QComboBox::NoInsert);
+    search->completer()->setCompletionMode(QCompleter::PopupCompletion);
 
     wipe = new QPushButton("X");
     collected = new QListWidget();
@@ -47,9 +64,9 @@ NameSelector::NameSelector(QString label, QWidget *parent) : QWidget(parent) {
 NameSelector::~NameSelector() {}
 
 void NameSelector::setNames(const QSet<QString> &n) {
-    QStringList a = n.toList();
-    a.sort();
-    names = a;
+    QVector<QString> a = n.toList().toVector();
+    qSort(a.begin(), a.end(), *nc);
+    names = a.toList();
     search->blockSignals(true);
     search->clear();
     search->addItem("");
@@ -78,10 +95,10 @@ void NameSelector::addElement(int i) {
         return;
     }
     sel.insert(target);
-    QStringList s = sel.toList();
-    s.sort();
+    QVector<QString> s = sel.toList().toVector();
+    qSort(s.begin(), s.end(), *nc);
     collected->clear();
-    collected->addItems(s);
+    collected->addItems(s.toList());
     /* Q: gray out the already selected options? */
     emit selectionChanged();
 }
@@ -112,7 +129,7 @@ ColorConfig::ColorConfig(ViewData &ivd,
     connect(mode_chooser, SIGNAL(currentIndexChanged(int)), this,
             SLOT(changeMode()));
 
-    div_by_class = new QCheckBox("Split by material");
+    div_by_class = new QCheckBox("Split by type");
     div_by_class->setCheckState(vd.split_by_material ? Qt::Checked
                                                      : Qt::Unchecked);
     connect(div_by_class, SIGNAL(stateChanged(int)), this, SLOT(changeMode()));
@@ -376,7 +393,6 @@ void recsetFlowColors(Element &e, const QMap<QString, short> &names,
                       const SortedStaticArraySet &skip,
                       const SortedStaticArraySet &reqd, double total,
                       std::vector<QColor> &colors) {
-    /* todo: speed up ! */
     QString lstr(e.name.data());
     short label = -1;
     if (names.count(lstr)) {
@@ -556,29 +572,44 @@ void ColorConfig::loadFlowMap() {
     flow_db.clear();
     flow_names.clear();
     while (!tf.atEnd()) {
-        QString line = tf.readLine();
-        QByteArray dt = line.toUtf8();
-        QList<QByteArray> segments = dt.split(' ');
-        if (segments.size() != 10) {
+        QByteArray dt = tf.readLine();
+        const char *line = dt.constData();
+        int len = dt.length();
+        int nseg = 0;
+        int segs[9];
+        for (int i = 0; i < len; i++) {
+            if (line[i] == ' ') {
+                segs[nseg] = i;
+                nseg++;
+                if (nseg > 9) {
+                    break;
+                }
+            }
+        }
+        if (nseg != 9) {
             continue;
         }
-        FlowData f;
-        flow_base_n = std::max(
-            flow_base_n, segments[4].mid(1, segments[4].size() - 2).toLong());
-        f.inflow_val = segments[1].toDouble();
-        f.inflow_err = segments[3].toDouble();
-        f.deposit_val = segments[5].toDouble();
-        f.deposit_err = segments[7].toDouble();
-        f.nsamples = segments[9].mid(1, segments[9].size() - 2).toLong();
 
-        QString a(segments[0].mid(2, segments[0].size() - 3));
-        QStringList key = a.split('>');
+        FlowData f;
+        flow_base_n = std::max(flow_base_n, std::atol(&line[segs[3] + 2]));
+        f.inflow_val = std::atof(&line[segs[0] + 1]);
+        f.inflow_err = std::atof(&line[segs[2] + 1]);
+        f.deposit_val = std::atof(&line[segs[4] + 1]);
+        f.deposit_err = std::atof(&line[segs[6] + 1]);
+        f.nsamples = std::atof(&line[segs[8] + 2]);
+
         QVector<short> tkey;
-        for (QString s : key) {
-            if (!flow_names.count(s)) {
-                flow_names[s] = flow_names.size();
+        tkey.reserve(64);
+        int lst = 2;
+        for (int i = 2; i < segs[0]; i++) {
+            if (line[i] == '>' || line[i] == '$') {
+                const QString s = QString::fromUtf8(&line[lst], i - lst);
+                if (!flow_names.count(s)) {
+                    flow_names[s] = flow_names.size();
+                }
+                tkey.push_back(flow_names[s]);
+                lst = i + 1;
             }
-            tkey.push_back(flow_names[s]);
         }
         flow_db.append(QPair<QVector<short>, FlowData>(tkey, f));
     }
