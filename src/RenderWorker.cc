@@ -591,8 +591,7 @@ void RenderTrackTask::run() {
     const TrackPoint *points = t.getPoints();
 
     int mind = w > h ? h : w;
-    float rad = std::max(mind / 800.0f, 0.5f);
-    // ^ ensure minimum 1 pixel brush width
+    float rad = std::max(mind / 800.0f, 0.01f);
 
     for (size_t i = 0; i < ntracks; i++) {
         if (ctx->abort_flag) {
@@ -684,20 +683,18 @@ void RenderTrackTask::run() {
                                 int(bc * qGreen(c1) + b * qGreen(c2)),
                                 int(bc * qBlue(c1) + b * qBlue(c2)));
 
-                int ur = int(std::ceil(rad * w));
-                int cy = int(std::round(y));
-                for (int ddy = std::max(yl, cy - ur);
-                     ddy <=
-                     std::max(std::max(yl, cy - ur), std::min(yh - 1, cy + ur));
+                /* Draw circle */
+                float spot = rad * rws;
+                int ly = int(std::round(y - spot));
+                int hy = int(std::round(y + spot));
+                for (int ddy = std::max(yl, ly); ddy <= std::min(yh - 1, hy);
                      ddy++) {
-                    float lr = std::sqrt(rad * rad * rws * rws -
-                                         float((ddy - y) * (ddy - y)));
+                    float lr = std::sqrt(std::max(
+                        0.f, spot * spot - float((ddy - y) * (ddy - y))));
                     int lx = int(std::round(x - lr));
                     int hx = int(std::round(x + lr));
                     for (int ddx = std::max(xl, lx);
-                         ddx <=
-                         std::max(std::max(xl, lx), std::min(xh - 1, hx));
-                         ddx++) {
+                         ddx <= std::min(xh - 1, hx); ddx++) {
                         int sidx = ddy * w + ddx;
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
@@ -762,6 +759,13 @@ TrackData::TrackData(const char *filename) {
         headers[i].offset = j - i;
         size_t start = j + size_t(h.npts);
         for (; j < start; j++) {
+            if (j >= n - 1) {
+                /* Truncated ! */
+                headers[i].npts = j - i - headers[i].offset;
+                qWarning("Track file truncated at %lu leaving run length %d",
+                         j + 1, headers[i].npts);
+                break;
+            }
             points[j - i] =
                 *reinterpret_cast<TrackPoint *>(&buf[blocksize * (j + 1)]);
         }

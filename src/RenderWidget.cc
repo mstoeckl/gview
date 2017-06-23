@@ -13,8 +13,8 @@
 static int threadCount() {
     int itc = QThread::idealThreadCount();
     itc = itc < 0 ? 2 : itc;
-#if 0
-     itc = 1; // Debug override
+#if 1
+    itc = 1; // Debug override
 #endif
     return itc;
 }
