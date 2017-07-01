@@ -636,107 +636,56 @@ void ColorConfig::loadFlowMap() {
         return;
     }
 
-    if (!pth.endsWith(".gz")) {
-        QFile tf(pth);
-        tf.open(QFile::ReadOnly);
+    /* Undo GZIP */
+    system("rm -f /tmp/flow.gz");
+    QString ar = "cp " + pth + " /tmp/flow.dat.gz";
+    system(ar.toUtf8().constData());
+    QString gu = "gzip -df /tmp/flow.dat.gz";
+    system(gu.toUtf8().constData());
+    pth = "/tmp/flow.dat";
 
-        flow_base_n = 0;
-        flow_db.clear();
-        flow_names.clear();
-        while (!tf.atEnd()) {
-            QByteArray dt = tf.readLine();
-            const char *line = dt.constData();
-            int len = dt.length();
-            int nseg = 0;
-            int segs[9];
-            for (int i = 0; i < len; i++) {
-                if (line[i] == ' ') {
-                    segs[nseg] = i;
-                    nseg++;
-                    if (nseg > 9) {
-                        break;
-                    }
-                }
-            }
-            if (nseg != 9) {
-                continue;
-            }
+    /* Actually load the file */
+    QFile tf(pth);
+    tf.open(QFile::ReadOnly);
+    QByteArray header = tf.readLine();
+    QByteArray names = tf.readLine();
+    int j = 0;
+    for (QByteArray b : names.mid(1, names.size() - 2).split(' ')) {
+        /* Duplicated names grab the last code */
+        QString s(b);
+        flow_names[s] = j;
+        j++;
+    }
+    flow_base_n = header.split('|')
+                      .last()
+                      .split(' ')
+                      .last()
+                      .replace(" ", "")
+                      .replace("\n", "")
+                      .toLong();
 
-            FlowData f;
-            flow_base_n = std::max(flow_base_n, std::atol(&line[segs[3] + 2]));
-            f.inflow_val = std::atof(&line[segs[0] + 1]);
-            f.inflow_err = std::atof(&line[segs[2] + 1]);
-            f.deposit_val = std::atof(&line[segs[4] + 1]);
-            f.deposit_err = std::atof(&line[segs[6] + 1]);
-            f.nsamples = std::atof(&line[segs[8] + 2]);
-
-            QVector<short> tkey;
-            tkey.reserve(64);
-            int lst = 2;
-            for (int i = 2; i < segs[0]; i++) {
-                if (line[i] == '>' || line[i] == '$') {
-                    const QString s = QString::fromUtf8(&line[lst], i - lst);
-                    if (!flow_names.count(s)) {
-                        flow_names[s] = flow_names.size();
-                    }
-                    tkey.push_back(flow_names[s]);
-                    lst = i + 1;
-                }
-            }
-            flow_db.append(QPair<QVector<short>, FlowData>(tkey, f));
+    QByteArray rest = tf.readAll();
+    const char *rst = (const char *)rest.constData();
+    const char *const orst = &rst[rest.size()];
+    while (rst < orst) {
+        QVector<short> tkey;
+        for (const short *sp = (const short *)rst; *sp; ++sp) {
+            tkey.push_back(*sp - 1);
         }
-    } else {
-        /* Undo GZIP */
-        system("rm -f /tmp/flow.gz");
-        QString ar = "cp " + pth + " /tmp/flow.dat.gz";
-        system(ar.toUtf8().constData());
-        QString gu = "gzip -df /tmp/flow.dat.gz";
-        system(gu.toUtf8().constData());
-        pth = "/tmp/flow.dat";
+        rst += sizeof(short) * (tkey.size() + 1);
 
-        /* Actually load the file */
-        QFile tf(pth);
-        tf.open(QFile::ReadOnly);
-        QByteArray header = tf.readLine();
-        QByteArray names = tf.readLine();
-        int j = 0;
-        for (QByteArray b : names.mid(1, names.size() - 2).split(' ')) {
-            /* Duplicated names grab the last code */
-            QString s(b);
-            flow_names[s] = j;
-            j++;
-        }
-        flow_base_n = header.split('|')
-                          .last()
-                          .split(' ')
-                          .last()
-                          .replace(" ", "")
-                          .replace("\n", "")
-                          .toLong();
+        FlowData f;
+        const double *dp = (const double *)rst;
+        f.inflow_val = dp[0];
+        f.inflow_err = dp[1];
+        f.deposit_val = dp[2];
+        f.deposit_err = dp[3];
+        rst += sizeof(double) * 4;
+        const long *lp = (const long *)rst;
+        f.nsamples = lp[0];
+        rst += sizeof(long);
 
-        QByteArray rest = tf.readAll();
-        const char *rst = (const char *)rest.constData();
-        const char *const orst = &rst[rest.size()];
-        while (rst < orst) {
-            QVector<short> tkey;
-            for (const short *sp = (const short *)rst; *sp; ++sp) {
-                tkey.push_back(*sp - 1);
-            }
-            rst += sizeof(short) * (tkey.size() + 1);
-
-            FlowData f;
-            const double *dp = (const double *)rst;
-            f.inflow_val = dp[0];
-            f.inflow_err = dp[1];
-            f.deposit_val = dp[2];
-            f.deposit_err = dp[3];
-            rst += sizeof(double) * 4;
-            const long *lp = (const long *)rst;
-            f.nsamples = lp[0];
-            rst += sizeof(long);
-
-            flow_db.append(QPair<QVector<short>, FlowData>(tkey, f));
-        }
+        flow_db.append(QPair<QVector<short>, FlowData>(tkey, f));
     }
     flow_label->setText(
         QString("Paths: %1; N %2").arg(flow_db.size()).arg(flow_base_n));
