@@ -185,7 +185,7 @@ HistogrammicRangeSlider::HistogrammicRangeSlider(bool exponential) {
                 SLOT(handleUpdate()));
     }
 }
-HistogrammicRangeSlider::~HistogrammicRangeSlider() {}
+HistogrammicRangeSlider::~HistogrammicRangeSlider() { delete scene; }
 void HistogrammicRangeSlider::setRange(double left, double right) {
     double low = std::min(left, right);
     double high = std::max(left, right);

@@ -539,9 +539,10 @@ void RenderRayTask::run() {
                 if (!hits[k]->visible) {
                     continue;
                 }
-                col = qRgb(int(e * qRed(altcol) + f * qRed(col)),
-                           int(e * qGreen(altcol) + f * qGreen(col)),
-                           int(e * qBlue(altcol) + f * qBlue(col)));
+                col = qRgba(int(e * qRed(altcol) + f * qRed(col)),
+                            int(e * qGreen(altcol) + f * qGreen(col)),
+                            int(e * qBlue(altcol) + f * qBlue(col)),
+                            int(e * qAlpha(altcol) + f * qAlpha(col)));
             }
             pts[j] = col;
         }
@@ -579,10 +580,7 @@ void RenderTrackTask::run() {
         for (int x = xl; x < xh; x++) {
             // Scale up to be beyond anything traceRay produces
             dists[y * w + x] = 4 * kInfinity;
-            double r = 255. * ((x - xl) * (yh - yl) + (y - yl)) /
-                       ((xh - xl) * (yh - yl));
-            Q_UNUSED(r);
-            colors[y * w + x] = qRgb(255, 255, 255 /*r*/);
+            colors[y * w + x] = qRgba(255, 255, 255, 0.);
         }
     }
 

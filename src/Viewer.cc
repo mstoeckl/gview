@@ -170,35 +170,35 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     }
     rayiter = 0;
 
-    QAction *clipAction = new QAction("Clipping");
+    QAction *clipAction = new QAction("Clipping", this);
     clipAction->setToolTip("Edit geometry clipping planes and track limits");
     connect(clipAction, SIGNAL(triggered()), this, SLOT(restClip()));
 
-    QAction *treeAction = new QAction("Tree");
+    QAction *treeAction = new QAction("Tree", this);
     treeAction->setToolTip("View object hierarchy");
     connect(treeAction, SIGNAL(triggered()), this, SLOT(restTree()));
 
-    QAction *infoAction = new QAction("Info");
+    QAction *infoAction = new QAction("Info", this);
     infoAction->setToolTip("Misc information on selected volume");
     connect(infoAction, SIGNAL(triggered()), this, SLOT(restInfo()));
 
-    QAction *rayAction = new QAction("Ray");
+    QAction *rayAction = new QAction("Ray", this);
     rayAction->setToolTip("List currently-hovered-over visible objects");
     connect(rayAction, SIGNAL(triggered()), this, SLOT(restRay()));
 
-    QAction *mtlAction = new QAction("Color");
+    QAction *mtlAction = new QAction("Color", this);
     mtlAction->setToolTip("Control volume colors");
     connect(mtlAction, SIGNAL(triggered()), this, SLOT(restColor()));
 
-    QAction *oriAction = new QAction("Orientation");
+    QAction *oriAction = new QAction("Orientation", this);
     oriAction->setToolTip("Select a camera direction");
     connect(oriAction, SIGNAL(triggered()), this, SLOT(restOrient()));
 
-    QAction *screenAction = new QAction("Screenshot");
+    QAction *screenAction = new QAction("Screenshot", this);
     screenAction->setToolTip("Take a screenshot of active scene");
     connect(screenAction, SIGNAL(triggered()), this, SLOT(screenshot()));
 
-    QAction *screen4Action = new QAction("ScrSht4x");
+    QAction *screen4Action = new QAction("ScrSht4x", this);
     screen4Action->setToolTip(
         "Take a screenshot of active scene; at 4x sampling");
     QSignalMapper *amp4 = new QSignalMapper(screen4Action);
@@ -306,7 +306,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     // Tree view (with vis/novis, hue control
     dock_tree = new QDockWidget("Element tree", this);
     tree_view = new QTreeView();
-    tree_model = new OverView(vd);
+    tree_model = new OverView(vd, this);
     tree_view->setSortingEnabled(false);
     tree_view->setModel(tree_model);
     tree_view->setRootIndex(QModelIndex());
@@ -318,7 +318,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     tree_view->header()->resizeSections(QHeaderView::ResizeToContents);
     tree_view->header()->setStretchLastSection(true);
     tree_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
-    tree_view->setItemDelegateForColumn(2, new AlphaBoxDelegate(tree_model));
+    tree_view->setItemDelegateForColumn(2,
+                                        new AlphaBoxDelegate(tree_model, this));
     connect(tree_view, SIGNAL(activated(const QModelIndex &)), tree_model,
             SLOT(respToActive(const QModelIndex &)));
     connect(tree_model, SIGNAL(colorChange()), rwidget, SLOT(rerender()));
@@ -335,7 +336,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     // Info for a particular item (mass, volume, mtl specs; table...)
     dock_info = new QDockWidget("Element info", this);
     info_table = new QTableView();
-    info_model = new InfoModel();
+    info_model = new InfoModel(this);
     info_table->setModel(info_model);
     info_table->horizontalHeader()->setStretchLastSection(true);
     info_table->horizontalHeader()->hide();
@@ -373,7 +374,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     QPushButton *orr1 = new QPushButton("+45");
     QPushButton *orr2 = new QPushButton("-45");
     QHBoxLayout *prow = new QHBoxLayout();
-    QSignalMapper *sqm = new QSignalMapper();
+    QSignalMapper *sqm = new QSignalMapper(this);
     connect(sqm, SIGNAL(mapped(int)), this, SLOT(setViewRotation(int)));
     sqm->setMapping(orp1, 0);
     sqm->setMapping(orp2, 1);
@@ -758,7 +759,7 @@ void Viewer::reloadChoiceMenus() {
     QActionGroup *opts = new QActionGroup(this);
     for (size_t i = 0; i < geo_options.size(); i++) {
         QString s = QString(geo_options[i].name.c_str());
-        QAction *ch = new QAction(s);
+        QAction *ch = new QAction(s, this);
         ch->setToolTip(s);
         ch->setCheckable(true);
         opts->addAction(ch);
@@ -771,7 +772,7 @@ void Viewer::reloadChoiceMenus() {
     connect(opts, SIGNAL(triggered(QAction *)), this,
             SLOT(changeGeometry(QAction *)));
     QActionGroup *topts = new QActionGroup(this);
-    QAction *base = new QAction("None");
+    QAction *base = new QAction("None", this);
     base->setToolTip(base->text());
     base->setCheckable(true);
     if (track_options.size() == 0) {
@@ -784,7 +785,7 @@ void Viewer::reloadChoiceMenus() {
     }
     for (size_t i = 0; i < track_options.size(); i++) {
         QString s = QString("%1").arg(i + 1);
-        QAction *ch = new QAction(s);
+        QAction *ch = new QAction(s, this);
         ch->setToolTip(s);
         ch->setCheckable(true);
         topts->addAction(ch);

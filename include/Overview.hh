@@ -19,7 +19,7 @@ void calculateBooleanProperties(const G4VSolid *sol,
 class InfoModel : public QAbstractTableModel {
     Q_OBJECT
 public:
-    InfoModel();
+    InfoModel(QObject *parent = 0);
     virtual ~InfoModel();
     void setElement(const Element *e, const ViewData &vd);
     virtual int rowCount(const QModelIndex &p = QModelIndex()) const;
@@ -66,7 +66,8 @@ class MaterialModel : public QAbstractTableModel {
     Q_OBJECT
 public:
     MaterialModel(std::vector<QColor> &colors,
-                  std::vector<const G4Material *> &materials);
+                  std::vector<const G4Material *> &materials,
+                  QObject *parent = 0);
     virtual ~MaterialModel();
 
     virtual int rowCount(const QModelIndex &p = QModelIndex()) const;
@@ -113,7 +114,7 @@ private:
 class OverView : public QAbstractItemModel {
     Q_OBJECT
 public:
-    OverView(struct ViewData_s &c);
+    OverView(struct ViewData_s &c, QObject *parent = 0);
     virtual ~OverView();
 
     virtual QModelIndex index(int r, int c,

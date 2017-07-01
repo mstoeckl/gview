@@ -10,7 +10,7 @@
 #include <QItemSelection>
 #include <QSignalMapper>
 
-InfoModel::InfoModel() {
+InfoModel::InfoModel(QObject *parent) : QAbstractTableModel(parent) {
     QStringList keys;
     keys << "Name"
          << "Material"
@@ -194,8 +194,9 @@ void HueSpinBoxDelegate::updateEditorGeometry(
 }
 
 MaterialModel::MaterialModel(std::vector<QColor> &c,
-                             std::vector<const G4Material *> &m)
-    : colors(c), materials(m) {}
+                             std::vector<const G4Material *> &m,
+                             QObject *parent)
+    : QAbstractTableModel(parent), colors(c), materials(m) {}
 
 MaterialModel::~MaterialModel() {}
 void MaterialModel::recalculate() {
@@ -331,7 +332,10 @@ void AlphaBoxDelegate::updateEditorGeometry(QWidget *editor,
     editor->setGeometry(option.rect);
 }
 
-OverView::OverView(ViewData &c) : currView(c) { recalculate(); }
+OverView::OverView(ViewData &c, QObject *parent)
+    : QAbstractItemModel(parent), currView(c) {
+    recalculate();
+}
 
 OverView::~OverView() {}
 

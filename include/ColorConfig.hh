@@ -2,6 +2,7 @@
 
 #include "RenderWorker.hh"
 
+#include <QLineEdit>
 #include <QSet>
 #include <QWidget>
 
@@ -13,6 +14,7 @@ class QPushButton;
 class QLabel;
 class QListWidget;
 class MaterialModel;
+class QListView;
 
 typedef struct {
     double inflow_val;
@@ -36,12 +38,20 @@ signals:
 public slots:
     void clear();
 private slots:
-    void addElement(int);
+    void addElements(const QStringList &);
+
+    void showPopup();
+    void filterPopup(const QString &);
+    void applyChoice();
 
 private:
     static NameComp *nc;
     QList<QString> names;
-    QComboBox *search;
+    QLineEdit *search;
+    QLineEdit *search_prime;
+    QFrame *container;
+    QListWidget *list;
+
     QPushButton *wipe;
     QListWidget *collected;
 };

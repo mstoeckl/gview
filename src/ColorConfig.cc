@@ -11,9 +11,11 @@
 #include <QComboBox>
 #include <QCompleter>
 #include <QFileDialog>
+#include <QFocusEvent>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QPushButton>
@@ -39,14 +41,30 @@ NameSelector::NameSelector(QString label, QWidget *parent) : QWidget(parent) {
         nc = new NameComp();
     }
 
-    search = new QComboBox();
-    search->addItem("");
-    search->setEditable(true);
-    search->setAutoCompletion(true);
-    search->setInsertPolicy(QComboBox::NoInsert);
-    search->completer()->setCompletionMode(QCompleter::PopupCompletion);
-    /* TODO: grayedout; only search nontriv; same-character-order mode;
-     * enter selects _all_ things in list; etc */
+    search = new QLineEdit();
+    search_prime = new QLineEdit();
+    container = new QFrame(this);
+    list = new QListWidget();
+    QVBoxLayout *hh = new QVBoxLayout(container);
+    hh->addWidget(search_prime, 0);
+    hh->addWidget(list, 10);
+    hh->setContentsMargins(0, 0, 0, 0);
+    container->setLayout(hh);
+    connect(search, SIGNAL(textEdited(const QString &)), this,
+            SLOT(showPopup()));
+    connect(search_prime, SIGNAL(textEdited(const QString &)), this,
+            SLOT(filterPopup(const QString &)));
+    connect(search_prime, SIGNAL(returnPressed()), this, SLOT(applyChoice()));
+
+    container->setWindowFlags(Qt::Popup);
+    container->setFrameShadow(QFrame::Plain);
+    container->setLineWidth(0);
+    container->setMidLineWidth(0);
+    list->setSelectionBehavior(QAbstractItemView::SelectRows);
+    list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    list->setFocusProxy(search_prime);
+    list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     wipe = new QPushButton("X");
     collected = new QListWidget();
@@ -55,8 +73,6 @@ NameSelector::NameSelector(QString label, QWidget *parent) : QWidget(parent) {
     hl->addWidget(new QLabel(label), 0);
     hl->addWidget(search, 1);
     hl->addWidget(wipe, 0);
-    connect(search, SIGNAL(currentIndexChanged(int)), this,
-            SLOT(addElement(int)));
     connect(wipe, SIGNAL(pressed()), this, SLOT(clear()));
 
     QVBoxLayout *vl = new QVBoxLayout();
@@ -64,18 +80,67 @@ NameSelector::NameSelector(QString label, QWidget *parent) : QWidget(parent) {
     vl->addWidget(collected);
     setLayout(vl);
 }
-
 NameSelector::~NameSelector() {}
+
+void NameSelector::showPopup() {
+    filterPopup(search->text());
+    QPoint corner = search->mapToGlobal(QPoint(0, 0));
+    QSize sz(search->width(), search->height() * 8);
+    QRect rct(corner, sz);
+    container->setGeometry(rct);
+    container->raise();
+    container->show();
+    search_prime->setFocus(Qt::OtherFocusReason);
+    search_prime->setText(search->text());
+}
+
+void NameSelector::applyChoice() {
+    QList<QListWidgetItem *> se = list->selectedItems();
+    QStringList net;
+    if (se.size()) {
+        for (QListWidgetItem *s : se) {
+            net.push_back(s->text());
+        }
+    } else {
+        for (int i = 0; i < list->count(); i++) {
+            net.push_back(list->item(i)->text());
+        }
+    }
+    search_prime->setText("");
+    search->setText("");
+    container->hide();
+
+    addElements(net);
+}
+
+void NameSelector::filterPopup(const QString &s) {
+    search->setText(s);
+    QRegExp r(s.split("").join(".*"));
+    QStringList nn;
+    for (QString q : names) {
+        if (r.exactMatch(q)) {
+            nn.append(q);
+        }
+    }
+    list->clear();
+    list->addItems(nn);
+    QSet<QString> n;
+    for (int i = 0; i < collected->count(); i++) {
+        n.insert(collected->item(i)->text());
+    }
+    for (int i = 0; i < list->count(); i++) {
+        QString w = list->item(i)->text();
+        if (n.contains(w)) {
+            list->item(i)->setTextColor(Qt::gray);
+        }
+    }
+}
 
 void NameSelector::setNames(const QSet<QString> &n) {
     QVector<QString> a = n.toList().toVector();
     qSort(a.begin(), a.end(), *nc);
     names = a.toList();
-    search->blockSignals(true);
-    search->clear();
-    search->addItem("");
-    search->addItems(names);
-    search->blockSignals(false);
+    filterPopup(search_prime->text());
     /* We don't reset the existing names, as unused
      * names don't harm anyone */
 }
@@ -86,25 +151,22 @@ void NameSelector::clear() {
     }
 }
 
-void NameSelector::addElement(int i) {
-    search->blockSignals(true);
-    search->hidePopup();
-    search->setCurrentIndex(0);
-    search->blockSignals(false);
-    if (i <= 0) {
-        return;
-    }
-    QString target = names[i - 1];
+void NameSelector::addElements(const QStringList &cands) {
     QSet<QString> sel = getSelected();
-    if (sel.contains(target)) {
+    int sz = sel.size();
+    for (QString target : cands) {
+        if (sel.contains(target)) {
+            continue;
+        }
+        sel.insert(target);
+    }
+    if (sz == sel.size()) {
         return;
     }
-    sel.insert(target);
     QVector<QString> s = sel.toList().toVector();
     qSort(s.begin(), s.end(), *nc);
     collected->clear();
     collected->addItems(s.toList());
-    /* Q: gray out the already selected options? */
     emit selectionChanged();
 }
 
@@ -142,11 +204,12 @@ ColorConfig::ColorConfig(ViewData &ivd,
     mtl_table = new QTableView();
     mtl_table->setSelectionBehavior(QAbstractItemView::SelectItems);
     mtl_table->setSelectionMode(QAbstractItemView::NoSelection);
-    mtl_model = new MaterialModel(mtl_color_table, material_list);
+    mtl_model = new MaterialModel(mtl_color_table, material_list, this);
     mergeMaterials(mtl_list);
     mtl_table->setModel(mtl_model);
     mtl_table->horizontalHeader()->setStretchLastSection(true);
-    mtl_table->setItemDelegateForColumn(0, new HueSpinBoxDelegate(mtl_model));
+    mtl_table->setItemDelegateForColumn(
+        0, new HueSpinBoxDelegate(mtl_model, this));
     connect(mtl_model, SIGNAL(colorChange()), this, SIGNAL(colorChange()));
 
     prop_select = new QComboBox();
