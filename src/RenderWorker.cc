@@ -170,12 +170,14 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             break;
         }
     }
-    G4ThreeVector positions[maxdepth];
-    positions[0] = start;
+    G4ThreeVector offsets[maxdepth];
+    offsets[0] = start;
     for (size_t i = 1; i < n; i++) {
         const Element &elem = *stack[i];
-        positions[i] = positions[i - 1] + elem.offset;
+        offsets[i] = offsets[i - 1] + elem.offset;
     }
+    const G4double isdist = sdist;
+
     int nhits = 1;
     if (clippable) {
         // Start point is in the world volume, and is an intersection
@@ -194,7 +196,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
 
     for (int iter = 0; iter < 1000; iter++) {
         const Element &curr = *stack[n - 1];
-        const G4ThreeVector &pos = positions[n - 1];
+        const G4ThreeVector &pos = offsets[n - 1] + forward * (sdist - isdist);
 
         ElemMutables &cmu = mutables[curr.ecode];
         if (cmu.niter != iteration || cmu.abs_dist <= sdist /* epsilon ? */) {
@@ -251,12 +253,8 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             return nhits;
         } else if (exitdist < closestDist) {
             // Transition on leaving vol w/o intersections
-            // Advance all levels, why not
-            for (size_t j = 0; j < n; j++) {
-                positions[j] += exitdist * forward;
-            }
             sdist += exitdist;
-            G4ThreeVector lpos = positions[n - 1];
+            G4ThreeVector lpos = offsets[n - 1] + forward * (sdist - isdist);
             // Drop from stack
             --n;
 
@@ -274,17 +272,15 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         } else {
             // Transition on visiting a child
             stack[n] = closest;
-            positions[n] = closestPos;
-            for (size_t j = 0; j < n + 1; j++) {
-                positions[j] += closestDist * forward;
-            }
+            offsets[n] = closest->offset + offsets[n - 1];
             sdist += closestDist;
             n++;
+            G4ThreeVector lpos = offsets[n - 1] + forward * (sdist - isdist);
 
             // Record hit with normal
             ++mutables[closest->ecode].ngeocalls;
-            G4ThreeVector lnormal = closest->solid->SurfaceNormal(
-                condrot(*closest, positions[n - 1]));
+            G4ThreeVector lnormal =
+                closest->solid->SurfaceNormal(condrot(*closest, lpos));
             ints[nhits].dist = sdist;
             ints[nhits].normal = condirot(*closest, lnormal);
             if (nhits >= maxhits) {
