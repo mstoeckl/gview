@@ -52,30 +52,15 @@ static G4ThreeVector condirot(const Element &e, const G4ThreeVector &vec) {
     return vec;
 }
 
-int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
-             Intersection ints[], int maxhits, int iteration,
-             ElemMutables mutables[]) {
-    // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
-    // Return number of hits recorded.
-    G4ThreeVector forward = d.orientation.rowX();
-    G4ThreeVector updown = d.orientation.rowY();
-    G4ThreeVector lright = d.orientation.rowZ();
-
-    G4ThreeVector init =
-        d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
-
-    // Pseudorandom number to prevent consistent child ordering
-    // so as to make overlapping children obvious
-    const size_t rotfact = size_t(random());
-    // Minimum feature size, yet still above double discrimination threshold
-    //    const G4double epsilon = 1e-3 * CLHEP::nanometer;
-
-    G4double sdist = 0.0;
-    G4double edist = kInfinity;
-    G4ThreeVector entrynormal;
-    G4ThreeVector exitnormal;
-    for (uint i = 0; i < d.clipping_planes.size(); i++) {
-        const Plane &p = d.clipping_planes[i];
+static bool clipRay(const std::vector<Plane> &clipping_planes,
+                    const G4ThreeVector &init, const G4ThreeVector &forward,
+                    G4double &sdist, G4double &edist,
+                    G4ThreeVector &entrynormal, G4ThreeVector &exitnormal) {
+    sdist = 0.0;
+    edist = kInfinity;
+    // Computes esdist, entryexitnormal. Returns 1 iff a ray exists
+    for (uint i = 0; i < clipping_planes.size(); i++) {
+        const Plane &p = clipping_planes[i];
         G4double crs = p.normal * forward;
         if (crs > 0.0) {
             G4double ndist = (p.offset - p.normal * init) / crs;
@@ -92,12 +77,41 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         } else {
             if (init * p.normal < p.offset) {
                 // Either entire ray is in or out of plane
-                return 0;
+                return false;
             }
         }
     }
     if (edist < sdist) {
         // Planes clip everything out
+        return false;
+    }
+    return true;
+}
+
+int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
+             Intersection ints[], int maxhits, int iteration,
+             ElemMutables mutables[]) {
+    // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
+    // Return number of hits recorded.
+    const G4ThreeVector forward = d.orientation.rowX();
+    const G4ThreeVector updown = d.orientation.rowY();
+    const G4ThreeVector lright = d.orientation.rowZ();
+
+    const G4ThreeVector init =
+        d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
+
+    // Pseudorandom number to prevent consistent child ordering
+    // so as to make overlapping children obvious
+    const size_t rotfact = size_t(random());
+    // Minimum feature size, yet still above double discrimination threshold
+    //    const G4double epsilon = 1e-3 * CLHEP::nanometer;
+
+    G4double sdist, edist;
+    G4ThreeVector entrynormal;
+    G4ThreeVector exitnormal;
+    bool exists = clipRay(d.clipping_planes, init, forward, sdist, edist,
+                          entrynormal, exitnormal);
+    if (!exists) {
         return 0;
     }
 
@@ -185,9 +199,9 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         ElemMutables &cmu = mutables[curr.ecode];
         if (cmu.niter != iteration || cmu.abs_dist <= sdist /* epsilon ? */) {
             ++cmu.ngeocalls;
-            cmu.abs_dist = sdist +
-                           curr.solid->DistanceToOut(condrot(curr, pos),
-                                                     condrot(curr, forward));
+            cmu.abs_dist =
+                sdist + curr.solid->DistanceToOut(condrot(curr, pos),
+                                                  condrot(curr, forward));
             cmu.niter = iteration;
         }
         G4double exitdist = cmu.abs_dist - sdist;
@@ -214,9 +228,8 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
                         ++emu.ngeocalls;
                     }
                     emu.abs_dist =
-                        sdist +
-                        elem.solid->DistanceToIn(condrot(elem, sub),
-                                                 condrot(elem, forward));
+                        sdist + elem.solid->DistanceToIn(
+                                    condrot(elem, sub), condrot(elem, forward));
                 }
                 emu.niter = iteration;
             }
@@ -329,13 +342,13 @@ int compressTraces(const Element *hits[], Intersection ints[], int m) {
 }
 
 static QRgb colorMap(const G4ThreeVector &normal, const G4ThreeVector &forward,
-                     const QColor &base, G4double dist) {
+                     const VColor &base, G4double dist) {
     // Opposed normals (i.e, for transp backsides) are mirrored
     G4double cx = 0.7 * std::abs(std::acos(-normal * forward) / CLHEP::pi);
     cx = 1.0 - std::max(0.0, std::min(1.0, cx));
     Q_UNUSED(dist);
 
-    return QColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
+    return VColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
                             cx * base.blueF())
         .rgb();
 }
@@ -532,7 +545,7 @@ void RenderRayTask::run() {
             // (p<0 indicates the line dominates)
             for (int k = p; k >= 0; --k) {
                 // We use the intersection before the volume
-                const QColor &base_color = d.color_table[hits[k]->ccode];
+                const VColor &base_color = d.color_table[hits[k]->ccode];
                 QRgb altcol = colorMap(ints[k].normal, d.orientation.rowX(),
                                        base_color, ints[k].dist);
                 double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
@@ -1081,14 +1094,14 @@ void TrackData::constructRangeHistograms(QVector<QPointF> &tp,
         for (size_t j = i; j < i + h.npts - 1; j++) {
             float ta = pts[j].time, tb = pts[j + 1].time;
             float ea = pts[j].energy, eb = pts[j + 1].energy;
-            float stl = std::max(
-                0.f, (float(tr.low) - ta) / (ta == tb ? 1e38f : tb - ta));
-            float sth = std::min(
-                1.f, (float(tr.high) - ta) / (ta == tb ? 1e38f : tb - ta));
-            float sel = std::max(
-                0.f, (float(er.low) - ea) / (ea == eb ? 1e38f : eb - ea));
-            float seh = std::min(
-                1.f, (float(er.high) - ea) / (ea == eb ? 1e38f : eb - ea));
+            float stl = std::max(0.f, (float(tr.low) - ta) /
+                                          (ta == tb ? 1e38f : tb - ta));
+            float sth = std::min(1.f, (float(tr.high) - ta) /
+                                          (ta == tb ? 1e38f : tb - ta));
+            float sel = std::max(0.f, (float(er.low) - ea) /
+                                          (ea == eb ? 1e38f : eb - ea));
+            float seh = std::min(1.f, (float(er.high) - ea) /
+                                          (ea == eb ? 1e38f : eb - ea));
             float cta, ctb, cea, ceb;
             // restrict one by the other and vica versa
             cta = sel * ta + (1 - sel) * tb;

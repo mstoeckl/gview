@@ -461,7 +461,7 @@ void recsetFlowColors(Element &e, const QMap<QString, short> &names,
                       const double *deps, const SortedStaticArraySet &targets,
                       const SortedStaticArraySet &skip,
                       const SortedStaticArraySet &reqd, double total,
-                      std::vector<QColor> &colors) {
+                      std::vector<VColor> &colors) {
     QString lstr(e.name.data());
     short label = -1;
     if (names.count(lstr)) {
@@ -481,7 +481,7 @@ void recsetFlowColors(Element &e, const QMap<QString, short> &names,
             dt = Qt::yellow;
         QColor t = QColor(dt);
         e.ccode = colors.size();
-        colors.push_back(QColor::fromRgbF(mix(f.redF(), t.redF(), rv),
+        colors.push_back(VColor::fromRgbF(mix(f.redF(), t.redF(), rv),
                                           mix(f.greenF(), t.greenF(), rv),
                                           mix(f.blueF(), t.blueF(), rv)));
     } else {
@@ -536,10 +536,10 @@ void ColorConfig::reassignColors() {
             double v = (vals[i] - mn) / (mx - mn);
             /* linear interplation; looks bad for lots of combinations,
              * but works well for classes white-to-shade, black-to-shade */
-            vd.color_table.push_back(QColor::fromRgbF(
-                mix(prop_base.redF(), prop_target.redF(), v),
-                mix(prop_base.greenF(), prop_target.greenF(), v),
-                mix(prop_base.blueF(), prop_target.blueF(), v)));
+            vd.color_table.push_back(
+                VColor(mix(prop_base.redF(), prop_target.redF(), v),
+                       mix(prop_base.greenF(), prop_target.greenF(), v),
+                       mix(prop_base.blueF(), prop_target.blueF(), v)));
         }
         recsetProp(vd.elements, refs);
         delete[] vals;
@@ -581,14 +581,14 @@ void ColorConfig::reassignColors() {
         }
         if (total <= 0.) {
             vd.color_table.clear();
-            vd.color_table.push_back(QColor::fromRgbF(0.4, 0.4, 0.4));
-            vd.color_table.push_back(QColor::fromRgbF(0.5, 0.5, 1.));
+            vd.color_table.push_back(VColor::fromRgbF(0.4, 0.4, 0.4));
+            vd.color_table.push_back(VColor::fromRgbF(0.5, 0.5, 1.));
             recsetMatchColors(vd.elements, flow_names);
         } else {
             /* begin with unidentified color, then skip color */
             vd.color_table.clear();
-            vd.color_table.push_back(QColor::fromRgbF(0.4, 0.4, 0.4));
-            vd.color_table.push_back(QColor::fromRgbF(1.0, 0., 0.));
+            vd.color_table.push_back(VColor::fromRgbF(0.4, 0.4, 0.4));
+            vd.color_table.push_back(VColor::fromRgbF(1.0, 0., 0.));
             recsetFlowColors(vd.elements, flow_names, deps, targets, skip, reqd,
                              total, vd.color_table);
         }
@@ -702,7 +702,7 @@ void ColorConfig::mergeMaterials(
     const std::vector<const G4Material *> &mtl_list) {
     std::vector<const G4Material *> old_list = material_list;
     material_list = mtl_list;
-    std::vector<QColor> old_colors = mtl_color_table;
+    std::vector<VColor> old_colors = mtl_color_table;
     mtl_color_table.clear();
 
     for (size_t i = 0; i < material_list.size(); i++) {
@@ -715,8 +715,8 @@ void ColorConfig::mergeMaterials(
             }
         }
         if (!found) {
-            mtl_color_table.push_back(
-                QColor::fromHslF(rand() / float(RAND_MAX - 1), 1., 0.5));
+            mtl_color_table.push_back(VColor(
+                QColor::fromHslF(rand() / float(RAND_MAX - 1), 1., 0.5).rgb()));
         }
     }
     mtl_model->recalculate();

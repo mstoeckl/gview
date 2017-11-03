@@ -324,11 +324,12 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
             SLOT(respToActive(const QModelIndex &)));
     connect(tree_model, SIGNAL(colorChange()), rwidget, SLOT(rerender()));
 
-    connect(tree_view->selectionModel(),
-            SIGNAL(selectionChanged(const QItemSelection &,
-                                    const QItemSelection &)),
-            tree_model, SLOT(respToSelection(const QItemSelection &,
-                                             const QItemSelection &)));
+    connect(
+        tree_view->selectionModel(),
+        SIGNAL(
+            selectionChanged(const QItemSelection &, const QItemSelection &)),
+        tree_model,
+        SLOT(respToSelection(const QItemSelection &, const QItemSelection &)));
     connect(tree_model, SIGNAL(selectedElement(const Element *)), this,
             SLOT(indicateElement(const Element *)));
     dock_tree->setWidget(tree_view);

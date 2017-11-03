@@ -90,7 +90,7 @@ private:
     QTableView *mtl_table;
     MaterialModel *mtl_model;
     std::vector<const G4Material *> material_list;
-    std::vector<QColor> mtl_color_table;
+    std::vector<VColor> mtl_color_table;
 
     QComboBox *prop_select;
     QColor prop_base;

@@ -5,7 +5,6 @@
 #include <G4RotationMatrix.hh>
 #include <G4ThreeVector.hh>
 
-#include <QColor>
 #include <QObject>
 #include <QRgb>
 #include <QSharedData>
@@ -46,8 +45,12 @@ typedef struct {
     double z;
 } TrackPoint;
 
-typedef struct { double low, high; } Range;
-typedef struct { size_t low, high; } IRange;
+typedef struct {
+    double low, high;
+} Range;
+typedef struct {
+    size_t low, high;
+} IRange;
 
 class TrackPrivateData : public QSharedData {
 public:
@@ -123,6 +126,23 @@ typedef struct Element_s {
     std::vector<struct Element_s> children;
 } Element;
 
+// Very simple and fast color handling
+class VColor {
+public:
+    VColor(uint8_t r, uint8_t g, uint8_t b) : pr(r), pg(g), pb(b) {}
+    VColor(QRgb rgb) : pr(qRed(rgb)), pg(qGreen(rgb)), pb(qBlue(rgb)) {}
+    static VColor fromRgbF(float r, float g, float b) {
+        return VColor(255.f * r, 255.f * g, 255.f * b);
+    }
+    QRgb rgb() const { return qRgb(pr, pg, pb); }
+    float redF() const { return pr / 255.f; }
+    float greenF() const { return pg / 255.f; }
+    float blueF() const { return pb / 255.f; }
+
+private:
+    uint8_t pr, pg, pb;
+};
+
 typedef struct ViewData_s {
     // What is being viewed
     Element elements;
@@ -133,7 +153,7 @@ typedef struct ViewData_s {
     std::vector<Plane> clipping_planes;
     G4double scale;
     G4double scene_radius;
-    std::vector<QColor> color_table;
+    std::vector<VColor> color_table;
     bool split_by_material;
     // Simplification level
     int level_of_detail;

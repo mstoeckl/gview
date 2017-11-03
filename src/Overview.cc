@@ -91,7 +91,7 @@ void InfoModel::setElement(const Element *e, const ViewData &vd) {
         vals[6] = QString::number(roots.size());
         vals[7] = QString::number(treedepth);
         vals[8] = QString::number(nbooleans);
-        col = vd.color_table[e->ccode];
+        col = QColor::fromRgb(vd.color_table[e->ccode].rgb());
     }
     last = e;
     QVector<int> roles;
@@ -193,7 +193,7 @@ void HueSpinBoxDelegate::updateEditorGeometry(
     editor->setGeometry(option.rect);
 }
 
-MaterialModel::MaterialModel(std::vector<QColor> &c,
+MaterialModel::MaterialModel(std::vector<VColor> &c,
                              std::vector<const G4Material *> &m,
                              QObject *parent)
     : QAbstractTableModel(parent), colors(c), materials(m) {}
@@ -214,7 +214,7 @@ QVariant MaterialModel::data(const QModelIndex &index, int role) const {
     }
     int r = index.row();
     qreal hue = 0., sat = 0., light = 0.;
-    colors[size_t(r)].getHslF(&hue, &sat, &light);
+    QColor::fromRgb(colors[size_t(r)].rgb()).getHslF(&hue, &sat, &light);
 
     // Assume only valid indices...
     if (role == Qt::DisplayRole) {
@@ -242,7 +242,8 @@ bool MaterialModel::setData(const QModelIndex &index, const QVariant &value,
     int r = index.row();
     if (role == Qt::EditRole) {
         if (index.column() == 0) {
-            colors[size_t(r)] = QColor::fromHslF(value.toDouble(), 1, 0.5);
+            colors[size_t(r)] =
+                VColor(QColor::fromHslF(value.toDouble(), 1, 0.5).rgb());
             QVector<int> roles;
             roles.push_back(Qt::DisplayRole);
             emit dataChanged(index, index, roles);
@@ -277,7 +278,7 @@ void MaterialModel::hueUpdate(QWidget *w) {
         return;
     }
     int row = e->maximumHeight() - 1000;
-    colors[size_t(row)] = QColor::fromHslF(e->value(), 1, 0.5);
+    colors[size_t(row)] = VColor(QColor::fromHslF(e->value(), 1, 0.5).rgb());
     QModelIndex idx = index(row, 0);
     QVector<int> roles;
     roles.push_back(Qt::EditRole);

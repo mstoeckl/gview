@@ -11,6 +11,7 @@ class MaterialModel;
 class QItemSelection;
 class G4Material;
 class G4VSolid;
+class VColor;
 
 void calculateBooleanProperties(const G4VSolid *sol,
                                 QSet<const G4VSolid *> &roots, int &treedepth,
@@ -65,7 +66,7 @@ private:
 class MaterialModel : public QAbstractTableModel {
     Q_OBJECT
 public:
-    MaterialModel(std::vector<QColor> &colors,
+    MaterialModel(std::vector<VColor> &colors,
                   std::vector<const G4Material *> &materials,
                   QObject *parent = 0);
     virtual ~MaterialModel();
@@ -86,7 +87,7 @@ public slots:
     void hueUpdate(QWidget *);
 
 private:
-    std::vector<QColor> &colors;
+    std::vector<VColor> &colors;
     std::vector<const G4Material *> &materials;
 };
 
