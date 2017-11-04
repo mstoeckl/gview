@@ -10,14 +10,36 @@
 #include <QThread>
 #include <QThreadPool>
 
+const G4double GOAL_FRAME_TIME = 0.030;
+const int DOWNSCALE_BASE = 2;
+
 static int threadCount() {
     int itc = QThread::idealThreadCount();
     itc = itc < 0 ? 2 : itc;
-#if 1
+#if 0
     itc = 1; // Debug override
 #endif
     return itc;
 }
+
+static int ipow(int b, int e) {
+    int x = 1;
+    while (e > 0) {
+        x *= b;
+        e--;
+    }
+    return x;
+}
+static int ilog(int b, int x) {
+    int e = 0;
+    while (x > 1) {
+        x /= b;
+        e++;
+    }
+    return e;
+}
+
+static int isqrt(int x) { return std::sqrt(x); }
 
 RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     : QWidget(), currView(v), trackdata(tdr), graph(threadCount()) {
@@ -29,8 +51,9 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     state = NONE;
     to_full_detail = false;
     last_level_of_detail = 10000;
+    immediate_lod = 16;
 
-    connect(&graph, SIGNAL(done()), this, SLOT(completed()));
+    connect(&graph, SIGNAL(done(qreal)), this, SLOT(completed(qreal)));
     connect(&graph, SIGNAL(aborted()), this, SLOT(aborted()));
 }
 
@@ -47,7 +70,7 @@ void RenderWidget::setFullDetail(bool b) {
 }
 
 void RenderWidget::rerender() {
-    currView.level_of_detail = 2;
+    currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
     rerender_priv();
 }
 
@@ -63,7 +86,10 @@ void RenderWidget::rerender_priv() {
         return;
     }
 
-    int scl = int(std::pow(3.0, std::max(currView.level_of_detail, 0)));
+    int ideal = ipow(DOWNSCALE_BASE, std::max(currView.level_of_detail, 0));
+    int super = ipow(DOWNSCALE_BASE, ilog(DOWNSCALE_BASE, immediate_lod));
+    int scl = std::max(1, (immediate_lod * ideal) / super);
+
     if (currView.level_of_detail == (to_full_detail ? -1 : 0)) {
         request_time = QTime::currentTime();
         arrived = aReqd;
@@ -71,7 +97,6 @@ void RenderWidget::rerender_priv() {
     next = QSharedPointer<QImage>(new QImage(
         this->width() / scl, this->height() / scl, QImage::Format_RGB32));
 
-    // TODO: temp
     TrackData d = currView.tracks;
     currView.tracks = trackdata;
     graph.start(next, currView);
@@ -86,7 +111,7 @@ void RenderWidget::rerender_priv() {
     }
 }
 
-void RenderWidget::completed() {
+void RenderWidget::completed(qreal time_secs) {
     back = next;
     if (state == ACTIVE) {
         state = NONE;
@@ -98,6 +123,16 @@ void RenderWidget::completed() {
         arrived = aCompl;
     }
     this->repaint();
+
+    int scale = std::max(width() / back->width(), height() / back->height());
+    if (scale == immediate_lod) {
+        /* Only change immediate_lod via its result */
+        qreal time_per_pixel = time_secs / (back->width() * back->height());
+        qreal target_pixels = GOAL_FRAME_TIME / time_per_pixel;
+        qreal target_scale = isqrt(width() * height() / target_pixels);
+        /* smooth changes */
+        immediate_lod = (std::max((int)target_scale, 1) + immediate_lod) / 2;
+    }
 }
 void RenderWidget::aborted() {
     state = NONE;
@@ -109,7 +144,7 @@ void RenderWidget::resizeEvent(QResizeEvent *evt) {
         // Don't bother rendering empty images
         return;
     }
-    currView.level_of_detail = 2;
+    currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
     rerender_priv();
 }
 
@@ -146,7 +181,7 @@ RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
     progress->setMinimumDuration(1000);
     progress->setRange(0, 100);
     connect(&graph, SIGNAL(aborted()), this, SLOT(aborted()));
-    connect(&graph, SIGNAL(done()), this, SLOT(completed()));
+    connect(&graph, SIGNAL(done(qreal)), this, SLOT(completed()));
     connect(&graph, SIGNAL(progressed(int)), progress, SLOT(setValue(int)));
 
     connect(progress, SIGNAL(canceled()), this, SLOT(abort()));

@@ -16,7 +16,7 @@ public:
 public slots:
     void setFullDetail(bool);
 
-    void completed();
+    void completed(qreal);
     void aborted();
 
     void rerender();
@@ -28,6 +28,7 @@ private:
     enum { NONE, ACTIVE, ACTIVE_AND_QUEUED } state;
     int last_level_of_detail;
     bool to_full_detail;
+    int immediate_lod;
 
     RenderGraph graph;
 

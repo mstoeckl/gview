@@ -1,6 +1,7 @@
 #include "RenderGraph.hh"
 #include "RenderWorker.hh"
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QThreadPool>
 
@@ -22,6 +23,8 @@ RenderGraph::RenderGraph(int nthreads) {
     pool = new QThreadPool();
     pool->setMaxThreadCount(nthreads);
 
+    timer = new QElapsedTimer();
+
     qRegisterMetaType<RenderGraphTask *>("RenderGraphTask*");
 
     seqno = 0;
@@ -37,9 +40,13 @@ RenderGraph::~RenderGraph() {
     context = QSharedPointer<Context>();
     seqno++;
     pool->deleteLater();
+
+    delete timer;
 }
 
 void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
+    timer->start();
+
     int w = im->width();
     int h = im->height();
 
@@ -143,7 +150,8 @@ void RenderGraph::queueNext(int taskid, int rno) {
         context = QSharedPointer<Context>();
         seqno++;
 
-        emit done();
+        qreal elapsed = 1e-9 * timer->nsecsElapsed();
+        emit done(elapsed);
     } else if (sel >= 0) {
         Task &j = tasks[sel];
         RenderGraphTask *r;

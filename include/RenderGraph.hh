@@ -8,6 +8,7 @@
 #include <QSharedPointer>
 #include <QVector>
 
+class QElapsedTimer;
 class QThreadPool;
 class RenderGraphTask;
 struct ViewData_s;
@@ -37,7 +38,7 @@ public slots:
     void abort();
 
 signals:
-    void done();
+    void done(qreal elapsed_secs);
     void aborted();
 
     void progressed(int);
@@ -50,6 +51,7 @@ protected slots:
 
 private:
     QSharedPointer<Context> context;
+    QElapsedTimer *timer;
     QThreadPool *pool;
     float progress;
     int seqno;
