@@ -120,7 +120,7 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
     p.offset = 0.;
     view_data.clipping_planes.push_back(p);
 
-    grid_size = QSize(999, 1001);
+    grid_size = QSize(99, 101);
     grid_points = NULL;
     grid_nclasses = 0;
     ray_mutables = NULL;
@@ -212,10 +212,36 @@ static bool typematch(const RenderPoint &a, const RenderPoint &b) {
         if (a.elements[i] != b.elements[i])
             return false;
     }
+    for (int i = 0; i < a.nhits + 1; i++) {
+        if (a.intersections[i].is_clipping_plane !=
+            b.intersections[i].is_clipping_plane)
+            return false;
+    }
     return true;
 }
 
+QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
+    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
+    QPointF spot((pt.x() / (double)W) - 0.5, (pt.y() / (double)H) - 0.5);
+    return spot;
+}
+QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
+    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
+    QPointF spot((pt.x() + 0.5) * W, (pt.y() + 0.5) * H);
+    return spot;
+}
+
 RenderPoint VectorTracer::queryPoint(QPointF spot) {
+    QPointF bound_low = grid_coord_to_point(QPoint(0, 0), grid_size);
+    QPointF bound_high = grid_coord_to_point(
+        QPoint(grid_size.width() - 1, grid_size.height() - 1), grid_size);
+    const double eps = 1e-10;
+    if (spot.x() < bound_low.x() - eps || spot.y() < bound_low.y() - eps ||
+        spot.x() > bound_high.x() + eps || spot.y() > bound_high.y() + eps) {
+        // Spot out of bounds; return dummy point
+        return RenderPoint();
+    }
+
     if (!ray_mutables) {
         int treedepth;
         int nelements;
@@ -236,16 +262,24 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
 
     return RenderPoint(spot, m, ints, hits);
 }
-
-QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
-    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    QPointF spot((pt.x() / (double)W) - 0.5, (pt.y() / (double)H) - 0.5);
-    return spot;
-}
-QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
-    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    QPointF spot((pt.x() + 0.5) * W, (pt.y() + 0.5) * H);
-    return spot;
+RenderPoint VectorTracer::subdivisionSearch(const RenderPoint &certain,
+                                            QPointF target,
+                                            const RenderPoint &representative,
+                                            int nsubdivisions) {
+    /* `certain` is in `representative` class;
+     * `target` maps outside of `representative` class */
+    RenderPoint limit_point(certain);
+    for (int k = 0; k < nsubdivisions; k++) {
+        QPointF p_mid = 0.5 * (limit_point.coords + target);
+        RenderPoint test = queryPoint(p_mid);
+        if (typematch(test, representative)) {
+            test.region_class = representative.region_class;
+            limit_point = test;
+        } else {
+            target = p_mid;
+        }
+    }
+    return limit_point;
 }
 
 void VectorTracer::computeGrid() {
@@ -383,16 +417,26 @@ void draw_boundaries_to(QPaintDevice *target,
     p.fillRect(0, 0, target->width(), target->height(), Qt::white);
     for (const Boundary &b : edge_boundaries) {
         QPainterPath path;
-        path.addPolygon(
-            scale_shift_rp_loop(b.exterior, S, QPointF(S, S), grid_size));
+        // Note: QPainter+QtSVG doesn't support true SVG closed paths
+        // so eventually an SVG generator will need to be made
+        QPolygonF poly =
+            scale_shift_rp_loop(b.exterior, S, QPointF(S, S), grid_size);
+        path.moveTo(poly[0]);
+        for (int i = 1; i < poly.size(); i++) {
+            path.lineTo(poly[i]);
+        }
+        path.closeSubpath();
         for (const QVector<RenderPoint> &loop : b.interior) {
-            path.addPolygon(
-                scale_shift_rp_loop(loop, S, QPointF(S, S), grid_size));
+            poly = scale_shift_rp_loop(loop, S, QPointF(S, S), grid_size);
+            path.moveTo(poly[0]);
+            for (int i = 1; i < poly.size(); i++) {
+                path.lineTo(poly[i]);
+            }
+            path.closeSubpath();
         }
         path.setFillRule(Qt::OddEvenFill);
 
-        p.setPen(
-            QPen(randColor(), 1, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+        p.setPen(QPen(Qt::black, 1, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
         p.setBrush(randColor());
         p.drawPath(path);
     }
@@ -620,7 +664,6 @@ void VectorTracer::computeEdges() {
         int mxsz = 0;
         int bc = 0;
         for (int i = 0; i < loops.size(); i++) {
-            // TODO: handle internal holes when it comes to it.
             const QRect &bound = loops[i].boundingRect();
             if (bound.width() * bound.height() > mxsz) {
                 mxsz = bound.width() * bound.height();
@@ -633,11 +676,12 @@ void VectorTracer::computeEdges() {
         /* Refine all loops to stay barely within class. This _cannot_ be shared
          * between classes, as boundaries aren't perfect cliffs and there may be
          * third types in between. */
-        const int nsubdivisions = 10;
+        const int nsubdivisions = 20;
         const RenderPoint &class_representative = grid_points[lx * H + ly];
         Boundary boundary;
         for (int i = 0; i < loops.size(); i++) {
             QVector<RenderPoint> qlp;
+            // Loop refinement
             for (QPoint loc : loops[i]) {
                 // Binary search for the class point nearest the outside
                 QPoint ilow((loc.x() - loc.x() % 2) / 2,
@@ -654,31 +698,95 @@ void VectorTracer::computeEdges() {
                 }
                 QPoint ip_in = low_inclass ? ilow : ihigh;
 
-                QPointF p_in = grid_coord_to_point(ip_in, grid_size);
                 QPointF p_out =
                     grid_coord_to_point(low_inclass ? ihigh : ilow, grid_size);
-                qDebug("from (%f,%f) (%f,%f)", p_in.x(), p_in.y(), p_out.x(),
-                       p_out.y());
 
                 // need a class element
-                RenderPoint in_point;
-                in_point = grid_points[ip_in.x() * H + ip_in.y()];
+                RenderPoint in_point = grid_points[ip_in.x() * H + ip_in.y()];
                 if (in_point.region_class != cls) {
                     qFatal("Invariant failure -- in_point not in class");
                 }
-                for (int k = 0; k < nsubdivisions; k++) {
-                    QPointF p_mid = 0.5 * (p_in + p_out);
-                    RenderPoint test = queryPoint(p_mid);
-                    if (typematch(test, class_representative)) {
-                        p_in = p_mid;
-                        test.region_class = cls;
-                        in_point = test;
-                    } else {
-                        p_out = p_mid;
-                    }
+                RenderPoint limit_point = subdivisionSearch(
+                    in_point, p_out, class_representative, nsubdivisions);
+
+                if (qlp.size() &&
+                    (limit_point.coords - qlp.last().coords).manhattanLength() <
+                        1e-15) {
+                    // In case bisection search, both times, reaches the grid
+                    // point.
+                    continue;
                 }
-                qlp.push_back(in_point);
+                qlp.push_back(limit_point);
             }
+            /* Loop corner insertion -- when there's a sharp double angle
+             * change, there most likely is a class point at its extension. */
+            for (int k = 0; k < qlp.size(); k++) {
+                int k0 = k, k1 = (k + 1) % qlp.size(),
+                    k2 = (k + 2) % qlp.size(), k3 = (k + 3) % qlp.size();
+                QPointF dir_pre = qlp[k1].coords - qlp[k0].coords;
+                QPointF dir_post = qlp[k2].coords - qlp[k3].coords;
+                double len_pre = std::sqrt(dir_pre.x() * dir_pre.x() +
+                                           dir_pre.y() * dir_pre.y());
+                double len_post = std::sqrt(dir_post.x() * dir_post.x() +
+                                            dir_post.y() * dir_post.y());
+                if (len_pre <= 0. || len_post <= 0.) {
+                    qFatal("Pt. overlap %f %f | %f %f | %f %f | %f %f | %f %f",
+                           len_pre, len_post, qlp[k0].coords.x(),
+                           qlp[k0].coords.y(), qlp[k1].coords.x(),
+                           qlp[k1].coords.y(), qlp[k2].coords.x(),
+                           qlp[k2].coords.y(), qlp[k3].coords.x(),
+                           qlp[k3].coords.y());
+                }
+                dir_pre /= len_pre;
+                dir_post /= len_post;
+                double dotprod = QPointF::dotProduct(dir_pre, dir_post);
+                // -1 is aligned; +1 is ultra spiky
+                if (dotprod < std::cos(5 * M_PI / 6) ||
+                    dotprod > std::cos(1 * M_PI / 6)) {
+                    continue;
+                }
+
+                double det =
+                    dir_pre.y() * dir_post.x() - dir_pre.x() * dir_post.y();
+
+                QPointF src_pre = qlp[k1].coords, src_post = qlp[k2].coords;
+                double t = (dir_post.x() * (src_post.y() - src_pre.y()) +
+                            dir_post.y() * (src_pre.x() - src_post.x())) /
+                           det;
+                double s = (dir_pre.x() * (src_post.y() - src_pre.y()) +
+                            dir_pre.y() * (src_pre.x() - src_post.x())) /
+                           det;
+                QPointF qavg = 0.5 * (src_pre + src_post);
+                QPointF qcor_pre = src_pre + t * dir_pre;
+                QPointF qcor_post = src_post + s * dir_post;
+                QPointF qcor = 0.5 * (qcor_pre + qcor_post);
+                QPointF qjump = 2 * qcor - qavg;
+
+                RenderPoint pavg = queryPoint(qavg);
+                RenderPoint pjump = queryPoint(qjump);
+                bool avg_inclass = typematch(pavg, class_representative);
+                bool jump_inclass = typematch(pjump, class_representative);
+
+                if (!avg_inclass || jump_inclass) {
+                    continue;
+                }
+
+                // TODO: this doesn't get as close to the corner as we'd like
+                // it might be off slightly
+                RenderPoint plim = subdivisionSearch(
+                    pavg, qjump, class_representative, nsubdivisions);
+                if ((plim.coords - src_pre).manhattanLength() < 1e-15 ||
+                    (plim.coords - src_post).manhattanLength() < 1e-15) {
+                    qDebug("too close to existing");
+                    continue;
+                }
+
+                // Add point 2 ahead (possibly wrapping), and skip 3
+                qlp.insert(k2, plim);
+                k += 2;
+            }
+
+            /* Place on boundary */
             if (i == bc) {
                 boundary.exterior = qlp;
             } else {
@@ -691,7 +799,7 @@ void VectorTracer::computeEdges() {
     qDebug("%d %d", edge_boundaries.size(), grid_nclasses);
 
     // Draw them lines!
-    int S = 8;
+    int S = std::max(1, 1024 / std::max(W + 1, H + 1));
     QImage lineImage((W + 1) * S, (H + 1) * S, QImage::Format_ARGB32);
     draw_boundaries_to(&lineImage, edge_boundaries, S, grid_size);
     image_edge->setImage(lineImage);
@@ -699,9 +807,21 @@ void VectorTracer::computeEdges() {
     QSvgGenerator target;
     target.setFileName("out.svg");
     draw_boundaries_to(&target, edge_boundaries, 1, grid_size);
-
-    //    image_final->fitInView(scene->itemsBoundingRect());
 }
-void VectorTracer::computeCreases() {}
-void VectorTracer::computeGradients() {}
+void VectorTracer::computeCreases() {
+    qDebug("Computing creases and boundary color details");
+    // Basically, there are creases inside each boundary
+}
+void VectorTracer::computeGradients() {
+    qDebug("Compute gradients");
+    // TODO: for now, compute colors for all points in a region;
+    // and take average (over interior points, if there are any;
+    // not edge points, for obvious reasons)
+    // If region starts with clipping plane cuts,
+    // then mark interior with stripe pattern over average color
+
+    // Render to SVG file, via QSvgGenerator
+    // and then vis QSvgRenderer, render to image.
+    // (this makes _everything_ better)
+}
 void VectorTracer::closeProgram() { QApplication::quit(); }

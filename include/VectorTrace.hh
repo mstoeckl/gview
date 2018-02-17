@@ -79,6 +79,9 @@ private:
 private:
     /* Function */
     RenderPoint queryPoint(QPointF);
+    RenderPoint subdivisionSearch(const RenderPoint &certain, QPointF target,
+                                  const RenderPoint &representative,
+                                  int nsubdivs);
     ViewData view_data;
     TrackData track_data;
     QSize grid_size;
