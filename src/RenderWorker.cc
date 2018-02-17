@@ -8,6 +8,7 @@
 #include <G4VUserDetectorConstruction.hh>
 #include <G4VisExtent.hh>
 
+#include <QCollator>
 #include <QColor>
 #include <QImage>
 #include <QPointF>
@@ -89,7 +90,7 @@ static bool clipRay(const std::vector<Plane> &clipping_planes,
 }
 
 int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
-             Intersection ints[], int maxhits, int iteration,
+             Intersection ints[], int maxhits, long iteration,
              ElemMutables mutables[]) {
     // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
     // Return number of hits recorded.
@@ -184,6 +185,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         hits[0] = stack[n - 1];
         ints[0].dist = sdist;
         ints[0].normal = entrynormal;
+        ints[0].is_clipping_plane = true;
     } else {
         // Starting point
         ++mutables[d.elements.ecode].ngeocalls;
@@ -191,6 +193,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
         hits[0] = &d.elements;
         ints[0].dist = sdist;
         ints[0].normal = lnormal;
+        ints[0].is_clipping_plane = false;
         // Intersection on entry
     }
 
@@ -250,6 +253,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
             // End clip (counts as a hit!)
             ints[nhits].dist = edist;
             ints[nhits].normal = exitnormal;
+            ints[nhits].is_clipping_plane = true;
             return nhits;
         } else if (exitdist < closestDist) {
             // Transition on leaving vol w/o intersections
@@ -264,6 +268,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
                 curr.solid->SurfaceNormal(condrot(curr, lpos));
             ints[nhits].dist = sdist;
             ints[nhits].normal = condirot(curr, lnormal);
+            ints[nhits].is_clipping_plane = false;
             if (n == 0 || nhits >= maxhits) {
                 return nhits;
             }
@@ -283,6 +288,7 @@ int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
                 closest->solid->SurfaceNormal(condrot(*closest, lpos));
             ints[nhits].dist = sdist;
             ints[nhits].normal = condirot(*closest, lnormal);
+            ints[nhits].is_clipping_plane = false;
             if (nhits >= maxhits) {
                 // Don't increment hit counter; ignore last materialc
                 return nhits;
@@ -337,12 +343,25 @@ int compressTraces(const Element *hits[], Intersection ints[], int m) {
     return p;
 }
 
-static QRgb colorMap(const G4ThreeVector &normal, const G4ThreeVector &forward,
-                     const VColor &base, G4double dist) {
+static QRgb colorMap(const Intersection &intersection,
+                     const G4RotationMatrix &frame, const VColor &base,
+                     double shade_x, double shade_y) {
+    const G4ThreeVector &forward = frame.rowX();
+    const G4ThreeVector &normal = intersection.normal;
+
     // Opposed normals (i.e, for transp backsides) are mirrored
-    G4double cx = 0.7 * std::abs(std::acos(-normal * forward) / CLHEP::pi);
-    cx = 1.0 - std::max(0.0, std::min(1.0, cx));
-    Q_UNUSED(dist);
+    G4double cx = std::abs(std::acos(-normal * forward) / CLHEP::pi);
+    cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
+
+    if (intersection.is_clipping_plane) {
+        double aslp = (frame.rowY() * forward) + 1.0;
+        double bslp = (frame.rowZ() * forward) + 1.0;
+
+        double shade_factor = aslp * shade_x + bslp * shade_y;
+        shade_factor *= 20.;
+        if (std::fmod(shade_factor, 1.) < 0.5)
+            cx *= 0.75;
+    }
 
     return VColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
                             cx * base.blueF())
@@ -542,8 +561,8 @@ void RenderRayTask::run() {
             for (int k = p; k >= 0; --k) {
                 // We use the intersection before the volume
                 const VColor &base_color = d.color_table[hits[k]->ccode];
-                QRgb altcol = colorMap(ints[k].normal, d.orientation.rowX(),
-                                       base_color, ints[k].dist);
+                QRgb altcol = colorMap(ints[k], d.orientation, base_color,
+                                       i / (double)mind, j / (double)mind);
                 double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
                 if (!hits[k]->visible) {
                     continue;
@@ -1144,4 +1163,53 @@ TrackPrivateData::~TrackPrivateData() {
     if (tree) {
         delete tree;
     }
+}
+
+static bool sortbyname(const Element &l, const Element &r) {
+    static QCollator coll;
+    coll.setNumericMode(true);
+
+    const char *lname = l.name ? l.name.data() : "";
+    const char *rname = r.name ? r.name.data() : "";
+    return coll.compare(lname, rname) < 0;
+}
+
+Element convertCreation(const G4VPhysicalVolume *phys, G4RotationMatrix rot,
+                        int *counter) {
+    int cc = 0;
+    if (!counter) {
+        counter = &cc;
+    }
+    Element m;
+    m.name = phys->GetName();
+
+    G4ThreeVector offset = phys->GetFrameTranslation();
+    offset = rot.inverse() * offset;
+    const G4RotationMatrix &r = (phys->GetFrameRotation() != NULL)
+                                    ? *phys->GetFrameRotation()
+                                    : G4RotationMatrix();
+    rot = r * rot;
+
+    // Only identity has a trace of +3 => norm2 of 0
+    m.rotated = rot.norm2() > 1e-10;
+    m.offset = offset;
+    m.rot = rot;
+
+    const G4LogicalVolume *log = phys->GetLogicalVolume();
+    const G4Material *mat = log->GetMaterial();
+    m.ccode = 0;
+    m.material = mat;
+    m.solid = log->GetSolid();
+    m.visible = mat->GetDensity() > 0.01 * CLHEP::g / CLHEP::cm3;
+    m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
+    m.ecode = *counter;
+    (*counter)++;
+
+    m.children = std::vector<Element>();
+    for (int i = 0; i < log->GetNoDaughters(); i++) {
+        m.children.push_back(
+            convertCreation(log->GetDaughter(i), m.rot, counter));
+    }
+    std::sort(m.children.begin(), m.children.end(), sortbyname);
+    return m;
 }

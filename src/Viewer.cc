@@ -36,58 +36,6 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 
-static const G4RotationMatrix identityRotation = G4RotationMatrix();
-
-static bool sortbyname(const Element &l, const Element &r) {
-    static QCollator coll;
-    coll.setNumericMode(true);
-
-    const char *lname = l.name ? l.name.data() : "";
-    const char *rname = r.name ? r.name.data() : "";
-    return coll.compare(lname, rname) < 0;
-}
-
-Element convertCreation(const G4VPhysicalVolume *phys,
-                        G4RotationMatrix rot = identityRotation,
-                        int *counter = NULL) {
-    int cc = 0;
-    if (!counter) {
-        counter = &cc;
-    }
-    Element m;
-    m.name = phys->GetName();
-
-    G4ThreeVector offset = phys->GetFrameTranslation();
-    offset = rot.inverse() * offset;
-    const G4RotationMatrix &r = (phys->GetFrameRotation() != NULL)
-                                    ? *phys->GetFrameRotation()
-                                    : identityRotation;
-    rot = r * rot;
-
-    // Only identity has a trace of +3 => norm2 of 0
-    m.rotated = rot.norm2() > 1e-10;
-    m.offset = offset;
-    m.rot = rot;
-
-    const G4LogicalVolume *log = phys->GetLogicalVolume();
-    const G4Material *mat = log->GetMaterial();
-    m.ccode = 0;
-    m.material = mat;
-    m.solid = log->GetSolid();
-    m.visible = mat->GetDensity() > 0.1 * CLHEP::g / CLHEP::cm3;
-    m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
-    m.ecode = *counter;
-    (*counter)++;
-
-    m.children = std::vector<Element>();
-    for (int i = 0; i < log->GetNoDaughters(); i++) {
-        m.children.push_back(
-            convertCreation(log->GetDaughter(i), m.rot, counter));
-    }
-    std::sort(m.children.begin(), m.children.end(), sortbyname);
-    return m;
-}
-
 static int exp10(int exp) {
     int r = 1;
     int base = 10;

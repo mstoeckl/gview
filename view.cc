@@ -1,11 +1,16 @@
 #include <QApplication>
+#include <QFile>
 #include <QProcess>
+#include <QTemporaryFile>
+#include <QTextStream>
 
 #include "Viewer.hh"
 #include <G4GDMLParser.hh>
+#include <VectorTrace.hh>
 
 int usage() {
-    fprintf(stderr, "Usage: view [filename.gdml(.gz)]+ [trace.dat(.gz)]*\n");
+    fprintf(stderr,
+            "Usage: view [--vector] [filename.gdml(.gz)]+ [trace.dat(.gz)]*\n");
     return -1;
 }
 
@@ -19,10 +24,16 @@ int main(int argc, char **argv) {
         return usage();
     }
 
+    bool vector = false;
     std::vector<GeoOption> opts;
     std::vector<TrackData> tracks;
     for (int j = 1; j < argc; j++) {
         G4String fn(argv[j]);
+        if (fn == "--vector") {
+            vector = true;
+            continue;
+        }
+
         if (fn.size() >= 3 &&
             strcmp(fn.substr(fn.size() - 3, 3).data(), ".gz") == 0) {
             system("rm -f /tmp/copy.dat.gz");
@@ -35,10 +46,30 @@ int main(int argc, char **argv) {
 
         if (fn.size() >= 5 &&
             strcmp(fn.substr(fn.size() - 5, 5).data(), ".gdml") == 0) {
+
+            // Strip properties from file to avoid a GEANT bug
+            G4cout << "Stripping extras from >" << fn << "<" << G4endl;
+            QFile ifo(fn.data());
+            QFile ofo("/tmp/cleaned.gdml");
+            if (!ifo.open(QIODevice::ReadOnly) ||
+                !ofo.open(QIODevice::WriteOnly)) {
+                qFatal("Failed to open");
+            }
+            QTextStream in(&ifo);
+            QTextStream out(&ofo);
+            while (!in.atEnd()) {
+                QString line = in.readLine();
+                if (!line.contains("<property")) {
+                    out << line << "\n";
+                }
+            }
+            ifo.close();
+            ofo.close();
+
             G4GDMLParser p;
             p.SetAddPointerToName(true);
             G4cout << "Started reading (may take a while)..." << G4endl;
-            p.Read(fn, false);
+            p.Read(ofo.fileName().toUtf8().constData(), false);
             G4cout << "Done reading..." << G4endl;
             GeoOption g;
             g.name = G4String(argv[j]);
@@ -63,6 +94,14 @@ int main(int argc, char **argv) {
         return usage();
     }
 
-    Viewer v(opts, tracks);
-    return qapp.exec();
+    if (!vector) {
+        Viewer v(opts, tracks);
+        return qapp.exec();
+    } else {
+        if (opts.size() != 1 || tracks.size() > 0) {
+            return usage();
+        }
+        VectorTracer t(opts[0]);
+        return qapp.exec();
+    }
 }

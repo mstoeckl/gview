@@ -28,6 +28,7 @@ typedef struct {
 typedef struct {
     G4ThreeVector normal;
     G4double dist;
+    bool is_clipping_plane;
 } Intersection;
 
 typedef struct {
@@ -89,7 +90,7 @@ private:
 typedef struct {
     double abs_dist;
     long ngeocalls;
-    int niter;
+    long niter;
 } ElemMutables;
 
 typedef struct Element_s {
@@ -173,6 +174,11 @@ public:
 
 void countTree(const Element &e, int &treedepth, int &nelements);
 int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
-             Intersection ints[], int maxhits, int iteration,
+             Intersection ints[], int maxhits, long iteration,
              ElemMutables mutables[]);
 int compressTraces(const Element *hits[], Intersection ints[], int m);
+
+class G4VPhysicalVolume;
+Element convertCreation(const G4VPhysicalVolume *phys,
+                        G4RotationMatrix rot = G4RotationMatrix(),
+                        int *counter = NULL);

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.6 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.3 FATAL_ERROR)
 get_filename_component(name ${CMAKE_SOURCE_DIR} NAME_WE)
 project(${name})
 
@@ -16,11 +16,12 @@ find_package(Geant4 REQUIRED)
 find_package(Qt5Core REQUIRED)
 find_package(Qt5Widgets REQUIRED)
 find_package(Qt5Gui REQUIRED)
+find_package(Qt5Svg REQUIRED)
 
 include(${Geant4_USE_FILE})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-add_compile_options(-march=native -Ofast)
+# add_compile_options(-march=native -Ofast)
 add_compile_options(-ggdb3)
 
 file(GLOB sources ${PROJECT_SOURCE_DIR}/src/*.cc)
@@ -37,7 +38,7 @@ file(GLOB mainfiles ${PROJECT_SOURCE_DIR}/*.cc)
 foreach(mainf ${mainfiles})
     get_filename_component(main ${mainf} NAME_WE)
     add_executable(${main} ${mainf} $<TARGET_OBJECTS:_base>)
-    target_link_libraries(${main} ${Geant4_LIBRARIES} Qt5::Widgets Qt5::Core Qt5::Gui)
+    target_link_libraries(${main} ${Geant4_LIBRARIES} Qt5::Widgets Qt5::Core Qt5::Gui Qt5::Svg)
     install(TARGETS ${main} DESTINATION bin)
 endforeach()
 
