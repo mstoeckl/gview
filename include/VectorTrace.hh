@@ -83,6 +83,7 @@ private:
 
     Steps step_next;
     QString file_name;
+    long nqueries;
 
 private:
     /* Function */

@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QBitmap>
+#include <QFile>
 #include <QGraphicsScene>
 #include <QGraphicsView>
 #include <QGridLayout>
@@ -10,13 +11,12 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QPixmap>
+#include <QProcess>
 #include <QPushButton>
 #include <QSet>
 #include <QStatusBar>
+#include <QTextStream>
 #include <QVBoxLayout>
-
-#include <QtSvg/QSvgGenerator>
-#include <QtSvg/QSvgRenderer>
 
 #include <G4Material.hh>
 #include <G4VSolid.hh>
@@ -108,9 +108,10 @@ void RenderPoint::swap(RenderPoint &other) {
     std::swap(ideal_color, other.ideal_color);
 }
 
-void recsetColorsByMaterial(Element &elem, std::vector<VColor> &color_table,
-                            QMap<QString, QColor> &color_map,
-                            QMap<QString, int> &idx_map) {
+static void recsetColorsByMaterial(Element &elem,
+                                   std::vector<VColor> &color_table,
+                                   QMap<QString, QColor> &color_map,
+                                   QMap<QString, int> &idx_map) {
     // We hard-code color associations to be more consistent
     QString key(elem.material->GetName().c_str());
     if (!color_map.count(key)) {
@@ -141,7 +142,7 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
         view_data.elements.solid->GetExtent().GetExtentRadius();
     view_data.scale = view_data.scene_radius / 20;
     view_data.camera = G4ThreeVector(-2 * view_data.scene_radius, 0, 0);
-    view_data.orientation = CLHEP::HepRotationX(45 * CLHEP::deg);
+    view_data.orientation = CLHEP::HepRotationX(37.44 * CLHEP::deg);
     view_data.level_of_detail = 0;
     view_data.split_by_material = true;
     view_data.clipping_planes = std::vector<Plane>();
@@ -161,7 +162,7 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
     recsetColorsByMaterial(view_data.elements, view_data.color_table, color_map,
                            idx_map);
 
-    grid_size = QSize(150, 200);
+    grid_size = QSize(300, 300);
     grid_points = NULL;
     grid_nclasses = 0;
     ray_mutables = NULL;
@@ -172,6 +173,7 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
 
     step_next = Steps::sGrid;
     file_name = QString(option.name.c_str());
+    nqueries = 0;
 
     button_full = new QPushButton("Render Full");
     connect(button_full, SIGNAL(pressed()), SLOT(renderFull()));
@@ -245,6 +247,7 @@ void VectorTracer::renderStep() {
         step_next = Steps::sDone;
         break;
     }
+    this->statusBar()->showMessage(QString("Status: %1 queries").arg(nqueries));
 }
 static bool typematch(const RenderPoint &a, const RenderPoint &b) {
     if (a.nhits != b.nhits) {
@@ -262,14 +265,14 @@ static bool typematch(const RenderPoint &a, const RenderPoint &b) {
     return true;
 }
 
-QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
+static QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
     const int W = grid_size.width() - 1, H = grid_size.height() - 1;
     const int S = std::max(W, H);
 
     QPointF spot((pt.x() - 0.5 * W) / S, (pt.y() - 0.5 * H) / S);
     return spot;
 }
-QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
+static QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
     const int W = grid_size.width() - 1, H = grid_size.height() - 1;
     const int S = std::max(W, H);
 
@@ -278,6 +281,8 @@ QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
 }
 
 RenderPoint VectorTracer::queryPoint(QPointF spot) {
+    nqueries++;
+
     QPointF bound_low = grid_coord_to_point(QPoint(0, 0), grid_size);
     QPointF bound_high = grid_coord_to_point(
         QPoint(grid_size.width() - 1, grid_size.height() - 1), grid_size);
@@ -432,9 +437,13 @@ void VectorTracer::computeGrid() {
         delete[] colors;
     }
 }
-inline uint qHash(QPointF t) { return qHash(t.x()) + 176 * qHash(t.y()); }
-inline uint qHash(QLineF t) { return qHash(t.p1()) + 133 * qHash(t.p2()); }
-inline bool operator<(const QPoint &a, const QPoint &b) {
+static inline uint qHash(QPointF t) {
+    return qHash(t.x()) + 176 * qHash(t.y());
+}
+static inline uint qHash(QLineF t) {
+    return qHash(t.p1()) + 133 * qHash(t.p2());
+}
+static inline bool operator<(const QPoint &a, const QPoint &b) {
     if (a.x() == b.x())
         return a.y() < b.y();
     return a.x() < b.x();
@@ -451,9 +460,9 @@ QPolygonF scale_shift_rp_loop(const QVector<RenderPoint> &p, double scale,
     return q;
 }
 
-void draw_boundaries_to(QPaintDevice *target,
-                        const QVector<Region> &region_list, double S,
-                        const QSize &grid_size) {
+static void draw_boundaries_to(QPaintDevice *target,
+                               const QVector<Region> &region_list, double S,
+                               const QSize &grid_size) {
 
     QPainter p(target);
     p.fillRect(0, 0, target->width(), target->height(), Qt::white);
@@ -690,8 +699,10 @@ void VectorTracer::computeEdges() {
                 QLine l = segs[k];
                 if (l.p1() == loop.last()) {
                     loop.push_back(l.p2());
-                } else {
+                } else if (l.p2() == loop.last()) {
                     loop.push_back(l.p1());
+                } else {
+                    qFatal("Invariant failure");
                 }
             }
             if (loop.first() != loop.last()) {
@@ -728,6 +739,11 @@ void VectorTracer::computeEdges() {
         region.ymax = ymax;
         region.is_clipped_patch =
             class_representative.intersections[0].is_clipping_plane;
+        if (class_representative.nhits > 0) {
+            if (!class_representative.elements[0]->visible)
+                region.is_clipped_patch = false;
+        }
+
         region.meanColor = qRgb(255, 255, 255);
         for (int i = 0; i < loops.size(); i++) {
             QVector<RenderPoint> qlp;
@@ -780,12 +796,14 @@ void VectorTracer::computeEdges() {
                 double len_post = std::sqrt(dir_post.x() * dir_post.x() +
                                             dir_post.y() * dir_post.y());
                 if (len_pre <= 0. || len_post <= 0.) {
-                    qFatal("Pt. overlap %f %f | %f %f | %f %f | %f %f | %f %f",
-                           len_pre, len_post, qlp[k0].coords.x(),
-                           qlp[k0].coords.y(), qlp[k1].coords.x(),
-                           qlp[k1].coords.y(), qlp[k2].coords.x(),
-                           qlp[k2].coords.y(), qlp[k3].coords.x(),
-                           qlp[k3].coords.y());
+                    qWarning(
+                        "Pt. overlap %f %f | %f %f | %f %f | %f %f | %f %f",
+                        len_pre, len_post, qlp[k0].coords.x(),
+                        qlp[k0].coords.y(), qlp[k1].coords.x(),
+                        qlp[k1].coords.y(), qlp[k2].coords.x(),
+                        qlp[k2].coords.y(), qlp[k3].coords.x(),
+                        qlp[k3].coords.y());
+                    continue;
                 }
                 dir_pre /= len_pre;
                 dir_post /= len_post;
@@ -806,6 +824,11 @@ void VectorTracer::computeEdges() {
                 double s = (dir_pre.x() * (src_post.y() - src_pre.y()) +
                             dir_pre.y() * (src_pre.x() - src_post.x())) /
                            det;
+                if (s < 0 || t < 0) {
+                    // If not exactly on the angle, can find intersection
+                    // point behind k0
+                    continue;
+                }
                 QPointF qavg = 0.5 * (src_pre + src_post);
                 QPointF qcor_pre = src_pre + t * dir_pre;
                 QPointF qcor_post = src_post + s * dir_post;
@@ -831,7 +854,7 @@ void VectorTracer::computeEdges() {
                     continue;
                 }
 
-                // Add point 2 ahead (possibly wrapping), and skip 3.
+                // Add point 2 ahead, and skip 3.
                 // Note: this has a bug sometimes, possible re. wrapping
                 qlp.insert(k2, plim);
                 k += 2;
@@ -854,10 +877,6 @@ void VectorTracer::computeEdges() {
     QImage lineImage((W + 1) * S, (H + 1) * S, QImage::Format_ARGB32);
     draw_boundaries_to(&lineImage, region_list, S, grid_size);
     image_edge->setImage(lineImage);
-
-    QSvgGenerator target;
-    target.setFileName("out.svg");
-    draw_boundaries_to(&target, region_list, 1, grid_size);
 }
 void VectorTracer::computeCreases() {
     qDebug("Computing creases and boundary color details");
@@ -877,6 +896,59 @@ static QRgb intersectionColor(const G4ThreeVector &normal,
     return VColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
                             cx * base.blueF())
         .rgb();
+}
+
+static QVector<QPolygonF> boundary_loops_for_region(const Region &region,
+                                                    const QPointF &offset,
+                                                    double T) {
+    QVector<QPolygonF> n;
+    QPolygonF a;
+    for (const RenderPoint &p : region.exterior) {
+        a.push_back((p.coords + offset) * T);
+    }
+    n.push_back(a);
+    for (const QVector<RenderPoint> &loop : region.interior) {
+        QPolygonF b;
+        for (const RenderPoint &p : loop) {
+            b.push_back((p.coords + offset) * T);
+        }
+        n.push_back(b);
+    }
+    return n;
+}
+
+static QString color_hex_name_rgb(QRgb color) {
+    int r = qRed(color);
+    int g = qGreen(color);
+    int b = qBlue(color);
+    const char *numbers = "0123456789abcdef";
+    return QString("#%1%2%3%4%5%6")
+        .arg(numbers[r / 16])
+        .arg(numbers[r % 16])
+        .arg(numbers[g / 16])
+        .arg(numbers[g % 16])
+        .arg(numbers[b / 16])
+        .arg(numbers[b % 16]);
+}
+
+static QString svg_path_from_polygons(const QVector<QPolygonF> &loops) {
+    const int fprec = 10;
+    QStringList path_string;
+    for (const QPolygonF &poly : loops) {
+        QPointF s = poly[0];
+        path_string.append(QString("M%1,%2")
+                               .arg(s.x(), 0, 'g', fprec)
+                               .arg(s.y(), 0, 'g', fprec));
+        for (int i = 1; i < poly.size(); i++) {
+            QPointF q = poly[i];
+            path_string.append(QString("L%1,%2")
+                                   .arg(q.x(), 0, 'g', fprec)
+                                   .arg(q.y(), 0, 'g', fprec));
+        }
+        path_string.append("Z");
+    }
+    return QString("<path fill-rule=\"evenodd\" d=\"%1\"/>\n")
+        .arg(path_string.join(" "));
 }
 
 void VectorTracer::computeGradients() {
@@ -928,58 +1000,127 @@ void VectorTracer::computeGradients() {
         region.meanColor = color;
     }
 
+    //
+    // Since QtSvg is incapable of handling clip paths like every
+    // other SVG handling code, we roll our own SVG generator.
+    //
+    // Note: As QPainter supports this, fixing it in QtSvg on render/generator
+    // sides isn't very hard.
+    //
+
     QString filename = "final.svg";
     const int S = std::max(W, H);
+    double T = 30;
+    QRectF viewbox(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S);
+
+    // Gradient -- a piecewise composite of linear and radial gradients.
+    // It's easy to fit a single gradient on a local patch;
+    // then add a dividing crease along the mismatch between regions,
+    // where opposing candidates are closest. (Again, march-cube style?,
+    // then refined ? or A/B decision style.
+
     qDebug("Rendering final image");
     {
-        QSvgGenerator gen;
-        gen.setFileName(filename);
-        gen.setTitle("Render");
+        QFile ofile(filename);
+        ofile.open(QFile::WriteOnly | QFile::Truncate);
+        QTextStream s(&ofile);
 
-        // TODO: viewbox adjusted for min(W,H)
+        s << "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"\n "
+             "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
 
-        double T = 30.;
-        gen.setViewBox(
-            QRectF(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S));
+        s << QString("<svg width=\"%1\" height=\"%2\" >\n")
+                 .arg(viewbox.width())
+                 .arg(viewbox.height());
 
-        QPainter p(&gen);
+        s << "  <defs>\n";
+
         const QPointF offset(0.5 * W / S + 1. / S, 0.5 * H / S + 1. / S);
         for (Region &region : region_list) {
-            QPainterPath path;
-            path.moveTo((region.exterior.first().coords + offset) * T);
-            for (int i = 1; i < region.exterior.size(); i++) {
-                path.lineTo((region.exterior[i].coords + offset) * T);
-            }
-            path.closeSubpath();
-            for (const QVector<RenderPoint> &loop : region.interior) {
-                path.moveTo((loop.first().coords + offset) * T);
-                for (int i = 1; i < loop.size(); i++) {
-                    path.lineTo((loop[i].coords + offset) * T);
-                }
-                path.closeSubpath();
-            }
-            path.setFillRule(Qt::OddEvenFill);
+            const QVector<QPolygonF> &loops =
+                boundary_loops_for_region(region, offset, T);
+            // TODO: path reduction! (replace linear runs with maximal lines
+            // that fall within epsilon of the replaced points. Note points are
+            // accurate to grid_spacing / 2^19
 
-            p.setPen(QPen(Qt::black, T * 0.01, Qt::SolidLine, Qt::FlatCap,
-                          Qt::MiterJoin));
-            QBrush brush(QColor(region.meanColor));
-            if (region.is_clipped_patch) {
-                // Want periodic diagonal lines.
-                // (One method is to scan over the region and perform
-                // sequential path intersections, splitting boundary and fill
-                // components of path
-            }
-            p.setBrush(brush);
-            p.drawPath(path);
+            s << QString("    <clipPath id=\"boundary%1\">\n")
+                     .arg(region.class_no);
+
+            s << "        " << svg_path_from_polygons(loops);
+            s << QString("    </clipPath>\n");
         }
+        s << "  </defs>\n";
+
+        // Interior regions, clipped by boundaries
+        for (Region &region : region_list) {
+            s << QString("<g fill=\"%1\" fill-opacity=\"1\" stroke=\"none\">\n")
+                     .arg(color_hex_name_rgb(region.meanColor));
+            if (region.is_clipped_patch) {
+                // SVG pattern fill
+                double angle = 60.0;
+                s << "  <defs>\n";
+                s << QString("    <pattern id=\"hatching%1\" width=\"1.0\" "
+                             "height=\"10\" patternTransform=\"rotate(%2 0 "
+                             "0)\" patternUnits=\"userSpaceOnUse\">\n")
+                         .arg(region.class_no)
+                         .arg(angle);
+                s << QString("       <rect width=\"100%\" height=\"100%\" "
+                             "fill=\"%1\"/>\n")
+                         .arg(color_hex_name_rgb(region.meanColor));
+                QRgb hatchco = qRgb(0.7 * qRed(region.meanColor),
+                                    0.7 * qGreen(region.meanColor),
+                                    0.7 * qBlue(region.meanColor));
+                s << QString("       <line x1=\"0\" y1=\"0\" x2=\"0\" "
+                             "y2=\"10\" style=\"stroke:%1; stroke-width:1.0\" "
+                             "/>\n")
+                         .arg(color_hex_name_rgb(hatchco));
+                s << QString("    </pattern>\n");
+
+                s << "  </defs>\n";
+                s << QString("  <rect x=\"0\" y=\"0\" width=\"%1\" "
+                             "height=\"%2\"  style=\"fill: url(#hatching%3) "
+                             "#fff;\" "
+                             "clip-path=\"url(#boundary%4)\"/>\n")
+                         .arg(viewbox.width())
+                         .arg(viewbox.height())
+                         .arg(region.class_no)
+                         .arg(region.class_no);
+            } else {
+                s << QString(
+                         "  <rect x=\"0\" y=\"0\" width=\"%1\" height=\"%2\" "
+                         "clip-path=\"url(#boundary%3)\"/>\n")
+                         .arg(viewbox.width())
+                         .arg(viewbox.height())
+                         .arg(region.class_no);
+            }
+            s << QString("</g>\n");
+        }
+
+        // Boundaries
+        s << QString("<g fill=\"none\" stroke=\"black\" stroke-width=\"%1\" "
+                     "fill-rule=\"evenodd\" stroke-linecap=\"square\" "
+                     "stroke-linejoin=\"miter\" >\n")
+                 .arg(T * 0.003);
+        for (Region &region : region_list) {
+            const QVector<QPolygonF> &loops =
+                boundary_loops_for_region(region, offset, T);
+            s << "  " << svg_path_from_polygons(loops);
+        }
+        s << QString("</g>\n");
+
+        s << "</svg>\n";
     }
 
-    QImage grad_image(W * 1000 / S, H * 1000 / S, QImage::Format_ARGB32);
-    {
-        QPainter pq(&grad_image);
-        QSvgRenderer renderer(filename);
-        renderer.render(&pq);
-    }
+    // We proxy via inkscape because QtSvg barely supports SVG.
+    // This takes half a second to run
+    QStringList command;
+    command << "inkscape";
+    command << "--export-png=/tmp/write.png";
+    command << "--export-dpi=800";
+    command << filename;
+    QProcess proc;
+    proc.start(command.first(), command.mid(1));
+    proc.waitForFinished();
+    QImage grad_image = QImage("/tmp/write.png");
     image_gradient->setImage(grad_image);
 }
 void VectorTracer::closeProgram() { QApplication::quit(); }
