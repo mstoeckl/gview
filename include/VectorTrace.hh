@@ -28,9 +28,16 @@ private:
 };
 
 typedef struct {
+    int class_no;
+    // Bounds within the grid
+    int xmin, xmax, ymin, ymax;
+    // Boundary
     QVector<RenderPoint> exterior;
     QVector<QVector<RenderPoint>> interior;
-} Boundary;
+    // Render properties
+    bool is_clipped_patch;
+    QRgb meanColor;
+} Region;
 
 enum class Steps { sGrid, sEdges, sCreases, sGradients, sDone };
 
@@ -75,6 +82,7 @@ private:
     QGraphicsView *image_final;
 
     Steps step_next;
+    QString file_name;
 
 private:
     /* Function */
@@ -87,7 +95,7 @@ private:
     QSize grid_size;
     RenderPoint *grid_points;
     int grid_nclasses;
-    QVector<Boundary> edge_boundaries;
+    QVector<Region> region_list;
     QMap<QPoint, RenderPoint> edge_refinements;
     ElemMutables *ray_mutables;
     long ray_iteration;

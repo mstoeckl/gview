@@ -14,10 +14,17 @@
 #include <QSet>
 #include <QStatusBar>
 #include <QVBoxLayout>
-#include <QtSvg/QSvgGenerator>
 
+#include <QtSvg/QSvgGenerator>
+#include <QtSvg/QSvgRenderer>
+
+#include <G4Material.hh>
 #include <G4VSolid.hh>
 #include <G4VisExtent.hh>
+
+static QColor randColor() {
+    return QColor::fromRgb(qRgb(qrand() % 255, qrand() % 255, qrand() % 255));
+}
 
 ImageWidget::ImageWidget() : QWidget(), image() {
     QSizePolicy exp(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -101,6 +108,29 @@ void RenderPoint::swap(RenderPoint &other) {
     std::swap(ideal_color, other.ideal_color);
 }
 
+void recsetColorsByMaterial(Element &elem, std::vector<VColor> &color_table,
+                            QMap<QString, QColor> &color_map,
+                            QMap<QString, int> &idx_map) {
+    // We hard-code color associations to be more consistent
+    QString key(elem.material->GetName().c_str());
+    if (!color_map.count(key)) {
+        QColor c = randColor();
+        color_map[key] = c;
+        qWarning("Material `%s` assigned random color: rgb=(%f %f %f)",
+                 key.toUtf8().constData(), c.redF(), c.blueF(), c.greenF());
+    }
+
+    if (!idx_map.count(key)) {
+        int n = idx_map.size();
+        idx_map[key] = n;
+        color_table.push_back(color_map[key].rgb());
+    }
+    elem.ccode = idx_map[key];
+    for (Element &e : elem.children) {
+        recsetColorsByMaterial(e, color_table, color_map, idx_map);
+    }
+}
+
 VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
     this->setWindowTitle(option.name.c_str());
 
@@ -119,8 +149,19 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
     p.normal = G4ThreeVector(1, 0, 0);
     p.offset = 0.;
     view_data.clipping_planes.push_back(p);
+    view_data.color_table.clear();
 
-    grid_size = QSize(99, 101);
+    QMap<QString, QColor> color_map;
+    color_map["ArGas"] = QColor::fromRgbF(0.8, 0.8, 0.8);
+    color_map["Al6061"] = QColor::fromRgbF(1.0, 0.2, 0.2);
+    color_map["G4_Pb"] = QColor::fromRgbF(0.4, 0.0, 0.7);
+    color_map["G4_Cu"] = QColor::fromRgbF(0.0, 0.9, 0.7);
+    color_map["BaF2"] = QColor::fromRgbF(1.0, 1.0, 1.0);
+    QMap<QString, int> idx_map;
+    recsetColorsByMaterial(view_data.elements, view_data.color_table, color_map,
+                           idx_map);
+
+    grid_size = QSize(150, 200);
     grid_points = NULL;
     grid_nclasses = 0;
     ray_mutables = NULL;
@@ -130,6 +171,7 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
     this->menuBar()->addAction("Exit", this, SLOT(closeProgram()));
 
     step_next = Steps::sGrid;
+    file_name = QString(option.name.c_str());
 
     button_full = new QPushButton("Render Full");
     connect(button_full, SIGNAL(pressed()), SLOT(renderFull()));
@@ -222,12 +264,16 @@ static bool typematch(const RenderPoint &a, const RenderPoint &b) {
 
 QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
     const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    QPointF spot((pt.x() / (double)W) - 0.5, (pt.y() / (double)H) - 0.5);
+    const int S = std::max(W, H);
+
+    QPointF spot((pt.x() - 0.5 * W) / S, (pt.y() - 0.5 * H) / S);
     return spot;
 }
 QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
     const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    QPointF spot((pt.x() + 0.5) * W, (pt.y() + 0.5) * H);
+    const int S = std::max(W, H);
+
+    QPointF spot(pt.x() * S + 0.5 * W, pt.y() * S + 0.5 * H);
     return spot;
 }
 
@@ -405,17 +451,13 @@ QPolygonF scale_shift_rp_loop(const QVector<RenderPoint> &p, double scale,
     return q;
 }
 
-QColor randColor() {
-    return QColor::fromRgb(qRgb(qrand() % 255, qrand() % 255, qrand() % 255));
-}
-
 void draw_boundaries_to(QPaintDevice *target,
-                        const QVector<Boundary> &edge_boundaries, double S,
+                        const QVector<Region> &region_list, double S,
                         const QSize &grid_size) {
 
     QPainter p(target);
     p.fillRect(0, 0, target->width(), target->height(), Qt::white);
-    for (const Boundary &b : edge_boundaries) {
+    for (const Region &b : region_list) {
         QPainterPath path;
         // Note: QPainter+QtSVG doesn't support true SVG closed paths
         // so eventually an SVG generator will need to be made
@@ -443,7 +485,7 @@ void draw_boundaries_to(QPaintDevice *target,
 }
 
 void VectorTracer::computeEdges() {
-    edge_boundaries.clear();
+    region_list.clear();
     int W = grid_size.width(), H = grid_size.height();
     for (int cls = 0; cls < grid_nclasses; cls++) {
         qDebug("Computing region boundaries %d", cls);
@@ -678,7 +720,15 @@ void VectorTracer::computeEdges() {
          * third types in between. */
         const int nsubdivisions = 20;
         const RenderPoint &class_representative = grid_points[lx * H + ly];
-        Boundary boundary;
+        Region region;
+        region.class_no = cls;
+        region.xmin = xmin;
+        region.xmax = xmax;
+        region.ymin = ymin;
+        region.ymax = ymax;
+        region.is_clipped_patch =
+            class_representative.intersections[0].is_clipping_plane;
+        region.meanColor = qRgb(255, 255, 255);
         for (int i = 0; i < loops.size(); i++) {
             QVector<RenderPoint> qlp;
             // Loop refinement
@@ -781,47 +831,155 @@ void VectorTracer::computeEdges() {
                     continue;
                 }
 
-                // Add point 2 ahead (possibly wrapping), and skip 3
+                // Add point 2 ahead (possibly wrapping), and skip 3.
+                // Note: this has a bug sometimes, possible re. wrapping
                 qlp.insert(k2, plim);
                 k += 2;
             }
 
             /* Place on boundary */
             if (i == bc) {
-                boundary.exterior = qlp;
+                region.exterior = qlp;
             } else {
-                boundary.interior.push_back(qlp);
+                region.interior.push_back(qlp);
             }
         }
-        edge_boundaries.push_back(boundary);
+        region_list.push_back(region);
     }
 
-    qDebug("%d %d", edge_boundaries.size(), grid_nclasses);
+    qDebug("Number of regions: %d", region_list.size());
 
     // Draw them lines!
     int S = std::max(1, 1024 / std::max(W + 1, H + 1));
     QImage lineImage((W + 1) * S, (H + 1) * S, QImage::Format_ARGB32);
-    draw_boundaries_to(&lineImage, edge_boundaries, S, grid_size);
+    draw_boundaries_to(&lineImage, region_list, S, grid_size);
     image_edge->setImage(lineImage);
 
     QSvgGenerator target;
     target.setFileName("out.svg");
-    draw_boundaries_to(&target, edge_boundaries, 1, grid_size);
+    draw_boundaries_to(&target, region_list, 1, grid_size);
 }
 void VectorTracer::computeCreases() {
     qDebug("Computing creases and boundary color details");
     // Basically, there are creases inside each boundary
-}
-void VectorTracer::computeGradients() {
-    qDebug("Compute gradients");
-    // TODO: for now, compute colors for all points in a region;
-    // and take average (over interior points, if there are any;
-    // not edge points, for obvious reasons)
-    // If region starts with clipping plane cuts,
-    // then mark interior with stripe pattern over average color
 
-    // Render to SVG file, via QSvgGenerator
-    // and then vis QSvgRenderer, render to image.
-    // (this makes _everything_ better)
+    // We also should determine the intensity of separating lines
+    // as the point of separation may be set back a bit; in that case,
+    // lines may vary in color as they progress
+}
+static QRgb intersectionColor(const G4ThreeVector &normal,
+                              const G4ThreeVector &forward,
+                              const VColor &base) {
+    // Opposed normals (i.e, for transp backsides) are mirrored
+    G4double cx = std::abs(std::acos(-normal * forward) / CLHEP::pi);
+    cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
+
+    return VColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
+                            cx * base.blueF())
+        .rgb();
+}
+
+void VectorTracer::computeGradients() {
+    qDebug("Computing gradients");
+
+    int W = grid_size.width(), H = grid_size.height();
+    for (Region &region : region_list) {
+        // We compute the region average color over all points in the interior;
+        // each grid class must have at least one such point
+        int cls = region.class_no;
+        int net_r = 0, net_g = 0, net_b = 0, net_a = 0, net_count = 0;
+        for (int x = region.xmin; x <= region.xmax; x++) {
+            for (int y = region.ymin; y <= region.ymax; y++) {
+                if (grid_points[x * H + y].region_class != cls)
+                    continue;
+
+                RenderPoint &pt = grid_points[x * H + y];
+
+                QRgb col = qRgba(255, 255, 255, 0);
+                // p indicates the first volume to use the color rule on
+                // (p<0 indicates the line dominates)
+                for (int k = pt.nhits - 1; k >= 0; --k) {
+                    // We use the intersection before the volume
+                    const VColor &base_color =
+                        view_data.color_table[pt.elements[k]->ccode];
+                    QRgb altcol = intersectionColor(
+                        pt.intersections[k].normal,
+                        view_data.orientation.rowX(), base_color);
+                    double e = pt.elements[k]->alpha,
+                           f = (1. - pt.elements[k]->alpha);
+                    if (!pt.elements[k]->visible) {
+                        continue;
+                    }
+                    col = qRgba(int(e * qRed(altcol) + f * qRed(col)),
+                                int(e * qGreen(altcol) + f * qGreen(col)),
+                                int(e * qBlue(altcol) + f * qBlue(col)),
+                                int(e * qAlpha(altcol) + f * qAlpha(col)));
+                }
+                pt.ideal_color = col;
+                net_r += qRed(col);
+                net_g += qGreen(col);
+                net_b += qBlue(col);
+                net_a += qAlpha(col);
+                net_count += 1;
+            }
+        }
+        QRgb color = qRgba(net_r / net_count, net_g / net_count,
+                           net_b / net_count, net_a / net_count);
+        region.meanColor = color;
+    }
+
+    QString filename = "final.svg";
+    const int S = std::max(W, H);
+    qDebug("Rendering final image");
+    {
+        QSvgGenerator gen;
+        gen.setFileName(filename);
+        gen.setTitle("Render");
+
+        // TODO: viewbox adjusted for min(W,H)
+
+        double T = 30.;
+        gen.setViewBox(
+            QRectF(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S));
+
+        QPainter p(&gen);
+        const QPointF offset(0.5 * W / S + 1. / S, 0.5 * H / S + 1. / S);
+        for (Region &region : region_list) {
+            QPainterPath path;
+            path.moveTo((region.exterior.first().coords + offset) * T);
+            for (int i = 1; i < region.exterior.size(); i++) {
+                path.lineTo((region.exterior[i].coords + offset) * T);
+            }
+            path.closeSubpath();
+            for (const QVector<RenderPoint> &loop : region.interior) {
+                path.moveTo((loop.first().coords + offset) * T);
+                for (int i = 1; i < loop.size(); i++) {
+                    path.lineTo((loop[i].coords + offset) * T);
+                }
+                path.closeSubpath();
+            }
+            path.setFillRule(Qt::OddEvenFill);
+
+            p.setPen(QPen(Qt::black, T * 0.01, Qt::SolidLine, Qt::FlatCap,
+                          Qt::MiterJoin));
+            QBrush brush(QColor(region.meanColor));
+            if (region.is_clipped_patch) {
+                // Want periodic diagonal lines.
+                // (One method is to scan over the region and perform
+                // sequential path intersections, splitting boundary and fill
+                // components of path
+            }
+            p.setBrush(brush);
+            p.drawPath(path);
+        }
+    }
+
+    QImage grad_image(W * 1000 / S, H * 1000 / S, QImage::Format_ARGB32);
+    {
+        QPainter pq(&grad_image);
+        QSvgRenderer renderer(filename);
+        renderer.render(&pq);
+    }
+    image_gradient->setImage(grad_image);
 }
 void VectorTracer::closeProgram() { QApplication::quit(); }
