@@ -34,9 +34,11 @@ typedef struct {
     // Boundary
     QVector<RenderPoint> exterior;
     QVector<QVector<RenderPoint>> interior;
-    // Render properties
+    // Render cached properties
     bool is_clipped_patch;
     QRgb meanColor;
+    QRgb meanExteriorColor;
+    QVector<QRgb> meanInteriorColors;
 } Region;
 
 enum class Steps { sGrid, sEdges, sCreases, sGradients, sDone };
@@ -88,9 +90,12 @@ private:
 private:
     /* Function */
     RenderPoint queryPoint(QPointF);
-    RenderPoint subdivisionSearch(const RenderPoint &certain, QPointF target,
-                                  const RenderPoint &representative,
-                                  int nsubdivs);
+    void bracketEdge(const RenderPoint &initial_inside,
+                     const RenderPoint &initial_outside,
+                     RenderPoint *result_inside, RenderPoint *result_outside);
+    QColor calculateInteriorColor(const RenderPoint &pt);
+    QColor calculateBoundaryColor(const RenderPoint &inside,
+                                  const RenderPoint &outside);
     ViewData view_data;
     TrackData track_data;
     QSize grid_size;
