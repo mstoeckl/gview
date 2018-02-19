@@ -4,6 +4,7 @@
 #include "CustomWidgets.hh"
 #include "Overview.hh"
 #include "RenderWidget.hh"
+#include "VectorTrace.hh"
 
 #include <G4GDMLParser.hh>
 #include <G4LogicalVolume.hh>
@@ -146,6 +147,18 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     screenAction->setToolTip("Take a screenshot of active scene");
     connect(screenAction, SIGNAL(triggered()), this, SLOT(screenshot()));
 
+    QAction *vectorTAction = new QAction("Vector (Transparent)", this);
+    vectorTAction->setToolTip(
+        "Take a transparent vector screenshot of active scene");
+    connect(vectorTAction, SIGNAL(triggered()), this,
+            SLOT(vectorTScreenshot()));
+
+    QAction *vectorOAction = new QAction("Vector (Opaque)", this);
+    vectorOAction->setToolTip(
+        "Take an opaque vector screenshot of active scene");
+    connect(vectorOAction, SIGNAL(triggered()), this,
+            SLOT(vectorOScreenshot()));
+
     QAction *screen4Action = new QAction("ScrSht4x", this);
     screen4Action->setToolTip(
         "Take a screenshot of active scene; at 4x sampling");
@@ -171,8 +184,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     sub->addAction(mtlAction);
     sub->addAction(oriAction);
     this->menuBar()->addSeparator();
-    this->menuBar()->addAction(screenAction);
-    this->menuBar()->addAction(screen4Action);
+    QMenu *imgmenu = this->menuBar()->addMenu("Screenshot");
+    imgmenu->addAction(screenAction);
+    imgmenu->addAction(screen4Action);
+    imgmenu->addAction(vectorTAction);
+    imgmenu->addAction(vectorOAction);
 
     rwidget = new RenderWidget(vd, trackdata);
     this->setCentralWidget(rwidget);
@@ -700,7 +716,18 @@ void Viewer::screenshot(int sx) {
     RenderSaveObject *rso = new RenderSaveObject(vd, trackdata, w, h);
     rso->start();
 }
-
+void Viewer::vectorTScreenshot() {
+    VectorTracer *vt =
+        new VectorTracer(vd, trackdata, "vector_transparent.svg", true);
+    vt->renderFull();
+    delete vt;
+}
+void Viewer::vectorOScreenshot() {
+    VectorTracer *vt =
+        new VectorTracer(vd, trackdata, "vector_opaque.svg", false);
+    vt->renderFull();
+    delete vt;
+}
 void Viewer::reloadChoiceMenus() {
     gpicker_menu->clear();
     tpicker_menu->clear();

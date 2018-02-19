@@ -2,10 +2,6 @@
 
 #include "Viewer.hh"
 
-#include <QMainWindow>
-
-class QGraphicsView;
-
 class RenderPoint {
 public:
     RenderPoint(QPointF spot, int nhits, const Intersection *srcints,
@@ -43,22 +39,12 @@ typedef struct {
 
 enum class Steps { sGrid, sEdges, sCreases, sGradients, sDone };
 
-class ImageWidget : public QWidget {
+class VectorTracer : public QObject {
     Q_OBJECT
 public:
-    ImageWidget();
-    virtual ~ImageWidget();
-    void setImage(QImage im);
-
-private:
-    virtual void paintEvent(QPaintEvent *evt);
-    QImage image;
-};
-
-class VectorTracer : public QMainWindow {
-    Q_OBJECT
-public:
-    VectorTracer(GeoOption option);
+    VectorTracer(ViewData view_data, TrackData track_data,
+                 const QString &target_file, bool transparency = true,
+                 QObject *parent = NULL);
     virtual ~VectorTracer();
 public slots:
     void renderFull();
@@ -68,24 +54,8 @@ public slots:
     void computeEdges();
     void computeCreases();
     void computeGradients();
-
-    void closeProgram();
-
-private:
-    /* UI */
-    QPushButton *button_full;
-    QPushButton *button_step;
-    QLabel *label_step;
-
-    ImageWidget *image_grid;
-    ImageWidget *image_edge;
-    ImageWidget *image_crease;
-    ImageWidget *image_gradient;
-    QGraphicsView *image_final;
-
-    Steps step_next;
-    QString file_name;
-    long nqueries;
+signals:
+    void produceImagePhase(QImage, QString message, int nqueries, bool done);
 
 private:
     /* Function */
@@ -96,6 +66,15 @@ private:
     QColor calculateInteriorColor(const RenderPoint &pt);
     QColor calculateBoundaryColor(const RenderPoint &inside,
                                   const RenderPoint &outside);
+    int faildepth(const RenderPoint &a, const RenderPoint &b);
+    inline bool typematch(const RenderPoint &a, const RenderPoint &b) {
+        return faildepth(a, b) < 0;
+    }
+    Steps step_next;
+    QString file_name;
+    long nqueries;
+    bool transparent_volumes;
+
     ViewData view_data;
     TrackData track_data;
     QSize grid_size;

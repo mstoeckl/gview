@@ -1,12 +1,13 @@
+#include "VectorWindow.hh"
+#include "Viewer.hh"
+
 #include <QApplication>
 #include <QFile>
 #include <QProcess>
 #include <QTemporaryFile>
 #include <QTextStream>
 
-#include "Viewer.hh"
 #include <G4GDMLParser.hh>
-#include <VectorTrace.hh>
 
 int usage() {
     fprintf(stderr,
@@ -101,7 +102,7 @@ int main(int argc, char **argv) {
         if (opts.size() != 1 || tracks.size() > 0) {
             return usage();
         }
-        VectorTracer t(opts[0]);
+        VectorWindow t(opts[0]);
         return qapp.exec();
     }
 }

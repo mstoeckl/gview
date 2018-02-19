@@ -1,67 +1,22 @@
 #include "VectorTrace.hh"
 
-#include <QApplication>
-#include <QBitmap>
 #include <QFile>
-#include <QGraphicsScene>
-#include <QGraphicsView>
-#include <QGridLayout>
-#include <QHBoxLayout>
-#include <QImage>
-#include <QLabel>
-#include <QMenuBar>
-#include <QPixmap>
+#include <QPainter>
+#include <QPen>
 #include <QProcess>
-#include <QPushButton>
-#include <QSet>
-#include <QStatusBar>
 #include <QTextStream>
 #include <QTime>
-#include <QVBoxLayout>
 
 #include <G4Material.hh>
-#include <G4VSolid.hh>
-#include <G4VisExtent.hh>
 
 static QColor randColor() {
     return QColor::fromRgb(qRgb(qrand() % 255, qrand() % 255, qrand() % 255));
 }
 
-ImageWidget::ImageWidget() : QWidget(), image() {
-    QSizePolicy exp(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    this->setSizePolicy(exp);
-}
-ImageWidget::~ImageWidget() {}
-void ImageWidget::setImage(QImage im) {
-    // duplicate image to avoid case where data
-    // is changed underneath it
-    image = im.copy();
-    this->update();
-}
-void ImageWidget::paintEvent(QPaintEvent *) {
-    if (this->height() <= 0 || this->width() <= 0 || image.isNull()) {
-        return;
-    }
-    int s = std::min(this->width() / image.width(),
-                     this->height() / image.height());
-
-    QPainter q(this);
-    q.fillRect(rect(), Qt::gray);
-    QImage mvd;
-    if (s > 0) {
-        mvd = image.scaled(image.width() * s, image.height() * s,
-                           Qt::IgnoreAspectRatio, Qt::FastTransformation);
-
-    } else {
-        mvd = image.scaled(this->width(), this->height(), Qt::KeepAspectRatio,
-                           Qt::SmoothTransformation);
-    }
-    q.drawImage(
-        this->rect().center() - QPoint(mvd.width() / 2, mvd.height() / 2), mvd);
-}
-
 RenderPoint::RenderPoint() {
-    coords = QPointF(0., 0.);
+    // Initialize to nan to break use when uninitialized
+    double nan = std::numeric_limits<double>::quiet_NaN();
+    coords = QPointF(nan, nan);
     intersections = NULL;
     elements = NULL;
     nhits = 0;
@@ -141,25 +96,14 @@ static void recsetColorsByMaterial(Element &elem,
     }
 }
 
-VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
-    this->setWindowTitle(option.name.c_str());
-
-    /* Initialize functional stuff */
-
-    view_data.elements = convertCreation(option.vol);
-    view_data.scene_radius =
-        view_data.elements.solid->GetExtent().GetExtentRadius();
-    view_data.scale = view_data.scene_radius / 20;
-    view_data.camera = G4ThreeVector(-2 * view_data.scene_radius, 0, 0);
-    view_data.orientation = CLHEP::HepRotationX(37.44 * CLHEP::deg);
-    view_data.level_of_detail = 0;
-    view_data.split_by_material = true;
-    view_data.clipping_planes = std::vector<Plane>();
-    Plane p;
-    p.normal = G4ThreeVector(1, 0, 0);
-    p.offset = 0.;
-    view_data.clipping_planes.push_back(p);
-    view_data.color_table.clear();
+VectorTracer::VectorTracer(ViewData vd, TrackData td,
+                           const QString &target_file, bool transparency,
+                           QObject *parent)
+    : QObject(parent), view_data(vd), track_data(td) {
+    step_next = Steps::sGrid;
+    file_name = target_file;
+    nqueries = 0;
+    transparent_volumes = transparency;
 
     QMap<QString, QColor> color_map;
     color_map["ArGas"] = QColor::fromRgbF(0.8, 0.8, 0.8);
@@ -169,58 +113,18 @@ VectorTracer::VectorTracer(GeoOption option) : QMainWindow() {
     color_map["G4_Cu"] = QColor::fromRgbF(0.0, 0.9, 0.7);
     color_map["BaF2"] = QColor::fromRgbF(1.0, 1.0, 1.0);
     QMap<QString, int> idx_map;
+    view_data.color_table.clear();
     recsetColorsByMaterial(view_data.elements, view_data.color_table, color_map,
                            idx_map);
 
     grid_size = QSize(300, 300);
+    //    grid_size = QSize(40, 40);
     grid_points = NULL;
     grid_nclasses = 0;
     ray_mutables = NULL;
     ray_iteration = 0;
-
-    /* Initialize UI */
-    this->menuBar()->addAction("Exit", this, SLOT(closeProgram()));
-
-    step_next = Steps::sGrid;
-    file_name = QString(option.name.c_str());
-    nqueries = 0;
-
-    button_full = new QPushButton("Render Full");
-    connect(button_full, SIGNAL(pressed()), SLOT(renderFull()));
-    button_step = new QPushButton("Render Step");
-    connect(button_step, SIGNAL(pressed()), SLOT(renderStep()));
-    label_step = new QLabel("Step: ---");
-
-    image_grid = new ImageWidget();
-    image_edge = new ImageWidget();
-    image_crease = new ImageWidget();
-    image_gradient = new ImageWidget();
-    image_final = new QGraphicsView();
-
-    QHBoxLayout *layout_columns = new QHBoxLayout();
-
-    QVBoxLayout *layout_control = new QVBoxLayout();
-    layout_control->addWidget(button_full);
-    layout_control->addWidget(button_step);
-    layout_control->addWidget(label_step);
-    layout_columns->addLayout(layout_control, 0);
-
-    QGridLayout *layout_steps = new QGridLayout();
-    layout_steps->addWidget(image_grid, 0, 0);
-    layout_steps->addWidget(image_edge, 0, 1);
-    layout_steps->addWidget(image_crease, 1, 0);
-    layout_steps->addWidget(image_gradient, 1, 1);
-    layout_columns->addLayout(layout_steps, 2);
-
-    layout_columns->addWidget(image_final, 1);
-    QWidget *central_widget = new QWidget();
-    central_widget->setLayout(layout_columns);
-    this->setCentralWidget(central_widget);
-
-    this->statusBar()->showMessage("Status:");
-
-    this->show();
 }
+
 VectorTracer::~VectorTracer() {
     if (grid_points)
         delete[] grid_points;
@@ -239,53 +143,80 @@ void VectorTracer::renderStep() {
     case Steps::sGrid:
         computeGrid();
         step_next = Steps::sEdges;
-        label_step->setText("Step: Grid");
         break;
     case Steps::sEdges:
         computeEdges();
         step_next = Steps::sCreases;
-        label_step->setText("Step: Edges");
         break;
     case Steps::sCreases:
         computeCreases();
         step_next = Steps::sGradients;
-        label_step->setText("Step: Creases");
         break;
     case Steps::sGradients:
         computeGradients();
-        label_step->setText("Step: Gradients");
         step_next = Steps::sDone;
         break;
     }
-    this->statusBar()->showMessage(QString("Status: %1 queries").arg(nqueries));
 }
-static int faildepth(const RenderPoint &a, const RenderPoint &b) {
-    for (int i = 0; i < std::min(a.nhits, b.nhits); i++) {
-        if (a.elements[i] != b.elements[i] ||
-            a.intersections[i].is_clipping_plane !=
-                b.intersections[i].is_clipping_plane) {
-            return i;
+int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
+    // Dummy points always match each other
+    if (!a.intersections && !b.intersections)
+        return -1;
+
+    if (!transparent_volumes) {
+        // Consider only the first disagreement in visible volumes
+        // Q: should compressTraces automatically vanish invisible volumes?
+        // and use a null element gap instead?
+        if (!a.intersections || !b.intersections)
+            return 0;
+        Element *first_a = NULL, *first_b = NULL;
+        Intersection *first_ia = NULL, *first_ib = NULL;
+        for (int i = 0; i < a.nhits; i++) {
+            if (a.elements[i]->visible) {
+                first_a = a.elements[i];
+                first_ia = &a.intersections[i];
+                break;
+            }
         }
-    }
-    if (a.nhits != b.nhits) {
-        return std::min(a.nhits, b.nhits);
-    }
-    // In case of dummy point
-    if (!a.intersections || !b.intersections)
-        return 0;
+        for (int i = 0; i < b.nhits; i++) {
+            if (b.elements[i]->visible) {
+                first_b = b.elements[i];
+                first_ib = &b.intersections[i];
+                break;
+            }
+        }
+        if (first_a != first_b) {
+            return 0;
+        }
+        if (first_ia && first_ib &&
+            first_ia->is_clipping_plane != first_ib->is_clipping_plane) {
+            return 0;
+        }
+        return -1;
+    } else {
+        for (int i = 0; i < std::min(a.nhits, b.nhits); i++) {
+            if (a.elements[i] != b.elements[i] ||
+                a.intersections[i].is_clipping_plane !=
+                    b.intersections[i].is_clipping_plane) {
+                return i;
+            }
+        }
+        if (a.nhits != b.nhits) {
+            return std::min(a.nhits, b.nhits);
+        }
+        if (!a.intersections || !b.intersections)
+            return 0;
 
-    int n = a.nhits; // also = b.nhits
-    if (a.intersections[n].is_clipping_plane !=
-        b.intersections[n].is_clipping_plane) {
-        return n;
-    }
-    // no failure
-    return -1;
-}
-static bool typematch(const RenderPoint &a, const RenderPoint &b) {
-    return faildepth(a, b) < 0;
-}
+        int n = a.nhits; // also = b.nhits
+        if (a.intersections[n].is_clipping_plane !=
+            b.intersections[n].is_clipping_plane) {
+            return n;
+        }
 
+        // no failure
+        return -1;
+    }
+}
 static QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
     const int W = grid_size.width() - 1, H = grid_size.height() - 1;
     const int S = std::max(W, H);
@@ -311,7 +242,9 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
     if (spot.x() < bound_low.x() - eps || spot.y() < bound_low.y() - eps ||
         spot.x() > bound_high.x() + eps || spot.y() > bound_high.y() + eps) {
         // Spot out of bounds; return dummy point
-        return RenderPoint();
+        RenderPoint r;
+        r.coords = spot;
+        return r;
     }
 
     if (!ray_mutables) {
@@ -370,37 +303,41 @@ static void intersectionColor(const G4ThreeVector &normal,
 static QColor retractionMerge(const RenderPoint &pt, float color[4],
                               const G4ThreeVector &normal,
                               const std::vector<VColor> &color_table,
-                              int startpoint) {
+                              int startpoint, bool transparent_volumes) {
     for (int k = startpoint; k >= 0; --k) {
+        if (!pt.elements[k]->visible) {
+            continue;
+        }
+
         // We use the intersection before the volume
         const VColor &base_color = color_table[pt.elements[k]->ccode];
         float acolor[4];
         intersectionColor(pt.intersections[k].normal, normal, base_color,
                           acolor);
-        double e = pt.elements[k]->alpha, f = (1. - pt.elements[k]->alpha);
-        if (!pt.elements[k]->visible) {
-            continue;
-        }
+        double e = transparent_volumes ? pt.elements[k]->alpha : 1.0;
         for (int i = 0; i < 4; i++) {
-            color[i] = e * acolor[i] + f * color[i];
+            color[i] = e * acolor[i] + (1 - e) * color[i];
         }
     }
     return QColor::fromRgbF(color[0], color[1], color[2], color[3]);
 }
 QColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
 
-    float color[4] = {1., 1., 1., 0.};
+    float color[4] = {0.9, 0.9, 0.9, 0.1};
     return retractionMerge(pt, color, view_data.orientation.rowX(),
-                           view_data.color_table, pt.nhits - 1);
+                           view_data.color_table, pt.nhits - 1,
+                           transparent_volumes);
 }
 QColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
                                             const RenderPoint &outside) {
     // lim necessary <= inside.nhits
     int lim = faildepth(inside, outside);
     float color[4] = {0., 0., 0., 1.};
+    if (!transparent_volumes)
+        return QColor(color[0], color[1], color[2], color[3]);
     // It is possible that lim=inside.nhits if outside has an extra solid
     return retractionMerge(inside, color, view_data.orientation.rowX(),
-                           view_data.color_table, lim - 1);
+                           view_data.color_table, lim - 1, true);
 }
 
 void VectorTracer::computeGrid() {
@@ -502,7 +439,9 @@ void VectorTracer::computeGrid() {
         }
 
         QImage img((uchar *)dat, W, H, QImage::Format_ARGB32);
-        image_grid->setImage(img);
+        emit produceImagePhase(img.copy(), QString("Grid completed"), nqueries,
+                               false);
+
         delete[] dat;
         delete[] colors;
     }
@@ -517,6 +456,20 @@ static inline bool operator<(const QPoint &a, const QPoint &b) {
     if (a.x() == b.x())
         return a.y() < b.y();
     return a.x() < b.x();
+}
+static QPolygon reverse_poly(const QPolygon &p) {
+    QPolygon r;
+    for (int k = 0; k < p.size(); k++) {
+        r.push_back(p[p.size() - 1 - k]);
+    }
+    return r;
+}
+static QVector<RenderPoint> reverse_rloop(const QVector<RenderPoint> &p) {
+    QVector<RenderPoint> r;
+    for (int k = 0; k < p.size(); k++) {
+        r.push_back(p[p.size() - 1 - k]);
+    }
+    return r;
 }
 
 QPolygonF scale_shift_rp_loop(const QVector<RenderPoint> &p, double scale,
@@ -598,7 +551,13 @@ void VectorTracer::computeEdges() {
                         continue;
                     if (grid_points[nx * H + ny].region_class == cls)
                         code |= 1 << i;
+                    //                    qDebug("%d %d %d %d %d", i, nx,
+                    //                    ny,
+                    //                           grid_points[nx * H +
+                    //                           ny].region_class, cls);
                 }
+                //                qDebug("%x", code);
+
                 switch (code) {
                 case 0xF:
                 case 0x0:
@@ -680,7 +639,8 @@ void VectorTracer::computeEdges() {
         qDebug("Construction region boundaries %d: %d segments", cls,
                segs.length());
 
-        /* Stitch together line segments into loops, via... eqvlclass routine!
+        /* Stitch together line segments into loops, via... eqvlclass
+         * routine!
          */
         typedef struct {
             int ids[2];
@@ -783,6 +743,21 @@ void VectorTracer::computeEdges() {
             loops.push_back(loop);
         }
 
+        /* Normalize loop orientations to be positive. Self crossing will
+         * never happen for marching squares results */
+        for (int i = 0; i < loops.size(); i++) {
+            int area = 0;
+            for (int k0 = 0; k0 < loops[i].size(); k0++) {
+                int k1 = (k0 + 1) % loops[i].size();
+                area += (loops[i][k1].x() - loops[i][k0].x()) *
+                        (loops[i][k1].y() + loops[i][k1].y());
+            }
+
+            if (area > 0) {
+                loops[i] = reverse_poly(loops[i]);
+            }
+        }
+
         /* Loop with greatest extent is the containing loop */
         int mxsz = 0;
         int bc = 0;
@@ -793,13 +768,13 @@ void VectorTracer::computeEdges() {
                 bc = i;
             }
         }
-
         qDebug("Refining region boundaries %d: %d loops", cls, loops.size());
 
-        /* Refine all loops to stay barely within class. This _cannot_ be shared
-         * between classes, as boundaries aren't perfect cliffs and there may be
-         * third types in between. */
+        /* Refine all loops to stay barely within class. This _cannot_ be
+         * shared between classes, as boundaries aren't perfect cliffs and
+         * there may be third types in between. */
         const RenderPoint &class_representative = grid_points[lx * H + ly];
+
         Region region;
         region.class_no = cls;
         region.xmin = xmin;
@@ -840,6 +815,7 @@ void VectorTracer::computeEdges() {
                     out_point = grid_points[ip_out.x() * H + ip_out.y()];
                 } else {
                     out_point = RenderPoint();
+                    out_point.coords = QPointF(ip_out);
                 }
                 RenderPoint in_limit, out_limit;
                 bracketEdge(in_point, out_point, &in_limit, &out_limit);
@@ -849,14 +825,16 @@ void VectorTracer::computeEdges() {
                 if (qlp.size() &&
                     (in_limit.coords - qlp.last().coords).manhattanLength() <
                         1e-15) {
-                    // In case bisection search, both times, reaches the grid
-                    // point.
+                    // In case bisection search, both times, reaches the
+                    // grid point.
                     continue;
                 }
                 qlp.push_back(in_limit);
             }
+
             /* Loop corner insertion -- when there's a sharp double angle
-             * change, there most likely is a class point at its extension. */
+             * change, there most likely is a class point at its extension.
+             */
             for (int k = 0; k < qlp.size(); k++) {
                 int k0 = k, k1 = (k + 1) % qlp.size(),
                     k2 = (k + 2) % qlp.size(), k3 = (k + 3) % qlp.size();
@@ -915,8 +893,8 @@ void VectorTracer::computeEdges() {
                     continue;
                 }
 
-                // TODO: this doesn't get as close to the corner as we'd like
-                // it might be off slightly
+                // TODO: this doesn't get as close to the corner as we'd
+                // like it might be off slightly
                 RenderPoint plim_in, plim_out;
                 bracketEdge(pavg, pjump, &plim_in, &plim_out);
                 plim_in.ideal_color =
@@ -936,7 +914,10 @@ void VectorTracer::computeEdges() {
 
             /* Place on boundary */
             if (i == bc) {
-                region.exterior = qlp;
+                // Exterior and interior regions must have opposite
+                // orientation for most odd-even fill implementations to
+                // leave holes
+                region.exterior = reverse_rloop(qlp);
             } else {
                 region.interior.push_back(qlp);
             }
@@ -950,7 +931,8 @@ void VectorTracer::computeEdges() {
     int S = std::max(1, 1024 / std::max(W + 1, H + 1));
     QImage lineImage((W + 1) * S, (H + 1) * S, QImage::Format_ARGB32);
     draw_boundaries_to(&lineImage, region_list, S, grid_size);
-    image_edge->setImage(lineImage);
+    emit produceImagePhase(lineImage, QString("Boundaries completed"), nqueries,
+                           false);
 }
 void VectorTracer::computeCreases() {
     qDebug("Computing creases and boundary color details");
@@ -961,21 +943,21 @@ void VectorTracer::computeCreases() {
     // lines may vary in color as they progress
 }
 
+static QPolygonF shift_and_scale_loop(const QVector<RenderPoint> &loop,
+                                      const QPointF &offset, double T) {
+    QPolygonF a;
+    for (const RenderPoint &p : loop) {
+        a.push_back((p.coords + offset) * T);
+    }
+    return a;
+}
 static QVector<QPolygonF> boundary_loops_for_region(const Region &region,
                                                     const QPointF &offset,
                                                     double T) {
     QVector<QPolygonF> n;
-    QPolygonF a;
-    for (const RenderPoint &p : region.exterior) {
-        a.push_back((p.coords + offset) * T);
-    }
-    n.push_back(a);
+    n.push_back(shift_and_scale_loop(region.exterior, offset, T));
     for (const QVector<RenderPoint> &loop : region.interior) {
-        QPolygonF b;
-        for (const RenderPoint &p : loop) {
-            b.push_back((p.coords + offset) * T);
-        }
-        n.push_back(b);
+        n.push_back(shift_and_scale_loop(loop, offset, T));
     }
     return n;
 }
@@ -995,7 +977,7 @@ static QString color_hex_name_rgb(QRgb color) {
 }
 
 static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
-                                      QRgb color = qRgb(0, 0, 0)) {
+                                      QRgb color, bool end_jump) {
     const int fprec = 10;
     QStringList path_string;
     for (const QPolygonF &poly : loops) {
@@ -1009,7 +991,16 @@ static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
                                    .arg(q.x(), 0, 'g', fprec)
                                    .arg(q.y(), 0, 'g', fprec));
         }
-        path_string.append("Z");
+        // Note: A rx ry x-axis-rotation large-arc-flag sweep-flag x y
+        // gives elliptical arc, very suitable for path compression
+        if (end_jump) {
+            path_string.append("Z");
+        } else {
+            QPointF q = poly[0];
+            path_string.append(QString("L%1,%2")
+                                   .arg(q.x(), 0, 'g', fprec)
+                                   .arg(q.y(), 0, 'g', fprec));
+        }
     }
     return QString("<path stroke=\"%1\" fill-rule=\"evenodd\" d=\"%2\"/>\n")
         .arg(color_hex_name_rgb(color))
@@ -1021,8 +1012,8 @@ void VectorTracer::computeGradients() {
 
     int W = grid_size.width(), H = grid_size.height();
     for (Region &region : region_list) {
-        // We compute the region average color over all points in the interior;
-        // each grid class must have at least one such point
+        // We compute the region average color over all points in the
+        // interior; each grid class must have at least one such point
         int cls = region.class_no;
         int net_r = 0, net_g = 0, net_b = 0, net_a = 0, net_count = 0;
         for (int x = region.xmin; x <= region.xmax; x++) {
@@ -1072,13 +1063,13 @@ void VectorTracer::computeGradients() {
     // Since QtSvg is incapable of handling clip paths like every
     // other SVG handling code, we roll our own SVG generator.
     //
-    // Note: As QPainter supports this, fixing it in QtSvg on render/generator
-    // sides isn't very hard.
+    // Note: As QPainter supports this, fixing it in QtSvg on
+    // render/generator sides isn't very hard.
     //
 
-    QString filename = "final.svg";
     const int S = std::max(W, H);
-    double T = 150;
+    const double px_per_mm = 3.78;
+    double T = 45 * px_per_mm;
     QRectF viewbox(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S);
 
     // Gradient -- a piecewise composite of linear and radial gradients.
@@ -1089,14 +1080,14 @@ void VectorTracer::computeGradients() {
 
     qDebug("Rendering final image");
     {
-        QFile ofile(filename);
+        QFile ofile(file_name);
         ofile.open(QFile::WriteOnly | QFile::Truncate);
         QTextStream s(&ofile);
 
         s << "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"\n "
              "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
 
-        s << QString("<svg width=\"%1\" height=\"%2\" >\n")
+        s << QString("<svg version=\"1.1\" width=\"%1\" height=\"%2\" >\n")
                  .arg(viewbox.width())
                  .arg(viewbox.height());
 
@@ -1107,15 +1098,19 @@ void VectorTracer::computeGradients() {
             const QVector<QPolygonF> &loops =
                 boundary_loops_for_region(region, offset, T);
             // TODO: path reduction! (replace linear runs with maximal lines
-            // that fall within epsilon of the replaced points. Note points are
-            // accurate to grid_spacing / 2^19
+            // that fall within epsilon of the replaced points. Note points
+            // are accurate to grid_spacing / 2^19 Also replace curve runs
+            // with elliptical arcs. These two can cover 99% of all edges
+            // seen in practice.
 
             // TODO #2; def boundaries once, and then <use> them as needed
 
             s << QString("    <clipPath id=\"boundary%1\">\n")
                      .arg(region.class_no);
 
-            s << "        " << svg_path_from_polygons(loops);
+            // TODO: zero width tunnel trick?
+            s << "        "
+              << svg_path_from_polygons(loops, qRgb(0, 0, 0), true);
             s << QString("    </clipPath>\n");
         }
         s << "  </defs>\n";
@@ -1124,12 +1119,12 @@ void VectorTracer::computeGradients() {
         s << QString("<g fill-opacity=\"1\" stroke=\"none\" >\n");
         for (Region &region : region_list) {
             // Compute region limit
-            qreal xmax = region.exterior[0].coords.x();
-            qreal xmin = region.exterior[0].coords.x();
-            qreal ymax = region.exterior[0].coords.y();
-            qreal ymin = region.exterior[0].coords.y();
-            for (int i = 1; i < region.exterior.size(); i++) {
-                QPointF h = (region.exterior[i].coords + offset) * T;
+            qreal xmax = 0;
+            qreal xmin = viewbox.width();
+            qreal ymax = 0;
+            qreal ymin = viewbox.height();
+            for (const RenderPoint &r : region.exterior) {
+                QPointF h = (r.coords + offset) * T;
                 xmax = std::max(xmax, h.x());
                 xmin = std::min(xmin, h.x());
                 ymax = std::max(ymax, h.y());
@@ -1173,9 +1168,9 @@ void VectorTracer::computeGradients() {
                          .arg(region.class_no)
                          .arg(region.class_no);
             } else {
-                s << QString(
-                         "  <rect x=\"%1\" y=\"%2\" width=\"%3\" height=\"%4\" "
-                         "clip-path=\"url(#boundary%5)\" fill=\"%6\" />\n")
+                s << QString("  <rect x=\"%1\" y=\"%2\" width=\"%3\" "
+                             "height=\"%4\" "
+                             "clip-path=\"url(#boundary%5)\" fill=\"%6\" />\n")
                          .arg(region_limit.x())
                          .arg(region_limit.y())
                          .arg(region_limit.width())
@@ -1199,7 +1194,7 @@ void VectorTracer::computeGradients() {
                 solo.push_back(loops[i]);
                 QRgb c = i ? region.meanInteriorColors[i - 1]
                            : region.meanExteriorColor;
-                s << "  " << svg_path_from_polygons(solo, c);
+                s << "    " << svg_path_from_polygons(solo, c, true);
             }
         }
         s << QString("</g>\n");
@@ -1214,13 +1209,13 @@ void VectorTracer::computeGradients() {
     command << "inkscape";
     command << "--export-png=/tmp/write.png";
     command << "--export-dpi=800";
-    command << filename;
+    command << file_name;
     QProcess proc;
     proc.start(command.first(), command.mid(1));
     proc.waitForFinished();
     QImage grad_image = QImage("/tmp/write.png");
-    image_gradient->setImage(grad_image);
+    emit produceImagePhase(grad_image, QString("Render completed"), nqueries,
+                           true);
     QTime time_end = QTime::currentTime();
     qDebug("Conversion took %f seconds", time_start.msecsTo(time_end) * 1e-3);
 }
-void VectorTracer::closeProgram() { QApplication::quit(); }
