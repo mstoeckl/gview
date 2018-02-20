@@ -80,12 +80,12 @@ VectorWindow::VectorWindow(GeoOption option) : QMainWindow() {
     Plane p;
     p.normal = G4ThreeVector(1, 0, 0);
     p.offset = 0.;
-    view_data.clipping_planes.push_back(p);
+    //    view_data.clipping_planes.push_back(p);
     view_data.color_table.clear();
     TrackData td;
     QString target = "vector.svg";
 
-    vtracer = new VectorTracer(view_data, td, target);
+    vtracer = new VectorTracer(view_data, td, target, false);
     connect(vtracer, SIGNAL(produceImagePhase(QImage, QString, int, bool)),
             SLOT(handleImageUpdate(QImage, QString, int, bool)));
 

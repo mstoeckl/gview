@@ -23,6 +23,8 @@ private:
     void swap(RenderPoint &);
 };
 
+enum class GradientType { gSolid, gLinear, gRadial };
+
 typedef struct {
     int class_no;
     // Bounds within the grid
@@ -30,9 +32,19 @@ typedef struct {
     // Boundary
     QVector<RenderPoint> exterior;
     QVector<QVector<RenderPoint>> interior;
-    // Render cached properties
+    // Add clipping plane marks
     bool is_clipped_patch;
-    QRgb meanColor;
+    // Coloring
+    GradientType gradient_type;
+    // No gradient parameter
+    QRgb solid_color;
+    // Linear gradient parameters
+    float linear_angle;
+    float linear_start;
+    float linear_stop;
+    int linear_nsteps;
+    QVector<QRgb> linear_colors;
+    // Exterior lines
     QRgb meanExteriorColor;
     QVector<QRgb> meanInteriorColors;
 } Region;
