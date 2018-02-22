@@ -2,9 +2,13 @@
 
 #include <QMainWindow>
 
-#include "Viewer.hh"
+#include <G4String.hh>
 
 class VectorTracer;
+class QPushButton;
+class G4VPhysicalVolume;
+class QRadioButton;
+class QLabel;
 
 class ImageWidget : public QWidget {
     Q_OBJECT
@@ -22,17 +26,22 @@ private:
 class VectorWindow : public QMainWindow {
     Q_OBJECT
 public:
-    VectorWindow(GeoOption option);
+    VectorWindow(G4String name, G4VPhysicalVolume *vol);
     virtual ~VectorWindow();
 public slots:
     void handleImageUpdate(QImage, QString, int, bool);
 private slots:
     void closeProgram();
+    void reset();
 
 private:
-    /* UI */ QPushButton *button_full;
+    /* UI */
+    QPushButton *button_full;
     QPushButton *button_step;
+    QPushButton *button_reset;
     QLabel *label_step;
+    QRadioButton *choice_transparent;
+    QRadioButton *choice_opaque;
 
     ImageWidget *image_grid;
     ImageWidget *image_edge;

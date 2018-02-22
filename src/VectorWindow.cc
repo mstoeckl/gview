@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QBitmap>
+#include <QButtonGroup>
 #include <QFile>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -14,6 +15,7 @@
 #include <QPixmap>
 #include <QProcess>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSet>
 #include <QStatusBar>
 #include <QTextStream>
@@ -62,18 +64,20 @@ void ImageWidget::paintEvent(QPaintEvent *) {
     q.drawImage(target, mvd);
 }
 
-VectorWindow::VectorWindow(GeoOption option) : QMainWindow() {
-    this->setWindowTitle(option.name.c_str());
+VectorWindow::VectorWindow(G4String name, G4VPhysicalVolume *vol)
+    : QMainWindow() {
+    this->setWindowTitle(name.c_str());
 
     /* Initialize functional stuff */
 
     ViewData view_data;
-    view_data.elements = convertCreation(option.vol);
+    view_data.elements = convertCreation(vol);
     view_data.scene_radius =
         view_data.elements.solid->GetExtent().GetExtentRadius();
-    view_data.scale = view_data.scene_radius / 20;
+    view_data.scale = view_data.scene_radius; // *0.05 for hxrd3
     view_data.camera = G4ThreeVector(-2 * view_data.scene_radius, 0, 0);
-    view_data.orientation = CLHEP::HepRotationX(37.44 * CLHEP::deg);
+    //    view_data.orientation = CLHEP::HepRotationX(37.44 * CLHEP::deg);
+    view_data.orientation = G4RotationMatrix();
     view_data.level_of_detail = 0;
     view_data.split_by_material = true;
     view_data.clipping_planes = std::vector<Plane>();
@@ -85,13 +89,15 @@ VectorWindow::VectorWindow(GeoOption option) : QMainWindow() {
     TrackData td;
     QString target = "vector.svg";
 
-    vtracer = new VectorTracer(view_data, td, target, false);
+    qsrand(QTime::currentTime().msec());
+    bool transparent = false;
+    vtracer = new VectorTracer(view_data, td, target, transparent, this);
     connect(vtracer, SIGNAL(produceImagePhase(QImage, QString, int, bool)),
             SLOT(handleImageUpdate(QImage, QString, int, bool)));
 
-    thread = new QThread(this);
-    vtracer->moveToThread(thread);
-    thread->start();
+    //    thread = new QThread(this);
+    //    vtracer->moveToThread(thread);
+    //    thread->start();
 
     /* Initialize UI */
     this->menuBar()->addAction("Exit", this, SLOT(closeProgram()));
@@ -101,6 +107,17 @@ VectorWindow::VectorWindow(GeoOption option) : QMainWindow() {
     button_step = new QPushButton("Render Step");
     connect(button_step, SIGNAL(pressed()), vtracer, SLOT(renderStep()));
     label_step = new QLabel("Step: ---");
+    button_reset = new QPushButton("Reset");
+    connect(button_reset, SIGNAL(pressed()), this, SLOT(reset()));
+
+    choice_opaque = new QRadioButton("Opaque");
+    choice_transparent = new QRadioButton("Transparent");
+    QButtonGroup *choice_group = new QButtonGroup(this);
+    choice_group->addButton(choice_opaque);
+    choice_group->addButton(choice_transparent);
+    (transparent ? choice_transparent : choice_opaque)->setChecked(true);
+    connect(choice_opaque, SIGNAL(toggled(bool)), this, SLOT(reset()));
+    connect(choice_transparent, SIGNAL(toggled(bool)), this, SLOT(reset()));
 
     image_grid = new ImageWidget();
     image_edge = new ImageWidget();
@@ -113,6 +130,10 @@ VectorWindow::VectorWindow(GeoOption option) : QMainWindow() {
     layout_control->addWidget(button_full);
     layout_control->addWidget(button_step);
     layout_control->addWidget(label_step);
+    layout_control->addWidget(button_reset);
+    layout_control->addWidget(choice_opaque);
+    layout_control->addWidget(choice_transparent);
+    layout_control->addStretch(1);
     layout_columns->addLayout(layout_control, 0);
 
     QGridLayout *layout_steps = new QGridLayout();
@@ -130,9 +151,12 @@ VectorWindow::VectorWindow(GeoOption option) : QMainWindow() {
 
     this->show();
 }
-VectorWindow::~VectorWindow() { thread->terminate(); }
+VectorWindow::~VectorWindow() {}
 
-void VectorWindow::closeProgram() { QApplication::quit(); }
+void VectorWindow::closeProgram() {
+    //    QMetaObject::invokeMethod(thread, SLOT(quit()), Qt::QueuedConnection);
+    QApplication::quit();
+}
 void VectorWindow::handleImageUpdate(QImage img, QString s, int nqueries,
                                      bool done) {
     if (!image_grid->hasImage()) {
@@ -150,4 +174,14 @@ void VectorWindow::handleImageUpdate(QImage img, QString s, int nqueries,
         button_full->setEnabled(false);
         button_step->setEnabled(false);
     }
+}
+void VectorWindow::reset() {
+    bool is_transp = choice_transparent->isChecked();
+    vtracer->reset(is_transp);
+    image_grid->setImage(QImage());
+    image_edge->setImage(QImage());
+    image_crease->setImage(QImage());
+    image_gradient->setImage(QImage());
+    button_full->setEnabled(true);
+    button_step->setEnabled(true);
 }
