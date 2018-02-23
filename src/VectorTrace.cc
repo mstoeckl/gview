@@ -116,9 +116,15 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
     QMap<QString, QColor> color_map;
     color_map["ArGas"] = QColor::fromRgbF(0.8, 0.8, 0.8);
     color_map["Argas"] = color_map["ArGas"];
+    color_map["ArgonGas"] = color_map["ArgonGas"];
     color_map["Air"] = QColor::fromRgbF(0.8, 0.8, 0.8);
+
     color_map["Al6061"] = QColor::fromRgbF(1.0, 0.2, 0.2);
+    color_map["Al5083"] = QColor::fromRgbF(0.8, 0.4, 0.4);
+    // Often have nickel plated lead
     color_map["G4_Pb"] = QColor::fromRgbF(0.4, 0.0, 0.7);
+    color_map["G4_Ni"] = QColor::fromRgbF(0.5, 0.1, 0.8);
+
     color_map["G4_Cu"] = QColor::fromRgbF(0.0, 0.9, 0.7);
     color_map["BaF2"] = QColor::fromRgbF(1.0, 1.0, 1.0);
     QMap<QString, int> idx_map;
@@ -126,9 +132,9 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
     recsetColorsByMaterial(view_data.elements, view_data.color_table, color_map,
                            idx_map);
 
-    //    grid_size = QSize(1000, 1000);
+    grid_size = QSize(1000, 1000);
     //    grid_size = QSize(300, 300);
-    grid_size = QSize(100, 100);
+    //    grid_size = QSize(100, 100);
 
     //    grid_size = QSize(30, 30);
     grid_points = NULL;
@@ -887,8 +893,11 @@ void VectorTracer::computeEdges() {
         region.xmax = xmax;
         region.ymin = ymin;
         region.ymax = ymax;
-        region.is_clipped_patch =
-            class_representative.intersections[0].is_clipping_plane;
+        region.is_clipped_patch = false;
+        if (class_representative.intersections) {
+            region.is_clipped_patch =
+                class_representative.intersections[0].is_clipping_plane;
+        }
         if (class_representative.nhits > 0) {
             if (!class_representative.elements[0]->visible)
                 region.is_clipped_patch = false;
@@ -1608,17 +1617,85 @@ static QString color_hex_name_rgb(QRgb color) {
         .arg(numbers[b % 16]);
 }
 
+static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
+    // First, locate sharpest angle; will be our starting point
+    const int n = orig.size();
+    int sharpest = 0;
+    qreal recsh = 1.;
+    for (int i1 = 0; i1 < n; i1++) {
+        int i0 = (i1 + n - 1) % n, i2 = (i1 + 1) % n;
+        QPointF d01 = orig[i1] - orig[i0];
+        QPointF d12 = orig[i2] - orig[i1];
+        qreal len01 = d01.x() * d01.x() + d01.y() * d01.y();
+        qreal len12 = d12.x() * d12.x() + d12.y() * d12.y();
+        qreal lenpro = std::sqrt(len01 * len12);
+        if (lenpro <= 0.)
+            continue;
+
+        double qr = QPointF::dotProduct(d01, d12) / lenpro;
+        if (qr < recsh) {
+            sharpest = i1;
+            recsh = qr;
+        }
+    }
+
+    // Then iterative lookahead, while calculating maximum offset
+    QPolygonF poly;
+    poly.push_back(orig[sharpest]);
+    for (int is = 0; is < n; is++) {
+        QPointF ps = orig[(is + sharpest) % n];
+        int js = is + 1;
+        for (; js <= n; js++) {
+            // If line fails to match, js-=1, break
+            QPointF pe = orig[(js + sharpest) % n];
+            QPointF delta = pe - ps;
+            qreal dlen =
+                std::sqrt(delta.x() * delta.x() + delta.y() * delta.y());
+            if (dlen <= 0.) {
+                // Bad case; but we progress anyway
+                break;
+            }
+            bool broken = false;
+            // Check points in [is+1,js-1]
+            for (int zs = is + 1; zs < js; zs++) {
+                QPointF pc = orig[(zs + sharpest) % n];
+                // Compute distance between [ps,pe] and pc
+                qreal soff = (delta.y() * pc.x() - delta.x() * pc.y() +
+                              pe.x() * ps.y() - pe.y() * ps.x()) /
+                             dlen;
+                if (std::abs(soff) > max_error) {
+                    broken = true;
+                    continue;
+                }
+            }
+            if (broken) {
+                js--;
+                break;
+            }
+        }
+        // Jump to ext pt
+        if (js > n)
+            js = n;
+        poly.push_back(orig[(js + sharpest) % n]);
+        is = js - 1;
+    }
+
+    return poly;
+}
+
 static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
                                       QRgb color, const QString &id) {
     const int fprec = 10;
     QStringList path_string;
     for (const QPolygonF &poly : loops) {
-        QPointF s = poly[0];
+        QPolygonF simpath = simplify_poly(poly, 1e-6);
+
+        QPointF s = simpath[0];
         path_string.append(QString("M%1,%2")
                                .arg(s.x(), 0, 'g', fprec)
                                .arg(s.y(), 0, 'g', fprec));
-        for (int i = 1; i < poly.size(); i++) {
-            QPointF q = poly[i];
+        for (int i = 1; i < simpath.size(); i++) {
+            QPointF q = simpath[i];
             path_string.append(QString("L%1,%2")
                                    .arg(q.x(), 0, 'g', fprec)
                                    .arg(q.y(), 0, 'g', fprec));
@@ -1632,6 +1709,22 @@ static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
         .arg(color_hex_name_rgb(color))
         .arg(path_string.join(" "))
         .arg(id);
+}
+
+static QRectF bounding_rect_for_boundary(const QVector<RenderPoint> &loop,
+                                         QPointF offset, double T) {
+    qreal xmax = -std::numeric_limits<qreal>::infinity();
+    qreal xmin = +std::numeric_limits<qreal>::infinity();
+    qreal ymax = -std::numeric_limits<qreal>::infinity();
+    qreal ymin = +std::numeric_limits<qreal>::infinity();
+    for (const RenderPoint &r : loop) {
+        QPointF h = (r.coords + offset) * T;
+        xmax = std::max(xmax, h.x());
+        xmin = std::min(xmin, h.x());
+        ymax = std::max(ymax, h.y());
+        ymin = std::min(ymin, h.y());
+    }
+    return QRectF(xmin, ymin, xmax - xmin, ymax - ymin);
 }
 
 static void fill_linear_histogram_for_angle(
@@ -1825,6 +1918,21 @@ void VectorTracer::computeGradients() {
                     subreg.gradient_type = GradientType::gSolid;
                 }
             }
+
+            // Fall back to solid if uniform
+            if (subreg.gradient_type == GradientType::gLinear) {
+                QRgb icolor = subreg.linear_colors[0];
+                bool different = false;
+                for (int i = 1; i < subreg.linear_colors.size(); i++) {
+                    if (icolor != subreg.linear_colors[i]) {
+                        different = true;
+                        break;
+                    }
+                }
+                if (!different) {
+                    subreg.gradient_type = GradientType::gSolid;
+                }
+            }
         }
 
         // TODO: 1st order histogram fill average on gradient. (Start, Spacing)
@@ -1929,7 +2037,6 @@ void VectorTracer::computeGradients() {
                 double angle = 60.0;
                 double hatch_width = T / 40.;
 
-                s << "  <defs>\n";
                 s << QString("    <pattern id=\"hatching%1\" width=\"%2\" "
                              "height=\"10\" patternTransform=\"rotate(%3 0 "
                              "0)\" patternUnits=\"userSpaceOnUse\">\n")
@@ -1942,62 +2049,14 @@ void VectorTracer::computeGradients() {
                          .arg(color_hex_name_rgb(qRgb(0, 0, 0)))
                          .arg(hatch_width);
                 s << QString("    </pattern>\n");
-                s << "  </defs>\n";
             }
         }
 
-        s << "  </defs>\n";
-
-        // Interior regions, clipped by boundaries
-        s << QString(
-            "<g fill-opacity=\"1\" stroke=\"none\" id=\"interiors\">\n");
+        // Gradients
         for (const Region &region : region_list) {
-            // Compute region limit
-            qreal xmax = 0;
-            qreal xmin = viewbox.width();
-            qreal ymax = 0;
-            qreal ymin = viewbox.height();
-            for (const RenderPoint &r : region.exterior) {
-                QPointF h = (r.coords + offset) * T;
-                xmax = std::max(xmax, h.x());
-                xmin = std::min(xmin, h.x());
-                ymax = std::max(ymax, h.y());
-                ymin = std::min(ymin, h.y());
-            }
-            QRectF region_limit(xmin, ymin, xmax - xmin, ymax - ymin);
-
             for (const Subregion &subreg : region.subregions) {
-                GradientType grad_type = subreg.gradient_type;
-                if (grad_type == GradientType::gLinear) {
-                    QRgb icolor = subreg.linear_colors[0];
-                    bool different = false;
-                    for (int i = 1; i < subreg.linear_colors.size(); i++) {
-                        if (icolor != subreg.linear_colors[i]) {
-                            different = true;
-                            break;
-                        }
-                    }
-                    if (!different) {
-                        grad_type = GradientType::gSolid;
-                    }
-                }
-
-                if (grad_type == GradientType::gSolid) {
-                    s << QString("  <rect id=\"region%5_%6\" x=\"%1\" y=\"%2\" "
-                                 "width=\"%3\" "
-                                 "height=\"%4\" "
-                                 "clip-path=\"url(#boundary%5_%6)\" "
-                                 "fill=\"%7\" />\n")
-                             .arg(region_limit.x())
-                             .arg(region_limit.y())
-                             .arg(region_limit.width())
-                             .arg(region_limit.height())
-                             .arg(region.class_no)
-                             .arg(subreg.subclass_no)
-                             .arg(color_hex_name_rgb(subreg.solid_color));
-                } else if (grad_type == GradientType::gLinear) {
-                    s << QString("  <defs>\n");
-                    s << QString("     <linearGradient id=\"gradient%1_%2\" "
+                if (subreg.gradient_type == GradientType::gLinear) {
+                    s << QString("   <linearGradient id=\"gradient%1_%2\" "
                                  "x1=\"%3\" "
                                  "y1=\"%4\" x2=\"%5\" y2=\"%6\" "
                                  "spreadMethod=\"%7\" "
@@ -2013,47 +2072,79 @@ void VectorTracer::computeGradients() {
                              .arg(viewbox.center().y() +
                                   T * std::cos(subreg.linear_angle))
                              .arg(1 ? "repeat" : "pad");
-                    // TODO: compress histogram; if all constant, might as well
-                    // replace with solid color
                     for (int i = 0; i < subreg.linear_colors.size(); i++) {
                         double stop_pos =
                             (subreg.linear_start +
                              i * (subreg.linear_stop - subreg.linear_start) /
                                  (subreg.linear_nsteps - 1.));
+                        if ((i <= 0 || subreg.linear_colors[i] ==
+                                           subreg.linear_colors[i - 1]) &&
+                            (i >= subreg.linear_colors.size() - 1 ||
+                             subreg.linear_colors[i] ==
+                                 subreg.linear_colors[i + 1])) {
+                            // Skip redundant points
+                            continue;
+                        }
+
                         // in range [-0.5, 0.5] subset [-1.0,1.0]
                         stop_pos = (stop_pos + 1.0) / 2.0;
                         // in range [0.0, 1.0]
 
                         double alpha = QColor(subreg.linear_colors[i]).alphaF();
                         s << QString(
-                                 "      <stop offset=\"%1%\" stop-color=\"%2\" "
+                                 "    <stop offset=\"%1%\" stop-color=\"%2\" "
                                  "stop-opacity=\"%3\"/>\n")
                                  .arg(100 * stop_pos)
                                  .arg(color_hex_name_rgb(
                                      subreg.linear_colors[i]))
                                  .arg(alpha);
                     }
-                    s << QString("    </linearGradient>\n");
-                    s << QString("  </defs>\n");
+                    s << QString("  </linearGradient>\n");
+                }
+            }
+        }
+        s << "  </defs>\n";
 
-                    s << QString("  <rect id=\"region%5_%6\" x=\"%1\" y=\"%2\" "
-                                 "width=\"%3\" "
-                                 "height=\"%4\" "
-                                 "clip-path=\"url(#boundary%5_%6)\" "
-                                 "fill=\"url(#gradient%5_%6)\" />\n")
-                             .arg(region_limit.x())
-                             .arg(region_limit.y())
-                             .arg(region_limit.width())
-                             .arg(region_limit.height())
-                             .arg(region.class_no)
-                             .arg(subreg.subclass_no);
+        // Interior regions, clipped by boundaries
+        s << QString(
+            "<g fill-opacity=\"1\" stroke=\"none\" id=\"interiors\">\n");
+        for (const Region &region : region_list) {
+            // Compute region limit
+            for (const Subregion &subreg : region.subregions) {
+
+                QRectF subreg_limit =
+                    bounding_rect_for_boundary(subreg.boundaries[0], offset, T);
+
+                QString fill_desc;
+                if (subreg.gradient_type == GradientType::gSolid) {
+                    fill_desc = color_hex_name_rgb(subreg.solid_color);
+                } else if (subreg.gradient_type == GradientType::gLinear) {
+                    fill_desc = QString("url(#gradient%1_%2)")
+                                    .arg(region.class_no)
+                                    .arg(subreg.subclass_no);
                 } else {
                     qFatal("Unsupported gradient type");
                 }
+
+                s << QString("  <rect id=\"region%5_%6\" x=\"%1\" y=\"%2\" "
+                             "width=\"%3\" "
+                             "height=\"%4\" "
+                             "clip-path=\"url(#boundary%5_%6)\" "
+                             "fill=\"%7\" />\n")
+                         .arg(subreg_limit.x())
+                         .arg(subreg_limit.y())
+                         .arg(subreg_limit.width())
+                         .arg(subreg_limit.height())
+                         .arg(region.class_no)
+                         .arg(subreg.subclass_no)
+                         .arg(fill_desc);
             }
+            QRectF region_limit =
+                bounding_rect_for_boundary(region.exterior, offset, T);
             // Overlay mix with hatching
             if (region.is_clipped_patch) {
-                s << QString("  <rect x=\"%1\" y=\"%2\" width=\"%3\" "
+                s << QString("  <rect id=\"region_hatch%5\" x=\"%1\" y=\"%2\" "
+                             "width=\"%3\" "
                              "height=\"%4\" style=\"fill: url(#hatching%5) "
                              "#fff;\" opacity=\"0.2\" "
                              "clip-path=\"url(#boundary%6)\"/>\n")
