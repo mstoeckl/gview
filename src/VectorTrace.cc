@@ -126,8 +126,10 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
     recsetColorsByMaterial(view_data.elements, view_data.color_table, color_map,
                            idx_map);
 
-    grid_size = QSize(1000, 1000);
+    //    grid_size = QSize(1000, 1000);
     //    grid_size = QSize(300, 300);
+    grid_size = QSize(100, 100);
+
     //    grid_size = QSize(30, 30);
     grid_points = NULL;
     grid_nclasses = 0;
@@ -1662,6 +1664,13 @@ static void fill_linear_histogram_for_angle(
     double *histogram_g = new double[nsteps];
     double *histogram_a = new double[nsteps];
     double *histogram_w = new double[nsteps];
+    for (int i = 0; i < nsteps; i++) {
+        histogram_r[i] = 0.;
+        histogram_g[i] = 0.;
+        histogram_b[i] = 0.;
+        histogram_a[i] = 0.;
+        histogram_w[i] = 0.;
+    }
     for (const QPair<QRgb, QPointF> &p : interior_colors) {
         QColor color(p.first);
         double t = proj_x * p.second.x() + proj_y * p.second.y();
