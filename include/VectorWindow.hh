@@ -9,6 +9,7 @@ class QPushButton;
 class G4VPhysicalVolume;
 class QRadioButton;
 class QLabel;
+class QComboBox;
 
 class ImageWidget : public QWidget {
     Q_OBJECT
@@ -39,9 +40,11 @@ private:
     QPushButton *button_full;
     QPushButton *button_step;
     QPushButton *button_reset;
+    QPushButton *button_reroll;
     QLabel *label_step;
     QRadioButton *choice_transparent;
     QRadioButton *choice_opaque;
+    QComboBox *list_resolution;
 
     ImageWidget *image_grid;
     ImageWidget *image_edge;

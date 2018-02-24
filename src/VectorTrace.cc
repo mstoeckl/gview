@@ -138,6 +138,24 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
     nqueries = 0;
     transparent_volumes = transparency;
 
+    recolor();
+
+    grid_size = QSize(100, 100);
+
+    grid_points = NULL;
+    grid_nclasses = 0;
+    ray_mutables = NULL;
+    ray_iteration = 0;
+}
+
+VectorTracer::~VectorTracer() {
+    if (grid_points)
+        delete[] grid_points;
+    if (ray_mutables)
+        delete[] ray_mutables;
+}
+
+void VectorTracer::recolor() {
     QMap<QString, FColor> color_map;
     color_map["ArGas"] = FColor(0.8, 0.8, 0.8);
     color_map["Argas"] = color_map["ArGas"];
@@ -156,23 +174,6 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
     element_colors.clear();
     recsetColorsByMaterial(view_data.elements, element_colors, color_map,
                            idx_map);
-
-    grid_size = QSize(1000, 1000);
-    //    grid_size = QSize(300, 300);
-    //    grid_size = QSize(100, 100);
-    //    grid_size = QSize(30, 30);
-
-    grid_points = NULL;
-    grid_nclasses = 0;
-    ray_mutables = NULL;
-    ray_iteration = 0;
-}
-
-VectorTracer::~VectorTracer() {
-    if (grid_points)
-        delete[] grid_points;
-    if (ray_mutables)
-        delete[] ray_mutables;
 }
 
 void VectorTracer::renderFull() {
@@ -201,9 +202,10 @@ void VectorTracer::renderStep() {
         break;
     }
 }
-void VectorTracer::reset(bool transp) {
+void VectorTracer::reset(bool transp, QSize size) {
     step_next = Steps::sGrid;
     transparent_volumes = transp;
+    grid_size = size;
     qDebug("Reset tracer: %s mode", transp ? "transparent" : "opaque");
 }
 int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
@@ -790,6 +792,116 @@ QVector<QPolygon> size_sorted_loops_from_seg(const QVector<QLine> &segs) {
     return loops;
 }
 
+static QVector<RenderPoint>
+remove_rloop_duplicates(const QVector<RenderPoint> &bound, double epsilon) {
+    QVector<RenderPoint> altbound;
+    altbound.push_back(bound[0]);
+    for (int i = 0; i < bound.size() - 1; i++) {
+        if ((bound[i].coords - altbound.last().coords).manhattanLength() <
+            epsilon) {
+            continue;
+        }
+        altbound.push_back(bound[i]);
+    }
+    if ((bound.last().coords - altbound.last().coords).manhattanLength() <
+        epsilon) {
+
+    } else if ((bound.last().coords - altbound[0].coords).manhattanLength() <
+               epsilon) {
+
+    } else {
+        altbound.push_back(bound.last());
+    }
+    return altbound;
+}
+
+typedef struct {
+    QPointF inside;
+    QPointF outside;
+    int index;
+} CornerCandidate;
+
+static QVector<CornerCandidate>
+find_rloop_corners(const QVector<RenderPoint> &bound, bool is_exterior_loop,
+                   double epsilon) {
+
+    QVector<CornerCandidate> corner_cands;
+
+    const int npts = bound.size();
+    for (int i1 = 0; i1 < npts; i1++) {
+        int i0 = (i1 + npts - 1) % npts;
+        int i2 = (i1 + 1) % npts;
+        int i3 = (i1 + 2) % npts;
+
+        QPointF dir_pre = bound[i1].coords - bound[i0].coords;
+        QPointF dir_post = bound[i2].coords - bound[i3].coords;
+        double len_pre =
+            std::sqrt(dir_pre.x() * dir_pre.x() + dir_pre.y() * dir_pre.y());
+        double len_post = std::sqrt(dir_post.x() * dir_post.x() +
+                                    dir_post.y() * dir_post.y());
+        if (len_pre <= 0. || len_post <= 0.) {
+            continue;
+        }
+        dir_pre /= len_pre;
+        dir_post /= len_post;
+        double dotprod = QPointF::dotProduct(dir_pre, dir_post);
+        // -1 is aligned; +1 is ultra spiky
+        if (dotprod < std::cos(5 * M_PI / 6) ||
+            dotprod > std::cos(1 * M_PI / 6)) {
+            continue;
+        }
+
+        double det = dir_pre.y() * dir_post.x() - dir_pre.x() * dir_post.y();
+
+        QPointF src_pre = bound[i1].coords, src_post = bound[i2].coords;
+        double t = (dir_post.x() * (src_post.y() - src_pre.y()) +
+                    dir_post.y() * (src_pre.x() - src_post.x())) /
+                   det;
+        double s = (dir_pre.x() * (src_post.y() - src_pre.y()) +
+                    dir_pre.y() * (src_pre.x() - src_post.x())) /
+                   det;
+
+        // Real space min offset limit for corner
+        double cepsilon = epsilon;
+
+        if (s <= cepsilon || t <= cepsilon) {
+            // If not exactly on the angle, can find intersection
+            // point behind k0
+            continue;
+        }
+        QPointF qavg = 0.5 * (src_pre + src_post);
+        QPointF qcor_pre = src_pre + t * dir_pre;
+        QPointF qcor_post = src_post + s * dir_post;
+
+        QPointF qcor = 0.5 * (qcor_pre + qcor_post);
+        QPointF qjump = 2 * qcor - qavg;
+
+        CornerCandidate cand;
+        cand.index = i1;
+        // TODO: instead, decide using curve orientation as an additional guide
+        // to convexity/concavity. Would require early loop reversal
+        if (is_exterior_loop) {
+            cand.inside = qavg;
+            cand.outside = qjump;
+        } else {
+            cand.inside = qjump;
+            cand.outside = qavg;
+        }
+        corner_cands.push_back(cand);
+    }
+    return corner_cands;
+}
+
+static QVector<RenderPoint> rloop_merge(const QVector<RenderPoint> &base,
+                                        const QVector<RenderPoint> &mod,
+                                        const QVector<int> &indexes) {
+    QVector<RenderPoint> bmod = base;
+    for (int i = 0; i < mod.size(); i++) {
+        bmod.insert(indexes[i] + i + 1, mod[i]);
+    }
+    return bmod;
+}
+
 void VectorTracer::computeEdges() {
     region_list.clear();
     int W = grid_size.width(), H = grid_size.height();
@@ -938,10 +1050,8 @@ void VectorTracer::computeEdges() {
             // Loop refinement
             for (QPoint loc : loops[i]) {
                 // Binary search for the class point nearest the outside
-                QPoint ilow((loc.x() - loc.x() % 2) / 2,
-                            (loc.y() - loc.y() % 2) / 2);
-                QPoint ihigh((loc.x() + loc.x() % 2) / 2,
-                             (loc.y() + loc.y() % 2) / 2);
+                QPoint ilow = loc / 2;
+                QPoint ihigh = loc - loc / 2;
                 bool low_inclass = true;
                 if (ilow.x() < 0 || ilow.x() >= W || ilow.y() < 0 ||
                     ilow.y() >= H) {
@@ -970,84 +1080,35 @@ void VectorTracer::computeEdges() {
                 qlp.push_back(in_limit);
             }
 
-            /* Loop corner insertion -- when there's a sharp double angle
-             * change, there most likely is a class point at its extension.
+            /* Loop corner insertion.
              */
-            for (int k = 0; k < qlp.size(); k++) {
-                int k0 = k, k1 = (k + 1) % qlp.size(),
-                    k2 = (k + 2) % qlp.size(), k3 = (k + 3) % qlp.size();
-                QPointF dir_pre = qlp[k1].coords - qlp[k0].coords;
-                QPointF dir_post = qlp[k2].coords - qlp[k3].coords;
-                double len_pre = std::sqrt(dir_pre.x() * dir_pre.x() +
-                                           dir_pre.y() * dir_pre.y());
-                double len_post = std::sqrt(dir_post.x() * dir_post.x() +
-                                            dir_post.y() * dir_post.y());
-                if (len_pre <= 0. || len_post <= 0.) {
-                    qWarning(
-                        "Pt. overlap %f %f | %f %f | %f %f | %f %f | %f %f",
-                        len_pre, len_post, qlp[k0].coords.x(),
-                        qlp[k0].coords.y(), qlp[k1].coords.x(),
-                        qlp[k1].coords.y(), qlp[k2].coords.x(),
-                        qlp[k2].coords.y(), qlp[k3].coords.x(),
-                        qlp[k3].coords.y());
-                    continue;
-                }
-                dir_pre /= len_pre;
-                dir_post /= len_post;
-                double dotprod = QPointF::dotProduct(dir_pre, dir_post);
-                // -1 is aligned; +1 is ultra spiky
-                if (dotprod < std::cos(5 * M_PI / 6) ||
-                    dotprod > std::cos(1 * M_PI / 6)) {
+            double epsilon = (1. / std::max(W, H)) * 1e-5;
+            qlp = remove_rloop_duplicates(qlp, epsilon);
+
+            QVector<CornerCandidate> corner_cands =
+                find_rloop_corners(qlp, i == 0, epsilon);
+
+            QVector<RenderPoint> pts;
+            QVector<int> idxs;
+            for (const CornerCandidate &corner : corner_cands) {
+                RenderPoint cin = queryPoint(corner.inside);
+                RenderPoint cout = queryPoint(corner.outside);
+                bool in_icls = typematch(cin, class_representative);
+                bool out_icls = typematch(cout, class_representative);
+
+                if (!in_icls || out_icls) {
                     continue;
                 }
 
-                double det =
-                    dir_pre.y() * dir_post.x() - dir_pre.x() * dir_post.y();
-
-                QPointF src_pre = qlp[k1].coords, src_post = qlp[k2].coords;
-                double t = (dir_post.x() * (src_post.y() - src_pre.y()) +
-                            dir_post.y() * (src_pre.x() - src_post.x())) /
-                           det;
-                double s = (dir_pre.x() * (src_post.y() - src_pre.y()) +
-                            dir_pre.y() * (src_pre.x() - src_post.x())) /
-                           det;
-                if (s < 0 || t < 0) {
-                    // If not exactly on the angle, can find intersection
-                    // point behind k0
-                    continue;
-                }
-                QPointF qavg = 0.5 * (src_pre + src_post);
-                QPointF qcor_pre = src_pre + t * dir_pre;
-                QPointF qcor_post = src_post + s * dir_post;
-                QPointF qcor = 0.5 * (qcor_pre + qcor_post);
-                QPointF qjump = 2 * qcor - qavg;
-
-                RenderPoint pavg = queryPoint(qavg);
-                RenderPoint pjump = queryPoint(qjump);
-                bool avg_inclass = typematch(pavg, class_representative);
-                bool jump_inclass = typematch(pjump, class_representative);
-
-                if (!avg_inclass || jump_inclass) {
-                    continue;
-                }
-
-                // TODO: this doesn't get as close to the corner as we'd
-                // like it might be off slightly
                 RenderPoint plim_in, plim_out;
-                bracketEdge(pavg, pjump, &plim_in, &plim_out);
+                bracketEdge(cin, cout, &plim_in, &plim_out);
                 plim_in.ideal_color = calculateBoundaryColor(plim_in, plim_out);
 
-                if ((plim_in.coords - src_pre).manhattanLength() < 1e-15 ||
-                    (plim_in.coords - src_post).manhattanLength() < 1e-15) {
-                    qDebug("too close to existing");
-                    continue;
-                }
-
-                // Add point 2 ahead, and skip 3.
-                // Note: this has a bug sometimes, possible re. wrapping
-                qlp.insert(k2, plim_in);
-                k += 2;
+                pts.push_back(plim_in);
+                idxs.push_back(corner.index);
             }
+
+            qlp = rloop_merge(qlp, pts, idxs);
 
             /* Place on boundary */
             if (i == 0) {
@@ -1441,7 +1502,9 @@ void VectorTracer::computeCreases() {
             subreg.linear_colors.clear();
 
             subreg.boundaries.clear();
-            for (const QPolygon &poly : loops) {
+            for (int zzz = 0; zzz < loops.size(); zzz++) {
+                const QPolygon &poly = loops[zzz];
+                bool is_exterior_loop = (zzz == 0);
                 QVector<RenderPoint> bound;
 
                 // Only crease edges visible...
@@ -1494,8 +1557,63 @@ void VectorTracer::computeCreases() {
                     bound.push_back(adj_point);
                 }
 
-                // TODO: an edge expansion pass, identical to the one from
-                // the parent boundary
+                // Filter out very close points
+                double epsilon = (1. / std::max(W, H)) * 1e-5;
+                bound = remove_rloop_duplicates(bound, epsilon);
+
+                // Corner handling. First, we locate places for corners
+                QVector<CornerCandidate> corner_cands =
+                    find_rloop_corners(bound, is_exterior_loop, epsilon);
+
+                QVector<RenderPoint> corner_points;
+                QVector<int> corner_sidxs;
+                for (int i = 0; i < corner_cands.size(); i++) {
+                    int k = corner_cands[i].index;
+                    const RenderPoint &p0 = bound[k];
+                    const RenderPoint &p1 = bound[(k + 1) % bound.size()];
+                    RenderPoint qA = queryPoint(corner_cands[i].inside);
+
+                    // Both types and subregion must match
+                    if (!typematch(p0, qA) || !typematch(p1, qA)) {
+                        continue;
+                    }
+                    bool with0 = crease_depth(qA, p0, cos_alpha, min_jump) < 0;
+                    bool with1 = crease_depth(qA, p1, cos_alpha, min_jump) < 0;
+                    if (!with0 || !with1) {
+                        continue;
+                    }
+
+                    // Outside state checked only in relation to inside
+                    RenderPoint qB = queryPoint(corner_cands[i].outside);
+                    RenderPoint adj_point;
+                    if (!typematch(qB, qA)) {
+                        // Region boundary
+                        RenderPoint lim_out;
+                        bracketEdge(qA, qB, &adj_point, &lim_out);
+                        FColor c = calculateBoundaryColor(adj_point, lim_out);
+                        adj_point.ideal_color =
+                            FColor(c.redF(), c.greenF(), c.blueF(), 0.);
+                    } else if (crease_depth(qA, qB, cos_alpha, min_jump) < 0) {
+                        // No crease found, average it
+                        adj_point = queryPoint(0.5 * (qA.coords + qB.coords));
+                        FColor c = calculateInteriorColor(adj_point);
+                        adj_point.ideal_color =
+                            FColor(c.redF(), c.greenF(), c.blueF(), 0.);
+                    } else {
+                        // Crease boundary
+                        RenderPoint lim_out;
+                        bracketCrease(qA, qB, &adj_point, &lim_out);
+                        adj_point.ideal_color =
+                            calculateInteriorColor(adj_point);
+                    }
+
+                    corner_points.push_back(adj_point);
+                    corner_sidxs.push_back(k);
+                }
+
+                // Merge the two
+
+                bound = rloop_merge(bound, corner_points, corner_sidxs);
 
                 if (!subreg.boundaries.size()) {
                     // Outside (largest) loop must be reversed relative to all
@@ -1615,6 +1733,9 @@ static QString color_hex_name_rgb(QRgb color) {
 }
 
 static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
+    if (0)
+        return orig;
+
     // First, locate sharpest angle; will be our starting point
     const int n = orig.size();
     int sharpest = 0;
@@ -1682,10 +1803,10 @@ static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
 
 static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
                                       QRgb color, const QString &id) {
-    const int fprec = 10;
+    const int fprec = 7;
     QStringList path_string;
     for (const QPolygonF &poly : loops) {
-        QPolygonF simpath = simplify_poly(poly, 1e-6);
+        QPolygonF simpath = simplify_poly(poly, 1e-5);
 
         QPointF s = simpath[0];
         path_string.append(QString("M%1,%2")
@@ -1772,13 +1893,13 @@ static double compute_histogram_angle(const Region &region,
 
                 float dx = (mag_dx - mag_base) / dxs[k];
                 float dy = (mag_dy - mag_base) / dys[k];
-                if (dx == 0. && dy == 0.)
+                float mag2 = (dx * dx + dy * dy);
+                if (mag2 <= 0.)
                     continue;
-                // S1 -> RP1=S1. Via angle is clear, but could be optimized
-                float angle = std::atan2(dy, dx);
-                angle = angle * 2;
-                sum_sin += std::sin(angle);
-                sum_cos += std::cos(angle);
+                // S1 -> RP1=S1 doubles the angle
+                // Use identity (sin(2 * atan2(dy, dx))) = 2*dx*dy/mag2
+                sum_sin += 2 * dx * dy / mag2;
+                sum_cos += (dx * dx - dy * dy) / mag2;
             }
         }
     }

@@ -719,12 +719,14 @@ void Viewer::screenshot(int sx) {
 void Viewer::vectorTScreenshot() {
     VectorTracer *vt =
         new VectorTracer(vd, trackdata, "vector_transparent.svg", true);
+    vt->reset(true, QSize(1000, 1000));
     vt->renderFull();
     delete vt;
 }
 void Viewer::vectorOScreenshot() {
     VectorTracer *vt =
         new VectorTracer(vd, trackdata, "vector_opaque.svg", false);
+    vt->reset(false, QSize(1000, 1000));
     vt->renderFull();
     delete vt;
 }

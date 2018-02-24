@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QBitmap>
 #include <QButtonGroup>
+#include <QComboBox>
 #include <QFile>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -17,6 +18,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSet>
+#include <QSettings>
 #include <QStatusBar>
 #include <QTextStream>
 #include <QThread>
@@ -109,6 +111,8 @@ VectorWindow::VectorWindow(G4String name, G4VPhysicalVolume *vol)
     label_step = new QLabel("Step: ---");
     button_reset = new QPushButton("Reset");
     connect(button_reset, SIGNAL(pressed()), this, SLOT(reset()));
+    button_reroll = new QPushButton("Reroll colors");
+    connect(button_reroll, SIGNAL(pressed()), vtracer, SLOT(recolor()));
 
     choice_opaque = new QRadioButton("Opaque");
     choice_transparent = new QRadioButton("Transparent");
@@ -116,8 +120,17 @@ VectorWindow::VectorWindow(G4String name, G4VPhysicalVolume *vol)
     choice_group->addButton(choice_opaque);
     choice_group->addButton(choice_transparent);
     (transparent ? choice_transparent : choice_opaque)->setChecked(true);
-    connect(choice_opaque, SIGNAL(toggled(bool)), this, SLOT(reset()));
-    connect(choice_transparent, SIGNAL(toggled(bool)), this, SLOT(reset()));
+
+    list_resolution = new QComboBox();
+    list_resolution->addItem("1000", QVariant(QSize(1000, 1000)));
+    list_resolution->addItem("300", QVariant(QSize(300, 300)));
+    list_resolution->addItem("100", QVariant(QSize(100, 100)));
+    list_resolution->addItem("30", QVariant(QSize(30, 30)));
+    list_resolution->addItem("10", QVariant(QSize(10, 10)));
+
+    QSettings s("gview", "gview");
+    int idx = s.value("resol_index", 2).toInt();
+    list_resolution->setCurrentIndex(idx);
 
     image_grid = new ImageWidget();
     image_edge = new ImageWidget();
@@ -133,6 +146,8 @@ VectorWindow::VectorWindow(G4String name, G4VPhysicalVolume *vol)
     layout_control->addWidget(button_reset);
     layout_control->addWidget(choice_opaque);
     layout_control->addWidget(choice_transparent);
+    layout_control->addWidget(button_reroll);
+    layout_control->addWidget(list_resolution);
     layout_control->addStretch(1);
     layout_columns->addLayout(layout_control, 0);
 
@@ -150,6 +165,8 @@ VectorWindow::VectorWindow(G4String name, G4VPhysicalVolume *vol)
     this->statusBar()->showMessage("Status:");
 
     this->show();
+
+    reset();
 }
 VectorWindow::~VectorWindow() {}
 
@@ -177,11 +194,15 @@ void VectorWindow::handleImageUpdate(QImage img, QString s, int nqueries,
 }
 void VectorWindow::reset() {
     bool is_transp = choice_transparent->isChecked();
-    vtracer->reset(is_transp);
+    QSize resol = list_resolution->currentData().toSize();
+    vtracer->reset(is_transp, resol);
     image_grid->setImage(QImage());
     image_edge->setImage(QImage());
     image_crease->setImage(QImage());
     image_gradient->setImage(QImage());
     button_full->setEnabled(true);
     button_step->setEnabled(true);
+
+    QSettings s("gview", "gview");
+    s.setValue("resol_index", list_resolution->currentIndex());
 }

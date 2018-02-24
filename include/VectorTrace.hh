@@ -88,7 +88,8 @@ public:
 public slots:
     void renderFull();
     void renderStep();
-    void reset(bool transparent);
+    void reset(bool transparent, QSize grid_size);
+    void recolor();
 
     void computeGrid();
     void computeEdges();
