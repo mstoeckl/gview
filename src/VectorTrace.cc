@@ -1801,8 +1801,7 @@ static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
     return poly;
 }
 
-static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
-                                      QRgb color, const QString &id) {
+static QString svg_path_text_from_polygons(const QVector<QPolygonF> &loops) {
     const int fprec = 7;
     QStringList path_string;
     for (const QPolygonF &poly : loops) {
@@ -1810,39 +1809,19 @@ static QString svg_path_from_polygons(const QVector<QPolygonF> &loops,
 
         QPointF s = simpath[0];
         path_string.append(QString("M%1,%2")
-                               .arg(s.x(), 0, 'g', fprec)
-                               .arg(s.y(), 0, 'g', fprec));
+                               .arg(s.x(), 0, 'f', fprec)
+                               .arg(s.y(), 0, 'f', fprec));
         for (int i = 1; i < simpath.size(); i++) {
             QPointF q = simpath[i];
             path_string.append(QString("L%1,%2")
-                                   .arg(q.x(), 0, 'g', fprec)
-                                   .arg(q.y(), 0, 'g', fprec));
+                                   .arg(q.x(), 0, 'f', fprec)
+                                   .arg(q.y(), 0, 'f', fprec));
         }
         // Note: A rx ry x-axis-rotation large-arc-flag sweep-flag x y
         // gives elliptical arc, very suitable for path compression
         path_string.append("Z");
     }
-    return QString("<path id=\"%3\" stroke=\"%1\" fill-rule=\"evenodd\" "
-                   "d=\"%2\"/>\n")
-        .arg(color_hex_name_rgb(color))
-        .arg(path_string.join(" "))
-        .arg(id);
-}
-
-static QRectF bounding_rect_for_boundary(const QVector<RenderPoint> &loop,
-                                         QPointF offset, double T) {
-    qreal xmax = -std::numeric_limits<qreal>::infinity();
-    qreal xmin = +std::numeric_limits<qreal>::infinity();
-    qreal ymax = -std::numeric_limits<qreal>::infinity();
-    qreal ymin = +std::numeric_limits<qreal>::infinity();
-    for (const RenderPoint &r : loop) {
-        QPointF h = (r.coords + offset) * T;
-        xmax = std::max(xmax, h.x());
-        xmin = std::min(xmin, h.x());
-        ymax = std::max(ymax, h.y());
-        ymin = std::min(ymin, h.y());
-    }
-    return QRectF(xmin, ymin, xmax - xmin, ymax - ymin);
+    return path_string.join(" ");
 }
 
 static double compute_histogram_angle(const Region &region,
@@ -2108,7 +2087,7 @@ void VectorTracer::computeGradients() {
         }
         int n = region.exterior.size();
         region.meanExteriorColor =
-            qRgba(bnet_r / n, bnet_g / n, bnet_b / n, bnet_a / n);
+            FColor(bnet_r / n, bnet_g / n, bnet_b / n, bnet_a / n).rgba();
         for (const QVector<RenderPoint> &loop : region.interior) {
             int inet_r = 0, inet_g = 0, inet_b = 0, inet_a = 0;
             int m = loop.size();
@@ -2119,12 +2098,12 @@ void VectorTracer::computeGradients() {
                 inet_a += rp.ideal_color.alphaF();
             }
             region.meanInteriorColors.push_back(
-                qRgba(inet_r / m, inet_g / m, inet_b / m, inet_a / m));
+                FColor(inet_r / m, inet_g / m, inet_b / m, inet_a / m).rgba());
         }
     }
 
     //
-    // Since QtSvg is incapable of handling clip paths like every
+    // Since QtSvg is incapable of handling clip paths/pattern fills like every
     // other SVG handling code, we roll our own SVG generator.
     //
     // Note: As QPainter supports this, fixing it in QtSvg on
@@ -2158,32 +2137,6 @@ void VectorTracer::computeGradients() {
         s << "  <defs>\n";
 
         const QPointF offset(0.5 * W / S + 1. / S, 0.5 * H / S + 1. / S);
-        // Clipping paths
-        for (const Region &region : region_list) {
-            const QVector<QPolygonF> &loops =
-                boundary_loops_for_region(region, offset, T);
-
-            s << QString("    <clipPath id=\"boundary%1\">\n")
-                     .arg(region.class_no);
-            s << "        "
-              << svg_path_from_polygons(
-                     loops, qRgb(0, 0, 0),
-                     QString("region_bound%1").arg(region.class_no));
-            s << QString("    </clipPath>\n");
-            for (const Subregion &subreg : region.subregions) {
-                s << QString("    <clipPath id=\"boundary%1_%2\">\n")
-                         .arg(region.class_no)
-                         .arg(subreg.subclass_no);
-                const QVector<QPolygonF> &subloops =
-                    boundary_loops_for_subregion(subreg, offset, T);
-                s << "        "
-                  << svg_path_from_polygons(subloops, qRgb(0, 0, 0),
-                                            QString("subregion_bound%1_%2")
-                                                .arg(region.class_no)
-                                                .arg(subreg.subclass_no));
-                s << QString("    </clipPath>\n");
-            }
-        }
         // Hatching fill overlays
         for (const Region &region : region_list) {
             // TODO: per-material settings? normal angle dependence
@@ -2198,8 +2151,7 @@ void VectorTracer::computeGradients() {
                          .arg(hatch_width)
                          .arg(angle);
                 s << QString("       <line x1=\"0\" y1=\"0\" x2=\"0\" "
-                             "y2=\"10\" style=\"stroke:%1; stroke-width:%2\" "
-                             "/>\n")
+                             "y2=\"10\" stroke=\"%1\" stroke-width=\"%2\"/>\n")
                          .arg(color_hex_name_rgb(qRgb(0, 0, 0)))
                          .arg(hatch_width);
                 s << QString("    </pattern>\n");
@@ -2260,14 +2212,13 @@ void VectorTracer::computeGradients() {
         s << "  </defs>\n";
 
         // Interior regions, clipped by boundaries
-        s << QString(
-            "<g fill-opacity=\"1\" stroke=\"none\" id=\"interiors\">\n");
+        s << QString("<g id=\"interiors\" fill-opacity=\"1\" stroke=\"none\"  "
+                     "fill-rule=\"evenodd\">\n");
         for (const Region &region : region_list) {
             // Compute region limit
             for (const Subregion &subreg : region.subregions) {
-
-                QRectF subreg_limit =
-                    bounding_rect_for_boundary(subreg.boundaries[0], offset, T);
+                const QVector<QPolygonF> &subloops =
+                    boundary_loops_for_subregion(subreg, offset, T);
 
                 QString fill_desc;
                 if (subreg.gradient_type == GradientType::gSolid) {
@@ -2280,42 +2231,30 @@ void VectorTracer::computeGradients() {
                     qFatal("Unsupported gradient type");
                 }
 
-                s << QString("  <rect id=\"region%5_%6\" x=\"%1\" y=\"%2\" "
-                             "width=\"%3\" "
-                             "height=\"%4\" "
-                             "clip-path=\"url(#boundary%5_%6)\" "
-                             "fill=\"%7\" />\n")
-                         .arg(subreg_limit.x())
-                         .arg(subreg_limit.y())
-                         .arg(subreg_limit.width())
-                         .arg(subreg_limit.height())
+                s << QString(
+                         "  <path id=\"region%1_%2\" fill=\"%3\" d=\"%4\"/>\n")
                          .arg(region.class_no)
                          .arg(subreg.subclass_no)
-                         .arg(fill_desc);
+                         .arg(fill_desc)
+                         .arg(svg_path_text_from_polygons(subloops));
             }
-            QRectF region_limit =
-                bounding_rect_for_boundary(region.exterior, offset, T);
+            const QVector<QPolygonF> &loops =
+                boundary_loops_for_region(region, offset, T);
             // Overlay mix with hatching
             if (region.is_clipped_patch) {
-                s << QString("  <rect id=\"region_hatch%5\" x=\"%1\" y=\"%2\" "
-                             "width=\"%3\" "
-                             "height=\"%4\" style=\"fill: url(#hatching%5) "
-                             "#fff;\" opacity=\"0.2\" "
-                             "clip-path=\"url(#boundary%6)\"/>\n")
-                         .arg(region_limit.x())
-                         .arg(region_limit.y())
-                         .arg(region_limit.width())
-                         .arg(region_limit.height())
+                s << QString("  <path id=\"region_hatch%1\" "
+                             "fill=\"url(#hatching%1)\" opacity=\"0.2\" "
+                             "d=\"%2\"/>\n")
                          .arg(region.class_no)
-                         .arg(region.class_no);
+                         .arg(svg_path_text_from_polygons(loops));
             }
         }
         s << QString("</g>\n");
 
         // Boundaries
-        s << QString("<g fill=\"none\" stroke=\"black\" stroke-width=\"%1\" "
+        s << QString("<g id=\"boundaries\" fill=\"none\" stroke-width=\"%1\" "
                      "fill-rule=\"evenodd\" stroke-linecap=\"square\" "
-                     "stroke-linejoin=\"miter\" id=\"boundaries\">\n")
+                     "stroke-linejoin=\"miter\">\n")
                  .arg(T * 0.003);
         for (const Region &region : region_list) {
             const QVector<QPolygonF> &loops =
@@ -2325,10 +2264,12 @@ void VectorTracer::computeGradients() {
                 solo.push_back(loops[i]);
                 QRgb c = i ? region.meanInteriorColors[i - 1]
                            : region.meanExteriorColor;
-                s << "    "
-                  << svg_path_from_polygons(
-                         solo, c,
-                         QString("edge%1_%2").arg(region.class_no).arg(i));
+                s << QString("    <path id=\"edge%1_%2\" stroke=\"%3\" "
+                             "d=\"%4\"/>\n")
+                         .arg(region.class_no)
+                         .arg(i)
+                         .arg(color_hex_name_rgb(c))
+                         .arg(svg_path_text_from_polygons(solo));
             }
         }
         s << QString("</g>\n");
