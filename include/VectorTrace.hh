@@ -2,6 +2,23 @@
 
 #include "Viewer.hh"
 
+class FColor {
+public:
+    FColor();
+    FColor(float, float, float, float = 1.0);
+    QRgb rgba() const;
+    inline float redF() const { return r; }
+    inline float greenF() const { return g; }
+    inline float blueF() const { return b; }
+    inline float alphaF() const { return a; }
+    float magnitude() const;
+    QString hexName() const;
+    static FColor blend(const FColor &a, const FColor &b, float mix);
+
+private:
+    float r, g, b, a;
+};
+
 class RenderPoint {
 public:
     RenderPoint(QPointF spot, int nhits, const Intersection *srcints,
@@ -16,7 +33,7 @@ public:
     int nhits;
     Intersection *intersections;
     Element **elements;
-    QRgb ideal_color;
+    FColor ideal_color;
     int region_class;
     int subregion_class;
 
@@ -83,14 +100,15 @@ signals:
 private:
     /* Function */
     RenderPoint queryPoint(QPointF);
+    RenderPoint getPoint(QPoint);
     void bracketEdge(const RenderPoint &initial_inside,
                      const RenderPoint &initial_outside,
                      RenderPoint *result_inside, RenderPoint *result_outside);
     void bracketCrease(const RenderPoint &initial_inside,
                        const RenderPoint &initial_outside,
                        RenderPoint *result_inside, RenderPoint *result_outside);
-    QColor calculateInteriorColor(const RenderPoint &pt);
-    QColor calculateBoundaryColor(const RenderPoint &inside,
+    FColor calculateInteriorColor(const RenderPoint &pt);
+    FColor calculateBoundaryColor(const RenderPoint &inside,
                                   const RenderPoint &outside);
     int faildepth(const RenderPoint &a, const RenderPoint &b);
     inline bool typematch(const RenderPoint &a, const RenderPoint &b) {
@@ -102,6 +120,7 @@ private:
     QString file_name;
     long nqueries;
     bool transparent_volumes;
+    QVector<FColor> element_colors;
 
     ViewData view_data;
     TrackData track_data;

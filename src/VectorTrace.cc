@@ -14,8 +14,34 @@ static uint32_t randint(uint32_t excl_upper) {
     return ((uint32_t)qrand()) % excl_upper;
 }
 
-static QColor randColor() {
-    return QColor::fromRgb(qRgb(randint(256), randint(256), randint(256)));
+static FColor randColor() {
+    return FColor(randint(65536) / 65535., randint(65536) / 65535.,
+                  randint(65536) / 65535., 1.0);
+}
+
+FColor::FColor() : r(0.), g(0.), b(0.), a(0.) {}
+FColor::FColor(float ir, float ig, float ib, float ia)
+    : r(ir), g(ig), b(ib), a(ia) {}
+QRgb FColor::rgba() const { return QColor::fromRgbF(r, g, b, a).rgba(); }
+float FColor::magnitude() const { return a * std::max(r, std::max(b, g)); }
+QString FColor::hexName() const {
+    QRgb color = rgba();
+    int cr = qRed(color);
+    int cg = qGreen(color);
+    int cb = qBlue(color);
+    const char *numbers = "0123456789abcdef";
+    return QString("#%1%2%3%4%5%6")
+        .arg(numbers[cr / 16])
+        .arg(numbers[cr % 16])
+        .arg(numbers[cg / 16])
+        .arg(numbers[cg % 16])
+        .arg(numbers[cb / 16])
+        .arg(numbers[cb % 16]);
+}
+FColor FColor::blend(const FColor &a, const FColor &b, float s) {
+    float t = 1. - s;
+    return FColor(t * a.r + s * b.r, t * a.g + s * b.g, t * a.b + s * b.b,
+                  t * a.a + s * b.a);
 }
 
 RenderPoint::RenderPoint() {
@@ -25,7 +51,7 @@ RenderPoint::RenderPoint() {
     intersections = NULL;
     elements = NULL;
     nhits = 0;
-    ideal_color = qRgb(0., 0., 0.);
+    ideal_color = FColor();
     region_class = -1;
 }
 RenderPoint::RenderPoint(QPointF spot, int inhits, const Intersection *srcints,
@@ -36,7 +62,7 @@ RenderPoint::RenderPoint(QPointF spot, int inhits, const Intersection *srcints,
     intersections = new Intersection[nhits + 1];
     memcpy(elements, srcelems, nhits * sizeof(Element *));
     memcpy(intersections, srcints, (nhits + 1) * sizeof(Intersection));
-    ideal_color = qRgb(0., 0., 0.);
+    ideal_color = FColor();
     region_class = -1;
     subregion_class = -1;
 }
@@ -80,14 +106,13 @@ void RenderPoint::swap(RenderPoint &other) {
     std::swap(ideal_color, other.ideal_color);
 }
 
-static void recsetColorsByMaterial(Element &elem,
-                                   std::vector<VColor> &color_table,
-                                   QMap<QString, QColor> &color_map,
+static void recsetColorsByMaterial(Element &elem, QVector<FColor> &color_table,
+                                   QMap<QString, FColor> &color_map,
                                    QMap<QString, int> &idx_map) {
     // We hard-code color associations to be more consistent
     QString key(elem.material->GetName().c_str());
     if (!color_map.count(key)) {
-        QColor c = randColor();
+        FColor c = randColor();
         color_map[key] = c;
         qWarning("Material `%s` assigned random color: rgb=(%f %f %f)",
                  key.toUtf8().constData(), c.redF(), c.blueF(), c.greenF());
@@ -96,7 +121,7 @@ static void recsetColorsByMaterial(Element &elem,
     if (!idx_map.count(key)) {
         int n = idx_map.size();
         idx_map[key] = n;
-        color_table.push_back(color_map[key].rgb());
+        color_table.push_back(color_map[key]);
     }
     elem.ccode = idx_map[key];
     for (Element &e : elem.children) {
@@ -113,30 +138,30 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
     nqueries = 0;
     transparent_volumes = transparency;
 
-    QMap<QString, QColor> color_map;
-    color_map["ArGas"] = QColor::fromRgbF(0.8, 0.8, 0.8);
+    QMap<QString, FColor> color_map;
+    color_map["ArGas"] = FColor(0.8, 0.8, 0.8);
     color_map["Argas"] = color_map["ArGas"];
     color_map["ArgonGas"] = color_map["ArgonGas"];
-    color_map["Air"] = QColor::fromRgbF(0.8, 0.8, 0.8);
+    color_map["Air"] = FColor(0.8, 0.8, 0.8);
 
-    color_map["Al6061"] = QColor::fromRgbF(1.0, 0.2, 0.2);
-    color_map["Al5083"] = QColor::fromRgbF(0.8, 0.4, 0.4);
+    color_map["Al6061"] = FColor(1.0, 0.2, 0.2);
+    color_map["Al5083"] = FColor(0.8, 0.4, 0.4);
     // Often have nickel plated lead
-    color_map["G4_Pb"] = QColor::fromRgbF(0.4, 0.0, 0.7);
-    color_map["G4_Ni"] = QColor::fromRgbF(0.5, 0.1, 0.8);
+    color_map["G4_Pb"] = FColor(0.4, 0.0, 0.7);
+    color_map["G4_Ni"] = FColor(0.5, 0.1, 0.8);
 
-    color_map["G4_Cu"] = QColor::fromRgbF(0.0, 0.9, 0.7);
-    color_map["BaF2"] = QColor::fromRgbF(1.0, 1.0, 1.0);
+    color_map["G4_Cu"] = FColor(0.0, 0.9, 0.7);
+    color_map["BaF2"] = FColor(1.0, 1.0, 1.0);
     QMap<QString, int> idx_map;
-    view_data.color_table.clear();
-    recsetColorsByMaterial(view_data.elements, view_data.color_table, color_map,
+    element_colors.clear();
+    recsetColorsByMaterial(view_data.elements, element_colors, color_map,
                            idx_map);
 
     grid_size = QSize(1000, 1000);
     //    grid_size = QSize(300, 300);
     //    grid_size = QSize(100, 100);
-
     //    grid_size = QSize(30, 30);
+
     grid_points = NULL;
     grid_nclasses = 0;
     ray_mutables = NULL;
@@ -301,6 +326,16 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
 
     return RenderPoint(spot, m, ints, hits);
 }
+RenderPoint VectorTracer::getPoint(QPoint p) {
+    if (p.x() < 0 || p.y() < 0 || p.x() >= grid_size.width() ||
+        p.y() >= grid_size.height()) {
+        RenderPoint q;
+        q.coords = grid_coord_to_point(p, grid_size);
+        return q;
+    } else {
+        return grid_points[p.x() * grid_size.height() + p.y()];
+    }
+}
 void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
                                const RenderPoint &initial_outside,
                                RenderPoint *result_inside,
@@ -382,22 +417,19 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
         }
     }
 }
-static void intersectionColor(const G4ThreeVector &normal,
-                              const G4ThreeVector &forward, const VColor &base,
-                              float color[4]) {
+static FColor intersectionColor(const G4ThreeVector &normal,
+                                const G4ThreeVector &forward,
+                                const FColor &base) {
     // Opposed normals (i.e, for transp backsides) are mirrored
     float cx = std::abs(std::acos(-normal * forward) / CLHEP::pi);
     cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
 
-    color[0] = cx * base.redF();
-    color[1] = cx * base.greenF();
-    color[2] = cx * base.blueF();
-    color[3] = 1.0;
+    return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF(), 1.0);
 }
 
-static QColor retractionMerge(const RenderPoint &pt, float color[4],
+static FColor retractionMerge(const RenderPoint &pt, FColor seed,
                               const G4ThreeVector &normal,
-                              const std::vector<VColor> &color_table,
+                              const QVector<FColor> &color_table,
                               int startpoint, bool transparent_volumes) {
     for (int k = startpoint; k >= 0; --k) {
         if (!pt.elements[k]->visible) {
@@ -405,34 +437,31 @@ static QColor retractionMerge(const RenderPoint &pt, float color[4],
         }
 
         // We use the intersection before the volume
-        const VColor &base_color = color_table[pt.elements[k]->ccode];
-        float acolor[4];
-        intersectionColor(pt.intersections[k].normal, normal, base_color,
-                          acolor);
+        const FColor &base_color = color_table[pt.elements[k]->ccode];
+        FColor alt_color =
+            intersectionColor(pt.intersections[k].normal, normal, base_color);
         double e = transparent_volumes ? pt.elements[k]->alpha : 1.0;
-        for (int i = 0; i < 4; i++) {
-            color[i] = e * acolor[i] + (1 - e) * color[i];
-        }
-    }
-    return QColor::fromRgbF(color[0], color[1], color[2], color[3]);
-}
-QColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
 
-    float color[4] = {0.9, 0.9, 0.9, 0.1};
-    return retractionMerge(pt, color, view_data.orientation.rowX(),
-                           view_data.color_table, pt.nhits - 1,
-                           transparent_volumes);
+        seed = FColor::blend(seed, alt_color, e);
+    }
+    return seed;
 }
-QColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
+FColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
+
+    FColor color(0.9, 0.9, 0.9, 0.1);
+    return retractionMerge(pt, color, view_data.orientation.rowX(),
+                           element_colors, pt.nhits - 1, transparent_volumes);
+}
+FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
                                             const RenderPoint &outside) {
     // lim necessary <= inside.nhits
     int lim = faildepth(inside, outside);
-    float color[4] = {0., 0., 0., 1.};
+    FColor color(0., 0., 0., 1.);
     if (!transparent_volumes)
-        return QColor(color[0], color[1], color[2], color[3]);
+        return color;
     // It is possible that lim=inside.nhits if outside has an extra solid
     return retractionMerge(inside, color, view_data.orientation.rowX(),
-                           view_data.color_table, lim - 1, true);
+                           element_colors, lim - 1, true);
 }
 
 void VectorTracer::computeGrid() {
@@ -448,7 +477,7 @@ void VectorTracer::computeGrid() {
             QPointF spot = grid_coord_to_point(QPoint(i, j), grid_size);
             grid_points[idx] = queryPoint(spot);
             grid_points[idx].ideal_color =
-                calculateInteriorColor(grid_points[idx]).rgba();
+                calculateInteriorColor(grid_points[idx]);
         }
     }
     qDebug("Grid computed");
@@ -524,14 +553,15 @@ void VectorTracer::computeGrid() {
     qDebug("Found %d equivalence classes", grid_nclasses);
     {
         qDebug("Rendering classes to image");
-        QRgb *colors = new QRgb[grid_nclasses];
+        FColor *colors = new FColor[grid_nclasses];
         for (int i = 0; i < grid_nclasses; i++) {
-            colors[i] = randColor().rgb();
+            colors[i] = randColor();
         }
         QRgb *dat = new QRgb[W * H];
         for (int x = 0; x < W; x++) {
             for (int y = 0; y < H; y++) {
-                dat[y * W + x] = colors[grid_points[x * H + y].region_class];
+                dat[y * W + x] =
+                    colors[grid_points[x * H + y].region_class].rgba();
             }
         }
 
@@ -608,7 +638,7 @@ static void draw_boundaries_to(QPaintDevice *target,
         path.setFillRule(Qt::OddEvenFill);
 
         p.setPen(QPen(Qt::black, 1, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
-        p.setBrush(randColor());
+        p.setBrush(QColor(randColor().rgba()));
         p.drawPath(path);
     }
 }
@@ -922,19 +952,13 @@ void VectorTracer::computeEdges() {
                 }
                 QPoint ip_in = low_inclass ? ilow : ihigh;
                 QPoint ip_out = low_inclass ? ihigh : ilow;
-                RenderPoint in_point = grid_points[ip_in.x() * H + ip_in.y()];
-                RenderPoint out_point;
-                if (ip_out.x() >= 0 && ip_out.x() < W && ip_out.y() >= 0 &&
-                    ip_out.y() < H) {
-                    out_point = grid_points[ip_out.x() * H + ip_out.y()];
-                } else {
-                    out_point = RenderPoint();
-                    out_point.coords = QPointF(ip_out);
-                }
+                RenderPoint in_point = getPoint(ip_in);
+                RenderPoint out_point = getPoint(ip_out);
+
                 RenderPoint in_limit, out_limit;
                 bracketEdge(in_point, out_point, &in_limit, &out_limit);
                 in_limit.ideal_color =
-                    calculateBoundaryColor(in_limit, out_limit).rgba();
+                    calculateBoundaryColor(in_limit, out_limit);
 
                 if (qlp.size() &&
                     (in_limit.coords - qlp.last().coords).manhattanLength() <
@@ -1011,8 +1035,7 @@ void VectorTracer::computeEdges() {
                 // like it might be off slightly
                 RenderPoint plim_in, plim_out;
                 bracketEdge(pavg, pjump, &plim_in, &plim_out);
-                plim_in.ideal_color =
-                    calculateBoundaryColor(plim_in, plim_out).rgba();
+                plim_in.ideal_color = calculateBoundaryColor(plim_in, plim_out);
 
                 if ((plim_in.coords - src_pre).manhattanLength() < 1e-15 ||
                     (plim_in.coords - src_post).manhattanLength() < 1e-15) {
@@ -1183,19 +1206,6 @@ void VectorTracer::computeCreases() {
 
                     bool has_crease =
                         crease_depth(q0, q1, cos_alpha, min_jump) >= 0;
-
-                    // TODO: refine crease condition by subdivision search.
-
-                    // If difference above threshold; eventually,
-                    // replace with a float that's either NaN or in
-                    // [0,1] and gives the crease location.
-
-                    // Note region edges agree here...; the quadruple
-                    // intersections are a special case. We really should
-                    // consider the dual graph & midpoints?
-
-                    // TODO: create a custom GDML file, perhaps a box
-                    // rotated 90x90x90?
 
                     crease_edge_map[line_marker] = has_crease;
                     crease_edge_count[p0.x() * H + p0.y()]++;
@@ -1436,26 +1446,11 @@ void VectorTracer::computeCreases() {
 
                 // Only crease edges visible...
                 for (QPoint line_marker : poly) {
-                    // TODO: optimize edge inward...
                     QPoint p0 = line_marker / 2;
                     QPoint p1 = line_marker - line_marker / 2;
 
-                    // TODO: create 'point_from_grid_coords' helper
-                    RenderPoint q0, q1;
-                    if (p0.x() < 0 || p0.y() < 0 || p0.x() >= W ||
-                        p0.y() >= H) {
-                        q0 = RenderPoint();
-                        q0.coords = grid_coord_to_point(p0, grid_size);
-                    } else {
-                        q0 = grid_points[p0.x() * H + p0.y()];
-                    }
-                    if (p1.x() < 0 || p1.y() < 0 || p1.x() >= W ||
-                        p1.y() >= H) {
-                        q1 = RenderPoint();
-                        q1.coords = grid_coord_to_point(p1, grid_size);
-                    } else {
-                        q1 = grid_points[p1.x() * H + p1.y()];
-                    }
+                    RenderPoint q0 = getPoint(p0);
+                    RenderPoint q1 = getPoint(p1);
 
                     RenderPoint adj_point;
                     bool is_crease = false;
@@ -1468,14 +1463,14 @@ void VectorTracer::computeCreases() {
                             q0.region_class == region.class_no ? q1 : q0,
                             &lim_in, &lim_out);
                         lim_in.ideal_color =
-                            calculateBoundaryColor(lim_in, lim_out).rgb();
+                            calculateBoundaryColor(lim_in, lim_out);
                         adj_point = lim_in;
                     } else if (!crease_edge_map[line_marker]) {
                         // Interior edge, not conflict
                         // Select midpoint of q0 and q1
                         adj_point = queryPoint(0.5 * (q0.coords + q1.coords));
                         adj_point.ideal_color =
-                            calculateInteriorColor(adj_point).rgb();
+                            calculateInteriorColor(adj_point);
                     } else {
                         // Interior edge, crease.
                         // Pick error type (normal or displacement)
@@ -1486,19 +1481,21 @@ void VectorTracer::computeCreases() {
                             q0.subregion_class == subreg.subclass_no ? q0 : q1,
                             q0.subregion_class == subreg.subclass_no ? q1 : q0,
                             &lim_in, &lim_out);
-                        lim_in.ideal_color =
-                            calculateInteriorColor(lim_in).rgb();
+                        lim_in.ideal_color = calculateInteriorColor(lim_in);
                         adj_point = lim_in;
                         is_crease = true;
                     }
 
-                    QRgb aic = adj_point.ideal_color;
+                    FColor aic = adj_point.ideal_color;
                     adj_point.ideal_color =
-                        qRgba(qRed(aic), qBlue(aic), qGreen(aic),
-                              is_crease ? 255 : 0);
+                        FColor(aic.redF(), aic.greenF(), aic.blueF(),
+                               is_crease ? 1.0 : 0.0);
                     // Oh: rpoint, alpha=0 signifies invisible.
                     bound.push_back(adj_point);
                 }
+
+                // TODO: an edge expansion pass, identical to the one from
+                // the parent boundary
 
                 if (!subreg.boundaries.size()) {
                     // Outside (largest) loop must be reversed relative to all
@@ -1518,11 +1515,11 @@ void VectorTracer::computeCreases() {
     {
         QRgb *colors = new QRgb[grid_nclasses];
         for (int i = 0; i < grid_nclasses; i++) {
-            colors[i] = randColor().rgb();
+            colors[i] = randColor().rgba();
         }
         QRgb *scolors = new QRgb[nsubclasses];
         for (int i = 0; i < nsubclasses; i++) {
-            scolors[i] = randColor().rgb();
+            scolors[i] = randColor().rgba();
         }
         // fill colors?
 
@@ -1727,8 +1724,76 @@ static QRectF bounding_rect_for_boundary(const QVector<RenderPoint> &loop,
     return QRectF(xmin, ymin, xmax - xmin, ymax - ymin);
 }
 
+static double compute_histogram_angle(const Region &region,
+                                      const Subregion &subreg,
+                                      RenderPoint *grid_points,
+                                      const QSize &grid_size) {
+    // TODO: ensure subregion bounding & point lookup is fast & local
+
+    const int W = grid_size.width(), H = grid_size.height();
+
+    // Here we compute the circular mean of the gradient line direction.
+    // Thankfully RP1=S1.
+    double sum_sin = 0., sum_cos = 0.;
+    for (int x = region.xmin; x <= region.xmax; x++) {
+        for (int y = region.ymin; y <= region.ymax; y++) {
+            // There are four dx/dy kernels feasible;
+            // we add them all together
+            RenderPoint &base = grid_points[x * H + y];
+            if (base.region_class != region.class_no)
+                continue;
+            if (base.subregion_class != subreg.subclass_no)
+                continue;
+
+            int dxs[4] = {1, 1, -1, -1};
+            int dys[4] = {1, -1, -1, 1};
+            for (int k = 0; k < 4; k++) {
+                int xnx = x + dxs[k], yny = y + dys[k];
+                if (xnx >= W || yny >= H || xnx < 0 || yny < 0)
+                    continue;
+
+                RenderPoint &pdx = grid_points[xnx * H + y];
+                if (pdx.region_class != region.class_no)
+                    continue;
+                if (pdx.subregion_class != subreg.subclass_no)
+                    continue;
+
+                RenderPoint &pdy = grid_points[x * H + yny];
+                if (pdy.region_class != region.class_no)
+                    continue;
+                if (pdy.subregion_class != subreg.subclass_no)
+                    continue;
+
+                // We consider derivatives in magnitude, as intra-subregion
+                // color shifts tend to be scaling-only
+                float mag_base = base.ideal_color.magnitude();
+                float mag_dx = pdx.ideal_color.magnitude();
+                float mag_dy = pdy.ideal_color.magnitude();
+
+                float dx = (mag_dx - mag_base) / dxs[k];
+                float dy = (mag_dy - mag_base) / dys[k];
+                if (dx == 0. && dy == 0.)
+                    continue;
+                // S1 -> RP1=S1. Via angle is clear, but could be optimized
+                float angle = std::atan2(dy, dx);
+                angle = angle * 2;
+                sum_sin += std::sin(angle);
+                sum_cos += std::cos(angle);
+            }
+        }
+    }
+    if (sum_sin == 0. && sum_cos == 0.) {
+        // Uniformly distributed angles, or just none at all
+        return 0.;
+    }
+    float angle = std::atan2(sum_sin, sum_cos);
+    // The half-pi shift gives an angle perpendicular to dominant
+    // gradient direction
+    return std::fmod(-angle / 2 + M_PI / 2, M_PI);
+}
+
 static void fill_linear_histogram_for_angle(
-    Subregion &region, const QVector<QPair<QRgb, QPointF>> &interior_colors,
+    Subregion &region, const QVector<QPair<FColor, QPointF>> &interior_colors,
     const QSize &gridsize, double angle) {
     int S = std::max(gridsize.width(), gridsize.height()) - 1;
     double grid_spacing = 1.0 / S;
@@ -1738,7 +1803,7 @@ static void fill_linear_histogram_for_angle(
     double tmax = -std::numeric_limits<float>::infinity();
     double proj_x = std::sin(angle);
     double proj_y = std::cos(angle);
-    for (const QPair<QRgb, QPointF> &p : interior_colors) {
+    for (const QPair<FColor, QPointF> &p : interior_colors) {
         double t = proj_x * p.second.x() + proj_y * p.second.y();
         tmin = std::min(tmin, t);
         tmax = std::max(tmax, t);
@@ -1764,8 +1829,8 @@ static void fill_linear_histogram_for_angle(
         histogram_a[i] = 0.;
         histogram_w[i] = 0.;
     }
-    for (const QPair<QRgb, QPointF> &p : interior_colors) {
-        QColor color(p.first);
+    for (const QPair<FColor, QPointF> &p : interior_colors) {
+        QColor color(p.first.rgba());
         double t = proj_x * p.second.x() + proj_y * p.second.y();
         double cell = (region.linear_nsteps - 1.) * (t - region.linear_start) /
                       (region.linear_stop - region.linear_start);
@@ -1812,10 +1877,10 @@ static int rgba_distance2(QRgb a, QRgb b) {
 
 static long
 compute_gradient_error(const Subregion &region,
-                       const QVector<QPair<QRgb, QPointF>> &interior_colors) {
+                       const QVector<QPair<FColor, QPointF>> &interior_colors) {
     long sqe = 0.;
-    for (const QPair<QRgb, QPointF> &p : interior_colors) {
-        QRgb color = p.first;
+    for (const QPair<FColor, QPointF> &p : interior_colors) {
+        QRgb color = p.first.rgba();
 
         QRgb pred;
         if (region.gradient_type == GradientType::gSolid) {
@@ -1856,8 +1921,9 @@ void VectorTracer::computeGradients() {
         // First, compute best estimate region interior average color
         for (Subregion &subreg : region.subregions) {
 
-            QVector<QPair<QRgb, QPointF>> interior_colors;
-            int net_r = 0, net_g = 0, net_b = 0, net_a = 0, net_count = 0;
+            QVector<QPair<FColor, QPointF>> interior_colors;
+            float net_r = 0, net_g = 0, net_b = 0, net_a = 0;
+            int net_count = 0;
             for (int x = region.xmin; x <= region.xmax; x++) {
                 for (int y = region.ymin; y <= region.ymax; y++) {
                     if (grid_points[x * H + y].region_class != region.class_no)
@@ -1868,55 +1934,31 @@ void VectorTracer::computeGradients() {
                     RenderPoint &pt = grid_points[x * H + y];
 
                     interior_colors.push_back(
-                        QPair<QRgb, QPointF>(pt.ideal_color, pt.coords));
+                        QPair<FColor, QPointF>(pt.ideal_color, pt.coords));
 
-                    net_r += qRed(pt.ideal_color);
-                    net_g += qGreen(pt.ideal_color);
-                    net_b += qBlue(pt.ideal_color);
-                    net_a += qAlpha(pt.ideal_color);
+                    net_r += pt.ideal_color.redF();
+                    net_g += pt.ideal_color.greenF();
+                    net_b += pt.ideal_color.blueF();
+                    net_a += pt.ideal_color.alphaF();
                     net_count += 1;
                 }
             }
-            subreg.solid_color = qRgba(net_r / net_count, net_g / net_count,
-                                       net_b / net_count, net_a / net_count);
+            subreg.solid_color = FColor(net_r / net_count, net_g / net_count,
+                                        net_b / net_count, net_a / net_count)
+                                     .rgba();
             subreg.gradient_type = GradientType::gSolid;
 
-            // Next, determine the optimal gradient angle. We prefer solid by
-            // 10%
-            long cost =
-                compute_gradient_error(subreg, interior_colors) + (1L << 50);
+            long cost = compute_gradient_error(subreg, interior_colors);
             if (cost > 0) {
-                //
-                // TODO: there is a far easier & faster way to determine this.
-                // Step 1: use float3 colors
-                // Step 2: convert colors to magnitude
-                // Step 3: compute X/Y derivatives around point, normalize,
-                // average, normalize Step 4: Pick the angle perpendicular to
-                // the generalized normal. Step 5: Done!
-
                 subreg.gradient_type = GradientType::gLinear;
-                int nbrute = 60;
-                double best = -1.0;
-                for (int i = 0; i < nbrute; i++) {
-                    double angle = i * M_PI / nbrute;
-                    fill_linear_histogram_for_angle(subreg, interior_colors,
-                                                    grid_size, angle);
-                    long acost =
-                        compute_gradient_error(subreg, interior_colors);
-                    if (acost < cost) {
-                        best = angle;
-                        cost = acost;
-                    }
-                }
-                qDebug("best %f cost %ld nint %d", best, cost,
-                       interior_colors.size());
-                // Only pick a gradient if it improves on solid color cost
-                if (best > 0) {
-                    fill_linear_histogram_for_angle(subreg, interior_colors,
-                                                    grid_size, best);
-                } else {
-                    subreg.gradient_type = GradientType::gSolid;
-                }
+
+                double angle = compute_histogram_angle(region, subreg,
+                                                       grid_points, grid_size);
+                fill_linear_histogram_for_angle(subreg, interior_colors,
+                                                grid_size, angle);
+                qDebug("class %d subclass %d angle %f nsteps %d",
+                       region.class_no, subreg.subclass_no, angle,
+                       subreg.linear_nsteps);
             }
 
             // Fall back to solid if uniform
@@ -1935,16 +1977,13 @@ void VectorTracer::computeGradients() {
             }
         }
 
-        // TODO: 1st order histogram fill average on gradient. (Start, Spacing)
-        // is the rule. (Is fast and deterministic.) Then
-
         // Finally, compute boundary average colors
-        int bnet_r = 0, bnet_g = 0, bnet_b = 0, bnet_a = 0;
+        float bnet_r = 0, bnet_g = 0, bnet_b = 0, bnet_a = 0;
         for (const RenderPoint &rp : region.exterior) {
-            bnet_r += qRed(rp.ideal_color);
-            bnet_g += qGreen(rp.ideal_color);
-            bnet_b += qBlue(rp.ideal_color);
-            bnet_a += qAlpha(rp.ideal_color);
+            bnet_r += rp.ideal_color.redF();
+            bnet_g += rp.ideal_color.greenF();
+            bnet_b += rp.ideal_color.blueF();
+            bnet_a += rp.ideal_color.alphaF();
         }
         int n = region.exterior.size();
         region.meanExteriorColor =
@@ -1953,10 +1992,10 @@ void VectorTracer::computeGradients() {
             int inet_r = 0, inet_g = 0, inet_b = 0, inet_a = 0;
             int m = loop.size();
             for (const RenderPoint &rp : loop) {
-                inet_r += qRed(rp.ideal_color);
-                inet_g += qGreen(rp.ideal_color);
-                inet_b += qBlue(rp.ideal_color);
-                inet_a += qAlpha(rp.ideal_color);
+                inet_r += rp.ideal_color.redF();
+                inet_g += rp.ideal_color.greenF();
+                inet_b += rp.ideal_color.blueF();
+                inet_a += rp.ideal_color.alphaF();
             }
             region.meanInteriorColors.push_back(
                 qRgba(inet_r / m, inet_g / m, inet_b / m, inet_a / m));
@@ -2002,11 +2041,6 @@ void VectorTracer::computeGradients() {
         for (const Region &region : region_list) {
             const QVector<QPolygonF> &loops =
                 boundary_loops_for_region(region, offset, T);
-            // TODO: path reduction! (replace linear runs with maximal lines
-            // that fall within epsilon of the replaced points. Note points
-            // are accurate to grid_spacing / 2^19 Also replace curve runs
-            // with elliptical arcs. These two can cover 99% of all edges
-            // seen in practice.
 
             s << QString("    <clipPath id=\"boundary%1\">\n")
                      .arg(region.class_no);
@@ -2019,7 +2053,6 @@ void VectorTracer::computeGradients() {
                 s << QString("    <clipPath id=\"boundary%1_%2\">\n")
                          .arg(region.class_no)
                          .arg(subreg.subclass_no);
-                // TODO: clip subregion loops by region loops
                 const QVector<QPolygonF> &subloops =
                     boundary_loops_for_subregion(subreg, offset, T);
                 s << "        "
