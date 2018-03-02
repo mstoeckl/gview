@@ -85,6 +85,8 @@ public:
                  const QString &target_file, bool transparency = true,
                  QObject *parent = NULL);
     virtual ~VectorTracer();
+    QImage preview(const QSize &sz);
+
 public slots:
     void renderFull();
     void renderStep();

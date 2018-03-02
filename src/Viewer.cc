@@ -5,6 +5,7 @@
 #include "Overview.hh"
 #include "RenderWidget.hh"
 #include "VectorTrace.hh"
+#include "VectorWindow.hh"
 
 #include <G4GDMLParser.hh>
 #include <G4LogicalVolume.hh>
@@ -159,6 +160,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     connect(vectorOAction, SIGNAL(triggered()), this,
             SLOT(vectorOScreenshot()));
 
+    QAction *vectorPAction = new QAction("Vector preview", this);
+    vectorPAction->setToolTip("Preview vector scene rect");
+    connect(vectorPAction, SIGNAL(triggered()), this, SLOT(vectorPreview()));
+
     QAction *screen4Action = new QAction("ScrSht4x", this);
     screen4Action->setToolTip(
         "Take a screenshot of active scene; at 4x sampling");
@@ -189,6 +194,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     imgmenu->addAction(screen4Action);
     imgmenu->addAction(vectorTAction);
     imgmenu->addAction(vectorOAction);
+    imgmenu->addAction(vectorPAction);
 
     rwidget = new RenderWidget(vd, trackdata);
     this->setCentralWidget(rwidget);
@@ -728,6 +734,18 @@ void Viewer::vectorOScreenshot() {
         new VectorTracer(vd, trackdata, "vector_opaque.svg", false);
     vt->reset(false, QSize(1000, 1000));
     vt->renderFull();
+    delete vt;
+}
+void Viewer::vectorPreview() {
+    VectorTracer *vt = new VectorTracer(vd, trackdata, "vector_na.svg", false);
+    // opaque for now
+    vt->reset(false, QSize(1000, 1000));
+
+    QImage img = vt->preview(QSize(100, 100));
+    ImageWidget *imwidg = new ImageWidget();
+    imwidg->setImage(img);
+    imwidg->setWindowFlag(Qt::Tool);
+    imwidg->show();
     delete vt;
 }
 void Viewer::reloadChoiceMenus() {

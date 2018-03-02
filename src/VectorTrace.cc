@@ -106,6 +106,20 @@ void RenderPoint::swap(RenderPoint &other) {
     std::swap(ideal_color, other.ideal_color);
 }
 
+static QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
+    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
+    const int S = std::max(W, H);
+
+    QPointF spot((pt.x() - 0.5 * W) / S, (pt.y() - 0.5 * H) / S);
+    return spot;
+}
+static QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
+    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
+    const int S = std::max(W, H);
+
+    QPointF spot(pt.x() * S + 0.5 * W, pt.y() * S + 0.5 * H);
+    return spot;
+}
 static void recsetColorsByMaterial(Element &elem, QVector<FColor> &color_table,
                                    QMap<QString, FColor> &color_map,
                                    QMap<QString, int> &idx_map) {
@@ -174,6 +188,25 @@ void VectorTracer::recolor() {
     element_colors.clear();
     recsetColorsByMaterial(view_data.elements, element_colors, color_map,
                            idx_map);
+}
+
+QImage VectorTracer::preview(const QSize &sz) {
+    QRgb *data = new QRgb[sz.width() * sz.height()];
+
+    for (int x = 0; x < sz.width(); x++) {
+        for (int y = 0; y < sz.height(); y++) {
+            int idx = y * sz.width() + x;
+            QPointF qt = grid_coord_to_point(QPoint(x, y), sz);
+            RenderPoint pt = queryPoint(qt);
+            data[idx] = calculateInteriorColor(pt).rgba();
+        }
+    }
+
+    QImage img((uchar *)data, sz.width(), sz.height(), QImage::Format_ARGB32);
+    img = img.copy();
+    delete[] data;
+
+    return img;
 }
 
 void VectorTracer::renderFull() {
@@ -277,20 +310,6 @@ static Intersection *first_nontrivial_intersection(const RenderPoint &p) {
         }
     }
     return NULL;
-}
-static QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
-    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    const int S = std::max(W, H);
-
-    QPointF spot((pt.x() - 0.5 * W) / S, (pt.y() - 0.5 * H) / S);
-    return spot;
-}
-static QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
-    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    const int S = std::max(W, H);
-
-    QPointF spot(pt.x() * S + 0.5 * W, pt.y() * S + 0.5 * H);
-    return spot;
 }
 
 RenderPoint VectorTracer::queryPoint(QPointF spot) {

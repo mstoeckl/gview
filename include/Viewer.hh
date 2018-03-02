@@ -66,6 +66,7 @@ public slots:
     void screenshot(int sx = 1);
     void vectorTScreenshot();
     void vectorOScreenshot();
+    void vectorPreview();
     void changeGeometry(QAction *);
     void changeTracks(QAction *);
     void indicateElement(const Element *);
