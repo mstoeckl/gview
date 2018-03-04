@@ -1,8 +1,7 @@
 #pragma once
 
+#include "RenderWorker.hh"
 #include <QMainWindow>
-
-#include <G4String.hh>
 
 class VectorTracer;
 class QPushButton;
@@ -10,6 +9,7 @@ class G4VPhysicalVolume;
 class QRadioButton;
 class QLabel;
 class QComboBox;
+class QLineEdit;
 
 class ImageWidget : public QWidget {
     Q_OBJECT
@@ -24,10 +24,34 @@ private:
     QImage image;
 };
 
+class VectorPreview : public QMainWindow {
+    Q_OBJECT
+public:
+    VectorPreview(ViewData vd, TrackData td);
+    virtual ~VectorPreview();
+private slots:
+    void updateSettings();
+    void updateColors();
+    void queueRender();
+    void acceptImage(QImage, QString, int, bool);
+
+private:
+    VectorTracer *tracer;
+    QThread *thread;
+
+    QPushButton *button_render;
+    QRadioButton *choice_transparent;
+    QRadioButton *choice_opaque;
+    QPushButton *button_reroll;
+    QLineEdit *line_name;
+
+    ImageWidget *display;
+};
+
 class VectorWindow : public QMainWindow {
     Q_OBJECT
 public:
-    VectorWindow(G4String name, G4VPhysicalVolume *vol);
+    VectorWindow(const char *name, G4VPhysicalVolume *vol);
     virtual ~VectorWindow();
 public slots:
     void handleImageUpdate(QImage, QString, int, bool);

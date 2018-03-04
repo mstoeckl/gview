@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenuBar>
 #include <QPainter>
 #include <QPixmap>
@@ -66,9 +67,92 @@ void ImageWidget::paintEvent(QPaintEvent *) {
     q.drawImage(target, mvd);
 }
 
-VectorWindow::VectorWindow(G4String name, G4VPhysicalVolume *vol)
+VectorPreview::VectorPreview(ViewData vd, TrackData td) {
+    display = new ImageWidget();
+    display->setMinimumSize(QSize(300, 300));
+
+    button_render = new QPushButton("Render");
+    choice_transparent = new QRadioButton("Transparent");
+    choice_opaque = new QRadioButton("Opaque");
+    button_reroll = new QPushButton("Recolor");
+    line_name = new QLineEdit();
+    line_name->setPlaceholderText("vector.svg");
+    QButtonGroup *choice_group = new QButtonGroup(this);
+    choice_group->addButton(choice_opaque);
+    choice_group->addButton(choice_transparent);
+    choice_opaque->setChecked(true);
+
+    connect(button_reroll, SIGNAL(pressed()), this, SLOT(updateColors()));
+    connect(choice_group, SIGNAL(buttonToggled(int, bool)), this,
+            SLOT(updateSettings()));
+    connect(line_name, SIGNAL(textEdited(const QString &)), this,
+            SLOT(updateSettings()));
+
+    tracer = new VectorTracer(vd, td, QString(), false);
+    thread = new QThread();
+
+    tracer->moveToThread(thread);
+    connect(tracer, SIGNAL(produceImagePhase(QImage, QString, int, bool)), this,
+            SLOT(acceptImage(QImage, QString, int, bool)));
+    connect(button_render, SIGNAL(pressed()), this, SLOT(queueRender()));
+    thread->start();
+    // todo: termination handling -- only when window closes?
+
+    QHBoxLayout *layout_columns = new QHBoxLayout();
+
+    QVBoxLayout *layout_control = new QVBoxLayout();
+    layout_control->addWidget(button_render);
+    layout_control->addStrut(10);
+    layout_control->addWidget(choice_opaque);
+    layout_control->addWidget(choice_transparent);
+    layout_control->addWidget(button_reroll);
+    layout_control->addWidget(line_name);
+    layout_control->addStretch(1);
+
+    layout_columns->addLayout(layout_control, 0);
+    layout_columns->addWidget(display, 1);
+
+    QWidget *central_widget = new QWidget();
+    central_widget->setLayout(layout_columns);
+    this->setCentralWidget(central_widget);
+
+    updateSettings();
+
+    this->setWindowFlag(Qt::Tool);
+}
+VectorPreview::~VectorPreview() { delete tracer; }
+void VectorPreview::queueRender() {
+    updateSettings();
+    button_render->setEnabled(false);
+    QMetaObject::invokeMethod(tracer, "renderFull", Qt::QueuedConnection);
+}
+void VectorPreview::updateSettings() {
+    QString name = line_name->text().size() ? line_name->text() : "vector.svg";
+    if (!name.endsWith(".pdf") && !name.endsWith(".svg")) {
+        name = name + ".svg";
+    }
+
+    bool is_transp = choice_transparent->isChecked();
+
+    if (button_render->isEnabled()) {
+        tracer->reset(is_transp, QSize(1000, 1000), name);
+        display->setImage(tracer->preview(QSize(100, 100)));
+    }
+}
+void VectorPreview::updateColors() {
+    tracer->recolor();
+    updateSettings();
+}
+void VectorPreview::acceptImage(QImage im, QString, int, bool done) {
+    display->setImage(im);
+    if (done) {
+        button_render->setEnabled(true);
+    }
+}
+
+VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     : QMainWindow() {
-    this->setWindowTitle(name.c_str());
+    this->setWindowTitle(name);
 
     /* Initialize functional stuff */
 
@@ -195,7 +279,7 @@ void VectorWindow::handleImageUpdate(QImage img, QString s, int nqueries,
 void VectorWindow::reset() {
     bool is_transp = choice_transparent->isChecked();
     QSize resol = list_resolution->currentData().toSize();
-    vtracer->reset(is_transp, resol);
+    vtracer->reset(is_transp, resol, "vector.svg");
     image_grid->setImage(QImage());
     image_edge->setImage(QImage());
     image_crease->setImage(QImage());

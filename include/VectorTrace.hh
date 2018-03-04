@@ -91,7 +91,8 @@ public:
 public slots:
     void renderFull();
     void renderStep();
-    void reset(bool transparent, QSize grid_size);
+    void reset(bool transparent, const QSize &grid_size,
+               const QString &target_name);
     void recolor();
 
     void computeGrid();

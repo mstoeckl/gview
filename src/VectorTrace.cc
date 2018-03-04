@@ -264,10 +264,12 @@ void VectorTracer::renderStep() {
         break;
     }
 }
-void VectorTracer::reset(bool transp, QSize size) {
+void VectorTracer::reset(bool transp, const QSize &size,
+                         const QString &target_name) {
     step_next = Steps::sGrid;
     transparent_volumes = transp;
     grid_size = size;
+    file_name = target_name;
     qDebug("Reset tracer: %s mode", transp ? "transparent" : "opaque");
 }
 int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
@@ -1780,29 +1782,34 @@ static QString color_hex_name_rgb(QRgb color) {
         .arg(numbers[b % 16]);
 }
 
-static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
+static QPolygonF simplify_poly(const QPolygonF &orig, double max_error,
+                               bool loop = true) {
     if (0)
         return orig;
 
     // First, locate sharpest angle; will be our starting point
     const int n = orig.size();
     int sharpest = 0;
-    qreal recsh = 1.;
-    for (int i1 = 0; i1 < n; i1++) {
-        int i0 = (i1 + n - 1) % n, i2 = (i1 + 1) % n;
-        QPointF d01 = orig[i1] - orig[i0];
-        QPointF d12 = orig[i2] - orig[i1];
-        qreal len01 = d01.x() * d01.x() + d01.y() * d01.y();
-        qreal len12 = d12.x() * d12.x() + d12.y() * d12.y();
-        qreal lenpro = std::sqrt(len01 * len12);
-        if (lenpro <= 0.)
-            continue;
+    if (loop) {
+        qreal recsh = 1.;
+        for (int i1 = 0; i1 < n; i1++) {
+            int i0 = (i1 + n - 1) % n, i2 = (i1 + 1) % n;
+            QPointF d01 = orig[i1] - orig[i0];
+            QPointF d12 = orig[i2] - orig[i1];
+            qreal len01 = d01.x() * d01.x() + d01.y() * d01.y();
+            qreal len12 = d12.x() * d12.x() + d12.y() * d12.y();
+            qreal lenpro = std::sqrt(len01 * len12);
+            if (lenpro <= 0.)
+                continue;
 
-        double qr = QPointF::dotProduct(d01, d12) / lenpro;
-        if (qr < recsh) {
-            sharpest = i1;
-            recsh = qr;
+            double qr = QPointF::dotProduct(d01, d12) / lenpro;
+            if (qr < recsh) {
+                sharpest = i1;
+                recsh = qr;
+            }
         }
+    } else {
+        sharpest = 0;
     }
 
     // Then iterative lookahead, while calculating maximum offset
@@ -1846,6 +1853,10 @@ static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
         is = js - 1;
     }
 
+    if (!loop) {
+        poly.pop_back();
+    }
+
     return poly;
 }
 
@@ -1854,7 +1865,7 @@ static QString svg_path_text_from_polygons(const QVector<QPolygonF> &loops,
     const int fprec = 7;
     QStringList path_string;
     for (const QPolygonF &poly : loops) {
-        QPolygonF simpath = close_loops ? simplify_poly(poly, 1e-5) : poly;
+        QPolygonF simpath = simplify_poly(poly, 1e-5, close_loops);
 
         QPointF s = simpath[0];
         path_string.append(QString("M%1,%2")
@@ -2064,7 +2075,7 @@ compute_gradient_error(const Subregion &region,
     return sqe;
 }
 
-FColor compute_mean_color(const QVector<RenderPoint> &pts) {
+static FColor compute_mean_color(const QVector<RenderPoint> &pts) {
     double bnet_r = 0, bnet_g = 0, bnet_b = 0, bnet_a = 0;
     for (const RenderPoint &rp : pts) {
         bnet_r += rp.ideal_color.redF();
@@ -2076,7 +2087,7 @@ FColor compute_mean_color(const QVector<RenderPoint> &pts) {
     return FColor(bnet_r / n, bnet_g / n, bnet_b / n, bnet_a / n);
 }
 
-QVector<QVector<RenderPoint>>
+static QVector<QVector<RenderPoint>>
 extract_visible_boundary(const QVector<RenderPoint> &pts) {
     // We already assume there is at least one invisible point
 
@@ -2094,7 +2105,8 @@ extract_visible_boundary(const QVector<RenderPoint> &pts) {
     }
 
     QVector<QVector<RenderPoint>> res;
-    for (int i = 0; i < n; i++) {
+    int i = 0;
+    while (i < n) {
         for (; i < n; i++) {
             if (pts[(i + start) % n].show_point) {
                 break;
@@ -2115,6 +2127,12 @@ extract_visible_boundary(const QVector<RenderPoint> &pts) {
         res.push_back(subpath);
     }
     return res;
+}
+
+static void run_command(const QStringList &command) {
+    QProcess proc;
+    proc.start(command.first(), command.mid(1));
+    proc.waitForFinished();
 }
 
 void VectorTracer::computeGradients() {
@@ -2208,9 +2226,12 @@ void VectorTracer::computeGradients() {
     // where opposing candidates are closest. (Again, march-cube style?,
     // then refined ? or A/B decision style.
 
-    qDebug("Rendering final image, %d regions", region_list.size());
+    QString svg_name =
+        file_name.endsWith(".svg") ? file_name : "/tmp/render.svg";
+    qDebug("Rendering final image, %d regions, to %s", region_list.size(),
+           svg_name.toUtf8().constData());
     {
-        QFile ofile(file_name);
+        QFile ofile(svg_name);
         ofile.open(QFile::WriteOnly | QFile::Truncate);
         QTextStream s(&ofile);
 
@@ -2400,13 +2421,14 @@ void VectorTracer::computeGradients() {
                             solo.push_back(shift_and_scale_loop(
                                 visible_segments[m], offset, T));
                             s << QString("    <path id=\"edge%1_%2_%3_%4\" "
-                                         "stroke=\"%5\" "
-                                         "d=\"%6\"/>\n")
+                                         "stroke=\"%5\" stroke-width=\"%6\" "
+                                         "d=\"%7\"/>\n")
                                      .arg(region.class_no)
                                      .arg(subreg.subclass_no)
                                      .arg(l)
                                      .arg(m)
                                      .arg(color_hex_name_rgb(crease_col.rgba()))
+                                     .arg(T * 0.002)
                                      .arg(svg_path_text_from_polygons(solo,
                                                                       false));
                         }
@@ -2422,14 +2444,14 @@ void VectorTracer::computeGradients() {
     // We proxy via inkscape because QtSvg barely supports SVG.
     // This takes half a second to run
     QTime time_start = QTime::currentTime();
-    QStringList command;
-    command << "inkscape";
-    command << "--export-png=/tmp/write.png";
-    command << "--export-dpi=800";
-    command << file_name;
-    QProcess proc;
-    proc.start(command.first(), command.mid(1));
-    proc.waitForFinished();
+    run_command(QStringList() << "inkscape"
+                              << "--export-png=/tmp/write.png"
+                              << "--export-dpi=800" << svg_name);
+    if (file_name.endsWith(".pdf")) {
+        run_command(QStringList() << "inkscape"
+                                  << "--export-pdf=" + file_name << svg_name);
+    }
+
     QImage grad_image = QImage("/tmp/write.png");
     emit produceImagePhase(grad_image, QString("Render completed"), nqueries,
                            true);

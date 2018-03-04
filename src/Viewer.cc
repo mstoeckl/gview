@@ -723,30 +723,22 @@ void Viewer::screenshot(int sx) {
     rso->start();
 }
 void Viewer::vectorTScreenshot() {
-    VectorTracer *vt =
-        new VectorTracer(vd, trackdata, "vector_transparent.svg", true);
-    vt->reset(true, QSize(1000, 1000));
+    QString name = "vector_transparent.svg";
+    VectorTracer *vt = new VectorTracer(vd, trackdata, name, true);
+    vt->reset(true, QSize(1000, 1000), name);
     vt->renderFull();
     delete vt;
 }
 void Viewer::vectorOScreenshot() {
-    VectorTracer *vt =
-        new VectorTracer(vd, trackdata, "vector_opaque.svg", false);
-    vt->reset(false, QSize(1000, 1000));
+    QString name = "vector_opaque.svg";
+    VectorTracer *vt = new VectorTracer(vd, trackdata, name, false);
+    vt->reset(false, QSize(1000, 1000), name);
     vt->renderFull();
     delete vt;
 }
 void Viewer::vectorPreview() {
-    VectorTracer *vt = new VectorTracer(vd, trackdata, "vector_na.svg", false);
-    // opaque for now
-    vt->reset(false, QSize(1000, 1000));
-
-    QImage img = vt->preview(QSize(100, 100));
-    ImageWidget *imwidg = new ImageWidget();
-    imwidg->setImage(img);
-    imwidg->setWindowFlag(Qt::Tool);
-    imwidg->show();
-    delete vt;
+    VectorPreview *vp = new VectorPreview(vd, trackdata);
+    vp->show();
 }
 void Viewer::reloadChoiceMenus() {
     gpicker_menu->clear();

@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
         if (opts.size() != 1 || tracks.size() > 0) {
             return usage();
         }
-        VectorWindow t(opts[0].name, opts[0].vol);
+        VectorWindow t(opts[0].name.c_str(), opts[0].vol);
         return qapp.exec();
     }
 }
