@@ -36,6 +36,7 @@ public:
     FColor ideal_color;
     int region_class;
     int subregion_class;
+    bool show_point;
 
 private:
     void swap(RenderPoint &);

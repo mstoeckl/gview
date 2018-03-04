@@ -53,6 +53,7 @@ RenderPoint::RenderPoint() {
     nhits = 0;
     ideal_color = FColor();
     region_class = -1;
+    show_point = true;
 }
 RenderPoint::RenderPoint(QPointF spot, int inhits, const Intersection *srcints,
                          const Element **srcelems) {
@@ -65,6 +66,7 @@ RenderPoint::RenderPoint(QPointF spot, int inhits, const Intersection *srcints,
     ideal_color = FColor();
     region_class = -1;
     subregion_class = -1;
+    show_point = true;
 }
 RenderPoint::~RenderPoint() {
     if (elements)
@@ -78,6 +80,7 @@ RenderPoint::RenderPoint(const RenderPoint &other) {
     ideal_color = other.ideal_color;
     region_class = other.region_class;
     subregion_class = other.subregion_class;
+    show_point = other.show_point;
     if (other.intersections) {
         intersections = new Intersection[nhits + 1];
         memcpy(intersections, other.intersections,
@@ -104,6 +107,7 @@ void RenderPoint::swap(RenderPoint &other) {
     std::swap(subregion_class, other.subregion_class);
     std::swap(coords, other.coords);
     std::swap(ideal_color, other.ideal_color);
+    std::swap(show_point, other.show_point);
 }
 
 static QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
@@ -178,12 +182,37 @@ void VectorTracer::recolor() {
 
     color_map["Al6061"] = FColor(1.0, 0.2, 0.2);
     color_map["Al5083"] = FColor(0.8, 0.4, 0.4);
+    color_map["G4_Al"] = FColor(0.9, 0.3, 0.4);
+
     // Often have nickel plated lead
     color_map["G4_Pb"] = FColor(0.4, 0.0, 0.7);
     color_map["G4_Ni"] = FColor(0.5, 0.1, 0.8);
 
     color_map["G4_Cu"] = FColor(0.0, 0.9, 0.7);
+    color_map["G4_Au"] = FColor(1.0, 0.9, 0.0);
+    color_map["Gold"] = color_map["G4_Au"];
     color_map["BaF2"] = FColor(1.0, 1.0, 1.0);
+
+    color_map["Teflon"] = FColor(0.0, 0.8, 0.2);
+    color_map["C2H2O"] = FColor(0.9, 0.9, 0.5);
+    color_map["Lexan"] = FColor(0.7, 0.7, 0.9);
+    color_map["Mylar"] = FColor(0.7, 0.9, 0.7);
+
+    color_map["PolyimideFoam"] = FColor(0.8, 0.5, 0.2);
+    color_map["Delrin"] = FColor(0.6, 0.7, 0.9);
+    color_map["UVSilica"] = FColor(0.6, 0.8, 1.0);
+    color_map["UHMW"] = FColor(0.4, 0.4, 0.4);
+
+    color_map["Polycarb"] = FColor(0.7, 0.8, 0.3);
+    color_map["Hevimet"] = FColor(0.3, 0.35, 0.35);
+    color_map["Kapton"] = FColor(0.7, 0.7, 0.6);
+
+    color_map["TungstenCarbide"] = FColor(0.3, 0.3, 0.3);
+    color_map["G4_W"] = FColor(0.4, 0.3, 0.3);
+
+    color_map["Stainless304"] = FColor(0.6, 0.0, 0.0);
+    color_map["Vespel"] = FColor(0.7, 0.5, 0.3);
+
     QMap<QString, int> idx_map;
     element_colors.clear();
     recsetColorsByMaterial(view_data.elements, element_colors, color_map,
@@ -1535,43 +1564,42 @@ void VectorTracer::computeCreases() {
                     RenderPoint q1 = getPoint(p1);
 
                     RenderPoint adj_point;
-                    bool is_crease = false;
                     if (!crease_edge_map.contains(line_marker)) {
                         // Edge to out of region
                         // Pull typematch subdiv
-                        RenderPoint lim_in, lim_out;
+                        RenderPoint lim_out;
                         bracketEdge(
                             q0.region_class == region.class_no ? q0 : q1,
                             q0.region_class == region.class_no ? q1 : q0,
-                            &lim_in, &lim_out);
-                        lim_in.ideal_color =
-                            calculateBoundaryColor(lim_in, lim_out);
-                        adj_point = lim_in;
+                            &adj_point, &lim_out);
+                        adj_point.ideal_color =
+                            calculateBoundaryColor(adj_point, lim_out);
+                        adj_point.show_point = false;
                     } else if (!crease_edge_map[line_marker]) {
                         // Interior edge, not conflict
                         // Select midpoint of q0 and q1
                         adj_point = queryPoint(0.5 * (q0.coords + q1.coords));
                         adj_point.ideal_color =
                             calculateInteriorColor(adj_point);
+                        adj_point.show_point = false;
                     } else {
                         // Interior edge, crease.
                         // Pick error type (normal or displacement)
                         // and bisect on that parameter
                         // Color is inside point color
-                        RenderPoint lim_in, lim_out;
+                        RenderPoint lim_out;
                         bracketCrease(
                             q0.subregion_class == subreg.subclass_no ? q0 : q1,
                             q0.subregion_class == subreg.subclass_no ? q1 : q0,
-                            &lim_in, &lim_out);
-                        lim_in.ideal_color = calculateInteriorColor(lim_in);
-                        adj_point = lim_in;
-                        is_crease = true;
+                            &adj_point, &lim_out);
+                        adj_point.ideal_color =
+                            calculateInteriorColor(adj_point);
+                        adj_point.show_point = true;
                     }
 
                     FColor aic = adj_point.ideal_color;
                     adj_point.ideal_color =
-                        FColor(aic.redF(), aic.greenF(), aic.blueF(),
-                               is_crease ? 1.0 : 0.0);
+                        FColor(aic.redF(), aic.greenF(), aic.blueF());
                     // Oh: rpoint, alpha=0 signifies invisible.
                     bound.push_back(adj_point);
                 }
@@ -1609,21 +1637,22 @@ void VectorTracer::computeCreases() {
                         // Region boundary
                         RenderPoint lim_out;
                         bracketEdge(qA, qB, &adj_point, &lim_out);
-                        FColor c = calculateBoundaryColor(adj_point, lim_out);
                         adj_point.ideal_color =
-                            FColor(c.redF(), c.greenF(), c.blueF(), 0.);
+                            calculateBoundaryColor(adj_point, lim_out);
+                        adj_point.show_point = false;
                     } else if (crease_depth(qA, qB, cos_alpha, min_jump) < 0) {
                         // No crease found, average it
                         adj_point = queryPoint(0.5 * (qA.coords + qB.coords));
-                        FColor c = calculateInteriorColor(adj_point);
                         adj_point.ideal_color =
-                            FColor(c.redF(), c.greenF(), c.blueF(), 0.);
+                            calculateInteriorColor(adj_point);
+                        adj_point.show_point = false;
                     } else {
                         // Crease boundary
                         RenderPoint lim_out;
                         bracketCrease(qA, qB, &adj_point, &lim_out);
                         adj_point.ideal_color =
                             calculateInteriorColor(adj_point);
+                        adj_point.show_point = true;
                     }
 
                     corner_points.push_back(adj_point);
@@ -1820,11 +1849,12 @@ static QPolygonF simplify_poly(const QPolygonF &orig, double max_error) {
     return poly;
 }
 
-static QString svg_path_text_from_polygons(const QVector<QPolygonF> &loops) {
+static QString svg_path_text_from_polygons(const QVector<QPolygonF> &loops,
+                                           bool close_loops = true) {
     const int fprec = 7;
     QStringList path_string;
     for (const QPolygonF &poly : loops) {
-        QPolygonF simpath = simplify_poly(poly, 1e-5);
+        QPolygonF simpath = close_loops ? simplify_poly(poly, 1e-5) : poly;
 
         QPointF s = simpath[0];
         path_string.append(QString("M%1,%2")
@@ -1838,7 +1868,9 @@ static QString svg_path_text_from_polygons(const QVector<QPolygonF> &loops) {
         }
         // Note: A rx ry x-axis-rotation large-arc-flag sweep-flag x y
         // gives elliptical arc, very suitable for path compression
-        path_string.append("Z");
+        if (close_loops) {
+            path_string.append("Z");
+        }
     }
     return path_string.join(" ");
 }
@@ -2032,6 +2064,59 @@ compute_gradient_error(const Subregion &region,
     return sqe;
 }
 
+FColor compute_mean_color(const QVector<RenderPoint> &pts) {
+    double bnet_r = 0, bnet_g = 0, bnet_b = 0, bnet_a = 0;
+    for (const RenderPoint &rp : pts) {
+        bnet_r += rp.ideal_color.redF();
+        bnet_g += rp.ideal_color.greenF();
+        bnet_b += rp.ideal_color.blueF();
+        bnet_a += rp.ideal_color.alphaF();
+    }
+    int n = pts.size();
+    return FColor(bnet_r / n, bnet_g / n, bnet_b / n, bnet_a / n);
+}
+
+QVector<QVector<RenderPoint>>
+extract_visible_boundary(const QVector<RenderPoint> &pts) {
+    // We already assume there is at least one invisible point
+
+    const int n = pts.size();
+    int start = -1;
+    for (int i = 0; i < n; i++) {
+        if (!pts[i].show_point) {
+            start = i;
+            break;
+        }
+    }
+    if (start < 0) {
+        qWarning("Extract visible boundary, invariant fail");
+        start = 0;
+    }
+
+    QVector<QVector<RenderPoint>> res;
+    for (int i = 0; i < n; i++) {
+        for (; i < n; i++) {
+            if (pts[(i + start) % n].show_point) {
+                break;
+            }
+        }
+        if (i >= n) {
+            break;
+        }
+
+        QVector<RenderPoint> subpath;
+        for (; i < n; i++) {
+            if (pts[(i + start) % n].show_point) {
+                subpath.push_back(pts[(i + start) % n]);
+            } else {
+                break;
+            }
+        }
+        res.push_back(subpath);
+    }
+    return res;
+}
+
 void VectorTracer::computeGradients() {
     qDebug("Computing gradients");
 
@@ -2097,27 +2182,10 @@ void VectorTracer::computeGradients() {
         }
 
         // Finally, compute boundary average colors
-        float bnet_r = 0, bnet_g = 0, bnet_b = 0, bnet_a = 0;
-        for (const RenderPoint &rp : region.exterior) {
-            bnet_r += rp.ideal_color.redF();
-            bnet_g += rp.ideal_color.greenF();
-            bnet_b += rp.ideal_color.blueF();
-            bnet_a += rp.ideal_color.alphaF();
-        }
-        int n = region.exterior.size();
-        region.meanExteriorColor =
-            FColor(bnet_r / n, bnet_g / n, bnet_b / n, bnet_a / n).rgba();
+        region.meanExteriorColor = compute_mean_color(region.exterior).rgba();
         for (const QVector<RenderPoint> &loop : region.interior) {
-            int inet_r = 0, inet_g = 0, inet_b = 0, inet_a = 0;
-            int m = loop.size();
-            for (const RenderPoint &rp : loop) {
-                inet_r += rp.ideal_color.redF();
-                inet_g += rp.ideal_color.greenF();
-                inet_b += rp.ideal_color.blueF();
-                inet_a += rp.ideal_color.alphaF();
-            }
             region.meanInteriorColors.push_back(
-                FColor(inet_r / m, inet_g / m, inet_b / m, inet_a / m).rgba());
+                compute_mean_color(loop).rgba());
         }
     }
 
@@ -2289,6 +2357,61 @@ void VectorTracer::computeGradients() {
                          .arg(i)
                          .arg(color_hex_name_rgb(c))
                          .arg(svg_path_text_from_polygons(solo));
+            }
+            // Creases
+            for (const Subregion &subreg : region.subregions) {
+                for (int l = 0; l < subreg.boundaries.size(); l++) {
+                    const QVector<RenderPoint> &bound = subreg.boundaries[l];
+                    bool all_visible = true;
+                    for (const RenderPoint &pt : bound) {
+                        if (!pt.show_point) {
+                            all_visible = false;
+                            break;
+                        }
+                    }
+                    if (all_visible) {
+                        QPolygonF loop = shift_and_scale_loop(bound, offset, T);
+                        QVector<QPolygonF> solo;
+                        solo.push_back(loop);
+
+                        FColor crease_col = compute_mean_color(bound);
+                        crease_col = FColor(
+                            crease_col.redF() / 2, crease_col.greenF() / 2,
+                            crease_col.blueF() / 2, crease_col.alphaF());
+
+                        s << QString(
+                                 "    <path id=\"edge%1_%2_%3\" stroke=\"%4\" "
+                                 "d=\"%5\"/>\n")
+                                 .arg(region.class_no)
+                                 .arg(subreg.subclass_no)
+                                 .arg(l)
+                                 .arg(color_hex_name_rgb(crease_col.rgba()))
+                                 .arg(svg_path_text_from_polygons(solo));
+                    } else {
+                        const QVector<QVector<RenderPoint>> &visible_segments =
+                            extract_visible_boundary(bound);
+                        for (int m = 0; m < visible_segments.size(); m++) {
+                            FColor crease_col =
+                                compute_mean_color(visible_segments[m]);
+                            crease_col = FColor(
+                                crease_col.redF() / 2, crease_col.greenF() / 2,
+                                crease_col.blueF() / 2, crease_col.alphaF());
+                            QVector<QPolygonF> solo;
+                            solo.push_back(shift_and_scale_loop(
+                                visible_segments[m], offset, T));
+                            s << QString("    <path id=\"edge%1_%2_%3_%4\" "
+                                         "stroke=\"%5\" "
+                                         "d=\"%6\"/>\n")
+                                     .arg(region.class_no)
+                                     .arg(subreg.subclass_no)
+                                     .arg(l)
+                                     .arg(m)
+                                     .arg(color_hex_name_rgb(crease_col.rgba()))
+                                     .arg(svg_path_text_from_polygons(solo,
+                                                                      false));
+                        }
+                    }
+                }
             }
         }
         s << QString("</g>\n");
