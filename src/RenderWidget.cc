@@ -171,6 +171,42 @@ void RenderWidget::paintEvent(QPaintEvent *) {
                request_time.msecsTo(QTime::currentTime()));
 #endif
     }
+    // draw ruler in bottom left corner
+    int max_ruler_length = std::max(this->width() / 3, 50);
+    // Max ruler length in real space nm
+    double ds = currView.scale * max_ruler_length / this->width() / CLHEP::nm;
+
+    int s = std::floor(std::log10(ds));
+    int unit = std::min(6, std::max(0, s / 3 + 2));
+    const char *labels[7] = {"fm", "pm", "nm", "μm", "mm", "m", "km"};
+    double scales[7] = {1e-15 * CLHEP::m, 1e-12 * CLHEP::m, 1e-9 * CLHEP::m,
+                        1e-6 * CLHEP::m,  1e-3 * CLHEP::m,  CLHEP::m,
+                        1e3 * CLHEP::m};
+
+    double fracpart = ds / std::pow(10., s);
+
+    int ruler_length = (max_ruler_length / fracpart);
+
+    int dh = std::max(10, this->height() / 40);
+
+    q.setPen(QColor::fromRgbF(0., 0., 0., 0.7));
+    q.drawLine(dh, this->height() - dh, dh + ruler_length, this->height() - dh);
+    q.drawLine(dh, this->height() - dh, dh, this->height() - 2 * dh);
+    q.drawLine(dh + ruler_length, this->height() - dh, dh + ruler_length,
+               this->height() - 2 * dh);
+
+    QTextOption topt;
+    topt.setAlignment(Qt::AlignTop | Qt::AlignRight);
+    QPoint anchor = QPoint(dh, this->height() - dh);
+    q.drawText(QRect(anchor - QPoint(dh, 0), anchor + QPoint(0, dh)),
+               QString("0"), topt);
+
+    QTextOption ropt;
+    ropt.setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    QPoint ranchor = QPoint(dh + ruler_length, this->height() - dh);
+    q.drawText(
+        QRect(ranchor - QPoint(dh, 0), ranchor + QPoint(max_ruler_length, dh)),
+        QString("%1 ").arg(ipow(10, s - 3 * (s / 3))) + labels[unit], ropt);
 }
 
 RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
