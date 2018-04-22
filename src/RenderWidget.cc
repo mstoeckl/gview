@@ -12,6 +12,7 @@
 
 const G4double GOAL_FRAME_TIME = 0.030;
 const int DOWNSCALE_BASE = 2;
+const int MAX_LOD = 7;
 
 static int threadCount() {
     int itc = QThread::idealThreadCount();
@@ -132,6 +133,7 @@ void RenderWidget::completed(qreal time_secs) {
         qreal target_scale = isqrt(width() * height() / target_pixels);
         /* smooth changes */
         immediate_lod = (std::max((int)target_scale, 1) + immediate_lod) / 2;
+        immediate_lod = std::min(immediate_lod, MAX_LOD);
     }
 }
 void RenderWidget::aborted() {
@@ -174,7 +176,8 @@ void RenderWidget::paintEvent(QPaintEvent *) {
     // draw ruler in bottom left corner
     int max_ruler_length = std::max(this->width() / 3, 50);
     // Max ruler length in real space nm
-    double ds = currView.scale * max_ruler_length / this->width() / CLHEP::nm;
+    double ds =
+        (0.5 * currView.scale) * max_ruler_length / this->width() / CLHEP::nm;
 
     int s = std::floor(std::log10(ds));
     int unit = std::min(6, std::max(0, s / 3 + 2));
