@@ -536,10 +536,10 @@ void ColorConfig::reassignColors() {
             double v = (vals[i] - mn) / (mx - mn);
             /* linear interplation; looks bad for lots of combinations,
              * but works well for classes white-to-shade, black-to-shade */
-            vd.color_table.push_back(
-                VColor(mix(prop_base.redF(), prop_target.redF(), v),
-                       mix(prop_base.greenF(), prop_target.greenF(), v),
-                       mix(prop_base.blueF(), prop_target.blueF(), v)));
+            vd.color_table.push_back(VColor::fromRgbF(
+                mix(prop_base.redF(), prop_target.redF(), v),
+                mix(prop_base.greenF(), prop_target.greenF(), v),
+                mix(prop_base.blueF(), prop_target.blueF(), v)));
         }
         recsetProp(vd.elements, refs);
         delete[] vals;

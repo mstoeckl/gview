@@ -363,7 +363,7 @@ static QRgb colorMap(const Intersection &intersection,
         double bslp = orthB * position;
 
         double shade_factor = (aslp + bslp) * shade_scale;
-        shade_factor *= 20.;
+        shade_factor *= 40.;
         double fm = std::fmod(shade_factor, 1.);
         if (fm < 0.)
             fm += 1.;
