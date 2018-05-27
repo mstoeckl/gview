@@ -33,7 +33,10 @@ private:
     RenderGraph graph;
 
     QSharedPointer<QImage> back;
+    int back_scale_factor;
     QSharedPointer<QImage> next;
+    int next_scale_factor;
+
     enum { aReqd, aCompl, aThere } arrived;
     QTime request_time;
 };

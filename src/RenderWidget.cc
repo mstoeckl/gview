@@ -48,6 +48,7 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
 
     back = QSharedPointer<QImage>(new QImage(50, 50, QImage::Format_RGB32));
     back->fill(QColor::fromHslF(0.3, 0.5, 0.7));
+    back_scale_factor = 1;
 
     state = NONE;
     to_full_detail = false;
@@ -97,6 +98,7 @@ void RenderWidget::rerender_priv() {
     }
     next = QSharedPointer<QImage>(new QImage(
         this->width() / scl, this->height() / scl, QImage::Format_RGB32));
+    next_scale_factor = scl;
 
     TrackData d = currView.tracks;
     currView.tracks = trackdata;
@@ -114,6 +116,8 @@ void RenderWidget::rerender_priv() {
 
 void RenderWidget::completed(qreal time_secs) {
     back = next;
+    back_scale_factor = next_scale_factor;
+
     if (state == ACTIVE) {
         state = NONE;
     } else if (state == ACTIVE_AND_QUEUED) {
@@ -150,22 +154,47 @@ void RenderWidget::resizeEvent(QResizeEvent *evt) {
     rerender_priv();
 }
 
+static QImage fastIntegerScale(const QImage &base, int S) {
+    if (S <= 1) {
+        return base;
+    }
+    if (base.pixelFormat().bitsPerPixel() != 32) {
+        qFatal("Improper input pixel size, %d bits != 32 bits",
+               base.pixelFormat().bitsPerPixel());
+    }
+
+    const int W = base.width(), H = base.height();
+    QImage scaled(W * S, H * S, base.format());
+
+    for (int k = 0; k < H; k++) {
+        const uint32_t *source_line = (const uint32_t *)base.constScanLine(k);
+
+        uint32_t *fill_line = (uint32_t *)scaled.scanLine(S * k);
+        for (int j = 0; j < W; j++) {
+            for (int i = 0; i < S; i++) {
+                fill_line[j * S + i] = source_line[j];
+            }
+        }
+        for (int i = 1; i < S; i++) {
+            uint32_t *copy_line = (uint32_t *)scaled.scanLine(S * k + i);
+            memcpy(copy_line, fill_line, sizeof(uint32_t) * S * W);
+        }
+    }
+
+    return scaled;
+}
+
 void RenderWidget::paintEvent(QPaintEvent *) {
     if (this->height() <= 0 || this->width() <= 0) {
         return;
     }
+
+    QImage qvd = fastIntegerScale(*back, back_scale_factor);
+
     QPainter q(this);
-    QRect sz = back->rect();
-    QImage mvd;
-    if (sz.height() == this->height() && sz.width() == this->width()) {
-        mvd = *back;
-    } else if (this->width() * sz.height() >= this->height() * sz.width()) {
-        mvd = back->scaledToHeight(this->height(), Qt::FastTransformation);
-    } else {
-        mvd = back->scaledToWidth(this->width(), Qt::FastTransformation);
-    }
-    q.drawImage(
-        this->rect().center() - QPoint(mvd.width() / 2, mvd.height() / 2), mvd);
+    QPoint corner =
+        this->rect().center() - QPoint(qvd.width() / 2, qvd.height() / 2);
+    q.drawImage(corner, qvd);
     if (arrived == aCompl) {
         arrived = aThere;
 #if 0
@@ -182,9 +211,6 @@ void RenderWidget::paintEvent(QPaintEvent *) {
     int s = std::floor(std::log10(ds));
     int unit = std::min(6, std::max(0, s / 3 + 2));
     const char *labels[7] = {"fm", "pm", "nm", "μm", "mm", "m", "km"};
-    double scales[7] = {1e-15 * CLHEP::m, 1e-12 * CLHEP::m, 1e-9 * CLHEP::m,
-                        1e-6 * CLHEP::m,  1e-3 * CLHEP::m,  CLHEP::m,
-                        1e3 * CLHEP::m};
 
     double fracpart = ds / std::pow(10., s);
 
