@@ -371,8 +371,9 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
     const Element *hits[dlimit];
     Intersection ints[dlimit + 1];
 
-    int m = traceRay(spot, view_data, hits, ints, dlimit, ray_iteration,
-                     ray_mutables);
+    int m = traceRay(initPoint(spot, view_data),
+                     forwardDirection(view_data.orientation), view_data, hits,
+                     ints, dlimit, ray_iteration, ray_mutables);
     ray_iteration++;
     m = compressTraces(hits, ints, m);
 

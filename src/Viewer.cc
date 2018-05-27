@@ -514,7 +514,8 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
     countTree(vd.elements, td, nelem);
     Q_UNUSED(td);
     ElemMutables *mutables = new ElemMutables[nelem]();
-    int m = traceRay(pt, vd, elems, ints, M, 1, mutables);
+    int m = traceRay(initPoint(pt, vd), forwardDirection(vd.orientation), vd,
+                     elems, ints, M, 1, mutables);
     delete[] mutables;
     rayiter++;
     m = compressTraces(elems, ints, m);

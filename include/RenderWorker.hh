@@ -173,9 +173,11 @@ public:
 };
 
 void countTree(const Element &e, int &treedepth, int &nelements);
-int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
-             Intersection ints[], int maxhits, long iteration,
-             ElemMutables mutables[]);
+G4ThreeVector forwardDirection(const G4RotationMatrix &);
+G4ThreeVector initPoint(const QPointF &, const ViewData &);
+int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
+             const ViewData &d, const Element *hits[], Intersection ints[],
+             int maxhits, long iteration, ElemMutables mutables[]);
 int compressTraces(const Element *hits[], Intersection ints[], int m);
 
 class G4VPhysicalVolume;

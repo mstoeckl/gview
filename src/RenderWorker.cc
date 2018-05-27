@@ -89,18 +89,21 @@ static bool clipRay(const std::vector<Plane> &clipping_planes,
     return true;
 }
 
-int traceRay(const QPointF &scpt, const ViewData &d, const Element *hits[],
-             Intersection ints[], int maxhits, long iteration,
-             ElemMutables mutables[]) {
-    // Given a square camera, p in [0,1]X[0,1]. Rectangles increase one dim.
-    // Return number of hits recorded.
+G4ThreeVector forwardDirection(const G4RotationMatrix &orientation) {
+    return orientation.rowX();
+}
+G4ThreeVector initPoint(const QPointF &scpt, const ViewData &d) {
     const G4ThreeVector forward = d.orientation.rowX();
     const G4ThreeVector updown = d.orientation.rowY();
     const G4ThreeVector lright = d.orientation.rowZ();
-
     const G4ThreeVector init =
         d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
+    return init;
+}
 
+int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
+             const ViewData &d, const Element *hits[], Intersection ints[],
+             int maxhits, long iteration, ElemMutables mutables[]) {
     // Pseudorandom number to prevent consistent child ordering
     // so as to make overlapping children obvious
     const size_t rotfact = size_t(random());
@@ -344,9 +347,8 @@ int compressTraces(const Element *hits[], Intersection ints[], int m) {
 }
 
 static QRgb colorMap(const Intersection &intersection,
-                     const G4RotationMatrix &frame, const VColor &base,
-                     double shade_x, double shade_y) {
-    const G4ThreeVector &forward = frame.rowX();
+                     const G4ThreeVector &forward, const VColor &base,
+                     const G4ThreeVector &position, double shade_scale) {
     const G4ThreeVector &normal = intersection.normal;
 
     // Opposed normals (i.e, for transp backsides) are mirrored
@@ -354,12 +356,18 @@ static QRgb colorMap(const Intersection &intersection,
     cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
 
     if (intersection.is_clipping_plane) {
-        double aslp = (frame.rowY() * forward) + 1.0;
-        double bslp = (frame.rowZ() * forward) + 1.0;
+        const G4ThreeVector &orthA = normal.orthogonal().unit();
+        const G4ThreeVector &orthB = normal.cross(orthA).unit();
 
-        double shade_factor = aslp * shade_x + bslp * shade_y;
+        double aslp = orthA * position;
+        double bslp = orthB * position;
+
+        double shade_factor = (aslp + bslp) * shade_scale;
         shade_factor *= 20.;
-        if (std::fmod(shade_factor, 1.) < 0.5)
+        double fm = std::fmod(shade_factor, 1.);
+        if (fm < 0.)
+            fm += 1.;
+        if (fm < 0.5)
             cx *= 0.75;
     }
 
@@ -477,6 +485,8 @@ void RenderRayTask::run() {
     QRgb *trackcolors = ctx->colors;
     G4double *trackdists = ctx->distances;
 
+    const G4ThreeVector &forward = forwardDirection(d.orientation);
+
     for (int i = yl; i < yh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
         for (int j = xl; j < xh; j++) {
@@ -486,7 +496,8 @@ void RenderRayTask::run() {
             }
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
-            int m = traceRay(pt, d, hits, ints, M, iter, mutables);
+            int m = traceRay(initPoint(pt, d), forward, d, hits, ints, M, iter,
+                             mutables);
             iter++;
             m = compressTraces(hits, ints, m);
 
@@ -501,8 +512,8 @@ void RenderRayTask::run() {
                 for (int k = 0; k < 10; k++) {
                     QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
                                 radius * std::sin(seed + k * CLHEP::pi / 5));
-                    int am = traceRay(pt + off, d, althits, altints, M, iter,
-                                      mutables);
+                    int am = traceRay(initPoint(pt + off, d), forward, d,
+                                      althits, altints, M, iter, mutables);
                     iter++;
                     am = compressTraces(althits, altints, am);
                     // At which intersection have we disagreements?
@@ -561,8 +572,10 @@ void RenderRayTask::run() {
             for (int k = p; k >= 0; --k) {
                 // We use the intersection before the volume
                 const VColor &base_color = d.color_table[hits[k]->ccode];
-                QRgb altcol = colorMap(ints[k], d.orientation, base_color,
-                                       i / (double)mind, j / (double)mind);
+                const G4ThreeVector &intpos =
+                    initPoint(pt, d) + ints[k].dist * forward;
+                QRgb altcol = colorMap(ints[k], forward, base_color, intpos,
+                                       1. / d.scale);
                 double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
                 if (!hits[k]->visible) {
                     continue;
