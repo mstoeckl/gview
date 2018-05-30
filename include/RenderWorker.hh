@@ -156,6 +156,7 @@ typedef struct ViewData_s {
     G4double scene_radius;
     std::vector<VColor> color_table;
     bool split_by_material;
+    bool force_opaque;
     // Simplification level
     int level_of_detail;
 } ViewData;
@@ -176,8 +177,10 @@ void countTree(const Element &e, int &treedepth, int &nelements);
 G4ThreeVector forwardDirection(const G4RotationMatrix &);
 G4ThreeVector initPoint(const QPointF &, const ViewData &);
 int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
-             const ViewData &d, const Element *hits[], Intersection ints[],
-             int maxhits, long iteration, ElemMutables mutables[]);
+             const Element &root, const std::vector<Plane> &clipping_planes,
+             const Element *hits[], Intersection ints[], int maxhits,
+             long iteration, ElemMutables mutables[],
+             bool first_visible_hit = false);
 int compressTraces(const Element *hits[], Intersection ints[], int m);
 
 class G4VPhysicalVolume;

@@ -199,7 +199,13 @@ ColorConfig::ColorConfig(ViewData &ivd,
     div_by_class = new QCheckBox("Split by type");
     div_by_class->setCheckState(vd.split_by_material ? Qt::Checked
                                                      : Qt::Unchecked);
-    connect(div_by_class, SIGNAL(stateChanged(int)), this, SLOT(changeMode()));
+    connect(div_by_class, SIGNAL(stateChanged(int)), this,
+            SIGNAL(colorChange()));
+
+    force_opaque = new QCheckBox("Force opaque");
+    div_by_class->setCheckState(vd.force_opaque ? Qt::Checked : Qt::Unchecked);
+    connect(force_opaque, SIGNAL(stateChanged(int)), this,
+            SIGNAL(colorChange()));
 
     mtl_table = new QTableView();
     mtl_table->setSelectionBehavior(QAbstractItemView::SelectItems);
@@ -267,6 +273,7 @@ ColorConfig::ColorConfig(ViewData &ivd,
 
     QVBoxLayout *lyt = new QVBoxLayout();
     lyt->addWidget(div_by_class, 0);
+    lyt->addWidget(force_opaque, 0);
     QHBoxLayout *mv = new QHBoxLayout();
     mv->addWidget(new QLabel("Mode:"), 0);
     mv->addWidget(mode_chooser, 1);
@@ -493,6 +500,8 @@ void recsetFlowColors(Element &e, const QMap<QString, short> &names,
 }
 
 void ColorConfig::reassignColors() {
+    vd.force_opaque = force_opaque->isChecked();
+    vd.split_by_material = div_by_class->isChecked();
     switch (active_mode) {
     case ColorByMaterial: {
         vd.color_table = mtl_color_table;

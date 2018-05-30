@@ -91,6 +91,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vd.orientation = G4RotationMatrix();
     vd.level_of_detail = 0; // 0 is full; 1 is 1/9, 2 is 1/81; depends on timing
     vd.split_by_material = true;
+    vd.force_opaque = false;
     vd.clipping_planes = std::vector<Plane>();
     which_tracks = track_options.size() > 0 ? 1 : 0;
 
@@ -512,8 +513,9 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
     countTree(vd.elements, td, nelem);
     Q_UNUSED(td);
     ElemMutables *mutables = new ElemMutables[nelem]();
-    int m = traceRay(initPoint(pt, vd), forwardDirection(vd.orientation), vd,
-                     elems, ints, M, 1, mutables);
+    int m =
+        traceRay(initPoint(pt, vd), forwardDirection(vd.orientation),
+                 vd.elements, vd.clipping_planes, elems, ints, M, 1, mutables);
     delete[] mutables;
     rayiter++;
     m = compressTraces(elems, ints, m);

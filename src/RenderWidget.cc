@@ -92,7 +92,6 @@ static QImage fastIntegerScale(const QImage &base, size_t S) {
 RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     : QWidget(), currView(v), trackdata(tdr), graph(threadCount()) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
-    setAttribute(Qt::WA_NoSystemBackground, true);
 
     back = QSharedPointer<QImage>(new QImage(50, 50, QImage::Format_RGB32));
     back->fill(QColor::fromHslF(0.3, 0.5, 0.7));

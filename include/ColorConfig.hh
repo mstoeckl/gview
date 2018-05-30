@@ -82,6 +82,7 @@ private:
     ViewData &vd;
 
     QCheckBox *div_by_class;
+    QCheckBox *force_opaque;
     QComboBox *mode_chooser;
     ColorMode active_mode;
     QVBoxLayout *superlayout;

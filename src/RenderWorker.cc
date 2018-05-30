@@ -103,8 +103,9 @@ G4ThreeVector initPoint(const QPointF &scpt, const ViewData &d) {
 }
 
 int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
-             const ViewData &d, const Element *hits[], Intersection ints[],
-             int maxhits, long iteration, ElemMutables mutables[]) {
+             const Element &root, const std::vector<Plane> &clipping_planes,
+             const Element *hits[], Intersection ints[], int maxhits,
+             long iteration, ElemMutables mutables[], bool first_visible_hit) {
     // Pseudorandom number to prevent consistent child ordering
     // so as to make overlapping children obvious
     const size_t rotfact = size_t(random());
@@ -114,18 +115,18 @@ int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
     G4double sdist, edist;
     G4ThreeVector entrynormal;
     G4ThreeVector exitnormal;
-    bool exists = clipRay(d.clipping_planes, init, forward, sdist, edist,
+    bool exists = clipRay(clipping_planes, init, forward, sdist, edist,
                           entrynormal, exitnormal);
     if (!exists) {
         return 0;
     }
 
     G4ThreeVector start = init + forward * sdist;
-    ++mutables[d.elements.ecode].ngeocalls;
+    ++mutables[root.ecode].ngeocalls;
     // Ensure ray starts in the root.
     bool clippable = false;
-    if (!d.elements.solid->Inside(start)) {
-        G4double jdist = d.elements.solid->DistanceToIn(start, forward);
+    if (!root.solid->Inside(start)) {
+        G4double jdist = root.solid->DistanceToIn(start, forward);
         if (jdist + sdist >= edist) {
             // Root solid not reachable with available distance
             return 0;
@@ -145,7 +146,7 @@ int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
     // Assume we are already in the root element.
     // We statically allocate, because many new/frees are too expensive
     const Element *stack[maxdepth];
-    stack[0] = &d.elements;
+    stack[0] = &root;
     size_t n = 1;
     G4ThreeVector local = start;
     for (int iter = 0; iter < 1000; iter++) {
@@ -183,22 +184,35 @@ int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
     }
     const G4double isdist = sdist;
 
-    int nhits = 1;
+    int nhits = 0;
     if (clippable) {
         // Start point is in the world volume, and is an intersection
-        hits[0] = stack[n - 1];
-        ints[0].dist = sdist;
-        ints[0].normal = entrynormal;
-        ints[0].is_clipping_plane = true;
+        bool store = !first_visible_hit || stack[n - 1]->visible;
+        if (store) {
+            hits[0] = stack[n - 1];
+            ints[0].dist = sdist;
+            ints[0].normal = entrynormal;
+            ints[0].is_clipping_plane = true;
+            nhits++;
+            if (first_visible_hit) {
+                return 1;
+            }
+        }
     } else {
-        // Starting point
-        ++mutables[d.elements.ecode].ngeocalls;
-        G4ThreeVector lnormal = d.elements.solid->SurfaceNormal(local);
-        hits[0] = &d.elements;
-        ints[0].dist = sdist;
-        ints[0].normal = lnormal;
-        ints[0].is_clipping_plane = false;
         // Intersection on entry
+        bool store = !first_visible_hit || root.visible;
+        if (store) {
+            ++mutables[root.ecode].ngeocalls;
+            G4ThreeVector lnormal = root.solid->SurfaceNormal(local);
+            hits[0] = &root;
+            ints[0].dist = sdist;
+            ints[0].normal = lnormal;
+            ints[0].is_clipping_plane = false;
+            nhits++;
+            if (first_visible_hit) {
+                return nhits;
+            }
+        }
     }
 
     for (int iter = 0; iter < 1000; iter++) {
@@ -254,7 +268,7 @@ int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
         }
         G4double fdist = std::min(exitdist, closestDist);
         if (fdist > edist - sdist) {
-            // End clip (counts as a hit!)
+            // End clip (counts as a hit!; always relevant)
             ints[nhits].dist = edist;
             ints[nhits].normal = exitnormal;
             ints[nhits].is_clipping_plane = true;
@@ -267,17 +281,28 @@ int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
             --n;
 
             // Record hit with normal
-            ++cmu.ngeocalls;
-            G4ThreeVector lnormal =
-                curr.solid->SurfaceNormal(condrot(curr, lpos));
-            ints[nhits].dist = sdist;
-            ints[nhits].normal = condirot(curr, lnormal);
-            ints[nhits].is_clipping_plane = false;
-            if (n == 0 || nhits >= maxhits) {
+            bool store = !first_visible_hit || (n > 0 && stack[n - 1]->visible);
+            if (store) {
+                ++cmu.ngeocalls;
+                G4ThreeVector lnormal =
+                    curr.solid->SurfaceNormal(condrot(curr, lpos));
+                ints[nhits].dist = sdist;
+                ints[nhits].normal = condirot(curr, lnormal);
+                ints[nhits].is_clipping_plane = false;
+                if (n == 0 || nhits >= maxhits) {
+                    if (first_visible_hit) {
+                        qFatal("Unexpected discovery on exit");
+                    }
+                    return nhits;
+                }
+                hits[nhits] = stack[n - 1];
+                nhits++;
+                if (first_visible_hit) {
+                    return nhits;
+                }
+            } else if (n == 0) {
                 return nhits;
             }
-            hits[nhits] = stack[n - 1];
-            nhits++;
         } else {
             // Transition on visiting a child
             stack[n] = closest;
@@ -287,18 +312,24 @@ int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
             G4ThreeVector lpos = offsets[n - 1] + forward * (sdist - isdist);
 
             // Record hit with normal
-            ++mutables[closest->ecode].ngeocalls;
-            G4ThreeVector lnormal =
-                closest->solid->SurfaceNormal(condrot(*closest, lpos));
-            ints[nhits].dist = sdist;
-            ints[nhits].normal = condirot(*closest, lnormal);
-            ints[nhits].is_clipping_plane = false;
-            if (nhits >= maxhits) {
-                // Don't increment hit counter; ignore last materialc
-                return nhits;
+            bool store = !first_visible_hit || closest->visible;
+            if (store) {
+                ++mutables[closest->ecode].ngeocalls;
+                G4ThreeVector lnormal =
+                    closest->solid->SurfaceNormal(condrot(*closest, lpos));
+                ints[nhits].dist = sdist;
+                ints[nhits].normal = condirot(*closest, lnormal);
+                ints[nhits].is_clipping_plane = false;
+                if (nhits >= maxhits) {
+                    // Don't increment hit counter; ignore last materialc
+                    return nhits;
+                }
+                hits[nhits] = closest;
+                nhits++;
+                if (first_visible_hit) {
+                    return nhits;
+                }
             }
-            hits[nhits] = closest;
-            nhits++;
         }
     }
     return nhits;
@@ -444,6 +475,114 @@ RenderRayTask::RenderRayTask(QRect p, RenderGraph &h, QSharedPointer<Context> c,
                              int i)
     : RenderGraphTask(p, h, c, i) {}
 
+QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
+                  const ViewData &d, int &iter, ElemMutables *mutables,
+                  QRgb trackcol, G4double trackdist) {
+    const int M = 30;
+    const Element *hits[M];
+    Intersection ints[M + 1];
+    const Element *althits[M];
+    Intersection altints[M + 1];
+    hits[0] = NULL;
+    althits[0] = NULL;
+
+    int m = traceRay(initPoint(pt, d), forward, d.elements, d.clipping_planes,
+                     hits, ints, M, iter, mutables, d.force_opaque);
+
+    iter++;
+    m = compressTraces(hits, ints, m);
+
+    int p = m - 1;
+    bool line = false;
+    if (d.level_of_detail <= -1) {
+        int ndevs[M + 1];
+        for (int k = 0; k < M + 1; k++) {
+            ndevs[k] = 0;
+        }
+        G4double seed = CLHEP::pi / 5 * (qrand() >> 16) / 16384.0;
+        for (int k = 0; k < 10; k++) {
+            QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
+                        radius * std::sin(seed + k * CLHEP::pi / 5));
+            int am = traceRay(initPoint(pt + off, d), forward, d.elements,
+                              d.clipping_planes, althits, altints, M, iter,
+                              mutables, d.force_opaque);
+            iter++;
+            am = compressTraces(althits, altints, am);
+            // At which intersection have we disagreements?
+            int cm = std::min(am, m);
+            if (cm > 0) {
+                int ni = d.force_opaque ? 1 : cm + 1;
+                for (int l = 0; l < ni; l++) {
+                    const G4double jump =
+                        1.0 * radius * d.scale /
+                        std::abs(-altints[l].normal * d.orientation.rowX());
+                    bool diffmatbehind = false;
+                    if (l < cm) {
+                        diffmatbehind =
+                            d.split_by_material
+                                ? althits[l]->ccode != hits[l]->ccode
+                                : althits[l]->ecode != hits[l]->ecode;
+                    }
+                    bool edgediff =
+                        (std::abs(altints[l].normal * ints[l].normal) <
+                             0.3 || // Q: abs?
+                         std::abs(altints[l].dist - ints[l].dist) > jump);
+                    if (diffmatbehind || edgediff) {
+                        ++ndevs[l];
+                    }
+                }
+            }
+            // Differing intersection count
+            for (int l = am; l < m; l++) {
+                ++ndevs[l];
+            }
+            for (int l = m; l < am; l++) {
+                ++ndevs[l];
+            }
+        }
+        const int devthresh = 2;
+        for (int k = 0; k < m + 1; ++k) {
+            if (ndevs[k] >= devthresh) {
+                p = k - 1;
+                line = true;
+                break;
+            }
+        }
+    }
+
+    bool rayoverride = false;
+    for (int k = 0; k < p; k++) {
+        if (ints[k].dist > trackdist) {
+            p = k - 1;
+            // WARNING: there exist exceptions!
+            // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
+            rayoverride = true;
+            break;
+        }
+    }
+
+    QRgb col = (line && !rayoverride) ? qRgba(0, 0, 0, 255) : trackcol;
+    // p indicates the first volume to use the color rule on
+    // (p<0 indicates the line dominates)
+    for (int k = p; k >= 0; --k) {
+        // We use the intersection before the volume
+        const VColor &base_color = d.color_table[hits[k]->ccode];
+        const G4ThreeVector &intpos = initPoint(pt, d) + ints[k].dist * forward;
+        QRgb altcol =
+            colorMap(ints[k], forward, base_color, intpos, 1. / d.scale);
+        double e = (d.force_opaque ? 1. : hits[k]->alpha);
+        double f = (1. - e);
+        if (!hits[k]->visible) {
+            continue;
+        }
+        col = qRgba(int(e * qRed(altcol) + f * qRed(col)),
+                    int(e * qGreen(altcol) + f * qGreen(col)),
+                    int(e * qBlue(altcol) + f * qBlue(col)),
+                    int(e * qAlpha(altcol) + f * qAlpha(col)));
+    }
+    return col;
+}
+
 void RenderRayTask::run() {
     const ViewData &d = *ctx->viewdata;
 
@@ -461,9 +600,9 @@ void RenderRayTask::run() {
     int w = next->width();
     int h = next->height();
 #if 0
-        QTime t = QTime::currentTime();
-        qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
-               nslices);
+		QTime t = QTime::currentTime();
+		qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
+			   nslices);
 #endif
 
     int mind = w > h ? h : w;
@@ -474,11 +613,6 @@ void RenderRayTask::run() {
     int yh = pixels.bottom();
 
     const G4double radius = 0.8 / mind;
-    const int M = 30;
-    const Element *hits[M];
-    Intersection ints[M + 1];
-    const Element *althits[M];
-    Intersection altints[M + 1];
     // Zero construct by default
     ElemMutables *mutables = new ElemMutables[nelements]();
     int iter = 1;
@@ -495,98 +629,15 @@ void RenderRayTask::run() {
                 delete[] mutables;
                 return;
             }
-            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
 
-            int m = traceRay(initPoint(pt, d), forward, d, hits, ints, M, iter,
-                             mutables);
-            iter++;
-            m = compressTraces(hits, ints, m);
-
-            int p = m - 1;
-            bool line = false;
-            if (d.level_of_detail <= -1) {
-                int ndevs[M + 1];
-                for (int k = 0; k < M + 1; k++) {
-                    ndevs[k] = 0;
-                }
-                G4double seed = CLHEP::pi / 5 * (qrand() >> 16) / 16384.0;
-                for (int k = 0; k < 10; k++) {
-                    QPointF off(radius * std::cos(seed + k * CLHEP::pi / 5),
-                                radius * std::sin(seed + k * CLHEP::pi / 5));
-                    int am = traceRay(initPoint(pt + off, d), forward, d,
-                                      althits, altints, M, iter, mutables);
-                    iter++;
-                    am = compressTraces(althits, altints, am);
-                    // At which intersection have we disagreements?
-                    int cm = std::min(am, m);
-                    for (int l = 0; l < cm + 1; l++) {
-                        const G4double jump =
-                            1.0 * radius * d.scale /
-                            std::abs(-altints[l].normal * d.orientation.rowX());
-                        bool diffmatbehind =
-                            ((l < cm) && althits[l]->ccode != hits[l]->ccode);
-                        bool edgediff =
-                            (std::abs(altints[l].normal * ints[l].normal) <
-                                 0.3 || // Q: abs?
-                             std::abs(altints[l].dist - ints[l].dist) > jump);
-                        if (diffmatbehind || edgediff) {
-                            ++ndevs[l];
-                        }
-                    }
-                    // Differing intersection count
-                    for (int l = am; l < m; l++) {
-                        ++ndevs[l];
-                    }
-                    for (int l = m; l < am; l++) {
-                        ++ndevs[l];
-                    }
-                }
-                const int devthresh = 2;
-                for (int k = 0; k < m + 1; ++k) {
-                    if (ndevs[k] >= devthresh) {
-                        p = k - 1;
-                        line = true;
-                        break;
-                    }
-                }
-            }
-
+            // For merging at correct depth
             int sidx = i * w + j;
             QRgb trackcol = trackcolors[sidx];
-            // ^ trackcol includes background
             G4double trackdist = trackdists[sidx];
 
-            bool rayoverride = false;
-            for (int k = 0; k < p; k++) {
-                if (ints[k].dist > trackdist) {
-                    p = k - 1;
-                    // WARNING: there exist exceptions!
-                    // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
-                    rayoverride = true;
-                    break;
-                }
-            }
-
-            QRgb col = (line && !rayoverride) ? qRgb(0, 0, 0) : trackcol;
-            // p indicates the first volume to use the color rule on
-            // (p<0 indicates the line dominates)
-            for (int k = p; k >= 0; --k) {
-                // We use the intersection before the volume
-                const VColor &base_color = d.color_table[hits[k]->ccode];
-                const G4ThreeVector &intpos =
-                    initPoint(pt, d) + ints[k].dist * forward;
-                QRgb altcol = colorMap(ints[k], forward, base_color, intpos,
-                                       1. / d.scale);
-                double e = hits[k]->alpha, f = (1. - hits[k]->alpha);
-                if (!hits[k]->visible) {
-                    continue;
-                }
-                col = qRgba(int(e * qRed(altcol) + f * qRed(col)),
-                            int(e * qGreen(altcol) + f * qGreen(col)),
-                            int(e * qBlue(altcol) + f * qBlue(col)),
-                            int(e * qAlpha(altcol) + f * qAlpha(col)));
-            }
-            pts[j] = col;
+            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
+            pts[j] = colorAtPoint(pt, radius, forward, d, iter, mutables,
+                                  trackcol, trackdist);
         }
         QMetaObject::invokeMethod(&home, "progUpdate", Qt::QueuedConnection,
                                   Q_ARG(int, yh - yl + 1),
