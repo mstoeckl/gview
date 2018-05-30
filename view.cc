@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QTemporaryFile>
 #include <QTextStream>
+#include <QTime>
 
 #include <G4GDMLParser.hh>
 
@@ -94,6 +95,8 @@ int main(int argc, char **argv) {
     if (opts.size() == 0) {
         return usage();
     }
+
+    srand(1000 * QTime::currentTime().second() + QTime::currentTime().msec());
 
     if (!vector) {
         Viewer v(opts, tracks);

@@ -2,7 +2,7 @@
 
 #include "RenderWorker.hh"
 
-#include <QTime>
+#include <QElapsedTimer>
 #include <QWidget>
 
 class RenderWidget : public QWidget {
@@ -23,6 +23,7 @@ public slots:
 
 private:
     void rerender_priv();
+    void drawRuler(QPainter &);
     ViewData &currView;
     const TrackData &trackdata;
     enum { NONE, ACTIVE, ACTIVE_AND_QUEUED } state;
@@ -34,11 +35,12 @@ private:
 
     QSharedPointer<QImage> back;
     int back_scale_factor;
+    QElapsedTimer back_request_timer;
     QSharedPointer<QImage> next;
     int next_scale_factor;
+    QElapsedTimer next_request_timer;
 
     enum { aReqd, aCompl, aThere } arrived;
-    QTime request_time;
 };
 
 class RenderSaveObject : public QObject {

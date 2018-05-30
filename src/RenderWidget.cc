@@ -6,19 +6,17 @@
 #include <QPainter>
 #include <QProgressDialog>
 #include <QResizeEvent>
-#include <QRunnable>
 #include <QThread>
-#include <QThreadPool>
 
-const G4double GOAL_FRAME_TIME = 0.030;
+const G4double GOAL_FRAME_TIME = 0.020;
 const int DOWNSCALE_BASE = 2;
-const int MAX_LOD = 7;
+const int MAX_LOD = 20; /* maximum render pixel size in pixels */
 
 static int threadCount() {
     int itc = QThread::idealThreadCount();
     itc = itc < 0 ? 2 : itc;
 #if 0
-    itc = 1; // Debug override
+	itc = 1; // Debug override
 #endif
     return itc;
 }
@@ -42,13 +40,64 @@ static int ilog(int b, int x) {
 
 static int isqrt(int x) { return std::sqrt(x); }
 
+static QImage fastIntegerScale(const QImage &base, size_t S) {
+    if (S <= 1) {
+        return base;
+    }
+    if (base.pixelFormat().bitsPerPixel() != 32) {
+        qFatal("Improper input pixel size, %d bits != 32 bits",
+               base.pixelFormat().bitsPerPixel());
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    const size_t W = base.width(), H = base.height();
+    QImage scaled(W * S, H * S, base.format());
+    size_t slinelength = scaled.bytesPerLine();
+    size_t blinelength = base.bytesPerLine();
+
+    // Resampling + row copy is fastest & branch free
+    const uchar *__restrict__ baseData = base.constBits();
+    uchar *__restrict__ scaledData = scaled.bits();
+    static size_t map[16384];
+    if (W * S > 16384) {
+        qFatal("Upsampling into huge image.");
+    }
+    for (size_t j = 0; j < W; j++) {
+        for (size_t k = 0; k < S; k++) {
+            map[j * S + k] = j;
+        }
+    }
+    const size_t *__restrict__ remap = map;
+    for (size_t k = 0; k < H; k++) {
+        const uint32_t *__restrict__ source_line =
+            (const uint32_t *)&baseData[k * blinelength];
+        uint32_t *__restrict__ fill_line =
+            (uint32_t * __restrict__) & scaledData[S * k * slinelength];
+        for (size_t j = 0; j < W * S; j++) {
+            fill_line[j] = source_line[remap[j]];
+        }
+        for (size_t i = 1; i < S; i++) {
+            uint32_t *__restrict__ copy_line =
+                (uint32_t * __restrict__) &
+                scaledData[(S * k + i) * slinelength];
+            memcpy(copy_line, fill_line, slinelength);
+        }
+    }
+
+    return scaled;
+}
+
 RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     : QWidget(), currView(v), trackdata(tdr), graph(threadCount()) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
 
     back = QSharedPointer<QImage>(new QImage(50, 50, QImage::Format_RGB32));
     back->fill(QColor::fromHslF(0.3, 0.5, 0.7));
     back_scale_factor = 1;
+    back_request_timer = QElapsedTimer();
 
     state = NONE;
     to_full_detail = false;
@@ -93,12 +142,13 @@ void RenderWidget::rerender_priv() {
     int scl = std::max(1, (immediate_lod * ideal) / super);
 
     if (currView.level_of_detail == (to_full_detail ? -1 : 0)) {
-        request_time = QTime::currentTime();
         arrived = aReqd;
     }
     next = QSharedPointer<QImage>(new QImage(
         this->width() / scl, this->height() / scl, QImage::Format_RGB32));
     next_scale_factor = scl;
+    next_request_timer = QElapsedTimer();
+    next_request_timer.start();
 
     TrackData d = currView.tracks;
     currView.tracks = trackdata;
@@ -117,6 +167,7 @@ void RenderWidget::rerender_priv() {
 void RenderWidget::completed(qreal time_secs) {
     back = next;
     back_scale_factor = next_scale_factor;
+    back_request_timer = next_request_timer;
 
     if (state == ACTIVE) {
         state = NONE;
@@ -127,6 +178,8 @@ void RenderWidget::completed(qreal time_secs) {
     if (arrived == aReqd && back->size() == this->size()) {
         arrived = aCompl;
     }
+
+    *back = fastIntegerScale(*back, back_scale_factor);
     this->repaint();
 
     int scale = std::max(width() / back->width(), height() / back->height());
@@ -154,54 +207,34 @@ void RenderWidget::resizeEvent(QResizeEvent *evt) {
     rerender_priv();
 }
 
-static QImage fastIntegerScale(const QImage &base, int S) {
-    if (S <= 1) {
-        return base;
-    }
-    if (base.pixelFormat().bitsPerPixel() != 32) {
-        qFatal("Improper input pixel size, %d bits != 32 bits",
-               base.pixelFormat().bitsPerPixel());
-    }
-
-    const int W = base.width(), H = base.height();
-    QImage scaled(W * S, H * S, base.format());
-
-    for (int k = 0; k < H; k++) {
-        const uint32_t *source_line = (const uint32_t *)base.constScanLine(k);
-
-        uint32_t *fill_line = (uint32_t *)scaled.scanLine(S * k);
-        for (int j = 0; j < W; j++) {
-            for (int i = 0; i < S; i++) {
-                fill_line[j * S + i] = source_line[j];
-            }
-        }
-        for (int i = 1; i < S; i++) {
-            uint32_t *copy_line = (uint32_t *)scaled.scanLine(S * k + i);
-            memcpy(copy_line, fill_line, sizeof(uint32_t) * S * W);
-        }
-    }
-
-    return scaled;
-}
-
 void RenderWidget::paintEvent(QPaintEvent *) {
     if (this->height() <= 0 || this->width() <= 0) {
         return;
     }
 
-    QImage qvd = fastIntegerScale(*back, back_scale_factor);
+    QElapsedTimer paintTimer;
+    paintTimer.start();
 
     QPainter q(this);
     QPoint corner =
-        this->rect().center() - QPoint(qvd.width() / 2, qvd.height() / 2);
-    q.drawImage(corner, qvd);
+        this->rect().center() - QPoint(back->width() / 2, back->height() / 2);
+    q.drawImage(corner, *back);
     if (arrived == aCompl) {
         arrived = aThere;
-#if 0
-        qDebug("img completed after %d ms",
-               request_time.msecsTo(QTime::currentTime()));
-#endif
     }
+    qint64 im = paintTimer.nsecsElapsed();
+    drawRuler(q);
+
+#if 0
+    qDebug("img completed after %f ms; %f ms paint (%f img)",
+           back_request_timer.nsecsElapsed() * 1e-6,
+           paintTimer.nsecsElapsed() * 1e-6, im * 1e-6);
+#else
+    (void)im;
+#endif
+}
+
+void RenderWidget::drawRuler(QPainter &q) {
     // draw ruler in bottom left corner
     int max_ruler_length = std::max(this->width() / 3, 50);
     // Max ruler length in real space nm

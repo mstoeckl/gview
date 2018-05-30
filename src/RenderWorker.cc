@@ -1,4 +1,5 @@
 #include "RenderWorker.hh"
+#include "BooleanTree.hh"
 #include "LineCollection.hh"
 
 #include <G4LogicalVolume.hh>
@@ -1213,6 +1214,10 @@ Element convertCreation(const G4VPhysicalVolume *phys, G4RotationMatrix rot,
     m.ccode = 0;
     m.material = mat;
     m.solid = log->GetSolid();
+    if (0) {
+        m.solid = BooleanTree::compile(m.solid);
+    }
+
     m.visible = mat->GetDensity() > 0.01 * CLHEP::g / CLHEP::cm3;
     m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
     m.ecode = *counter;

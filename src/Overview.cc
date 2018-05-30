@@ -1,10 +1,11 @@
 #include "Overview.hh"
 
+#include "BooleanTree.hh"
+#include "RenderWorker.hh"
+
 #include "G4Material.hh"
 #include <G4BooleanSolid.hh>
 #include <G4DisplacedSolid.hh>
-
-#include "RenderWorker.hh"
 
 #include <QDoubleSpinBox>
 #include <QItemSelection>
@@ -47,6 +48,11 @@ InfoModel::~InfoModel() {}
 void calculateBooleanProperties(const G4VSolid *sol,
                                 QSet<const G4VSolid *> &roots, int &treedepth,
                                 int &nbooleans, int depth) {
+    const BooleanTree *bso = dynamic_cast<const BooleanTree *>(sol);
+    if (bso) {
+        sol = bso->GetOriginal();
+    }
+
     const G4BooleanSolid *b = dynamic_cast<const G4BooleanSolid *>(sol);
     treedepth = std::max(treedepth, depth);
     if (b) {

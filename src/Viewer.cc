@@ -81,8 +81,6 @@ constructMaterialList(const std::vector<GeoOption> &geo_options) {
 Viewer::Viewer(const std::vector<GeoOption> &options,
                const std::vector<TrackData> &trackopts)
     : QMainWindow() {
-    srand(1000 * QTime::currentTime().second() + QTime::currentTime().msec());
-
     which_geo = 0;
     geo_options = options;
     track_options = trackopts;
