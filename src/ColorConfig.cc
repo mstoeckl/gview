@@ -684,15 +684,11 @@ void ColorConfig::loadFlowMap() {
         rst += sizeof(short) * (tkey.size() + 1);
 
         FlowData f;
-        const double *dp = (const double *)rst;
-        f.inflow_val = dp[0];
-        f.inflow_err = dp[1];
-        f.deposit_val = dp[2];
-        f.deposit_err = dp[3];
-        rst += sizeof(double) * 4;
-        const long *lp = (const long *)rst;
-        f.nsamples = lp[0];
-        rst += sizeof(long);
+        const float *dp = (const float *)rst;
+        // [inflow, deposit]x[electron, gamma, other]x[v,e]
+        f.inflow_val = dp[0] + dp[2];
+        f.deposit_val = dp[6] + dp[8];
+        rst += sizeof(float) * 12;
 
         flow_db.append(QPair<QVector<short>, FlowData>(tkey, f));
     }

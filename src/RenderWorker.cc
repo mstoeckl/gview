@@ -551,7 +551,8 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
     }
 
     bool rayoverride = false;
-    for (int k = 0; k < p; k++) {
+    int nints = (d.force_opaque && m) ? m : p;
+    for (int k = 0; k < nints; k++) {
         if (ints[k].dist > trackdist) {
             p = k - 1;
             // WARNING: there exist exceptions!
@@ -923,7 +924,8 @@ static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
 }
 
 TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
-                     Range erange, IRange selidxs) {
+                     Range erange, IRange selidxs,
+                     const QMap<int, bool> &type_active) {
     size_t otracks = other.getNTracks();
     const TrackHeader *oheaders = other.getHeaders();
     const TrackPoint *opoints = other.getPoints();
@@ -938,6 +940,11 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     size_t nlow = std::max(size_t(0), selidxs.low - 1);
     size_t nhigh = std::min(otracks, selidxs.high);
     for (size_t i = nlow; i < nhigh; i++) {
+        bool typekeep = type_active.value(oheaders[i].ptype, type_active[0]);
+        if (!typekeep) {
+            continue;
+        }
+
         const TrackPoint *seq = &opoints[oheaders[i].offset];
         int npts = oheaders[i].npts;
         G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);

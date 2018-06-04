@@ -71,7 +71,8 @@ public:
     TrackData(const char *filename);
     TrackData(const TrackData &other);
     TrackData(const TrackData &other, ViewData &viewrestr, Range seltimes,
-              Range selenergies, IRange selidxs);
+              Range selenergies, IRange selidxs,
+              const QMap<int, bool> &type_active);
     ~TrackData();
     size_t getNPoints() const;
     size_t getNTracks() const;

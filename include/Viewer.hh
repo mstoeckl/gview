@@ -110,6 +110,7 @@ private:
     QMenu *gpicker_menu;
     QMenu *tpicker_menu;
     QLabel *linecount_label;
+    QListWidget *line_type_selection;
 
     QPoint clickpt;
     QPoint lastpt;

@@ -7,9 +7,13 @@
 #include "VectorTrace.hh"
 #include "VectorWindow.hh"
 
+#include <G4Electron.hh>
 #include <G4GDMLParser.hh>
+#include <G4Gamma.hh>
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
+#include <G4OpticalPhoton.hh>
+#include <G4ParticleDefinition.hh>
 #include <G4VPhysicalVolume.hh>
 #include <G4VSolid.hh>
 #include <G4VUserDetectorConstruction.hh>
@@ -114,8 +118,13 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         trackdata = TrackData();
     } else {
         TrackRestriction current = track_res_actual[which_tracks - 1];
-        trackdata =
-            TrackData(td, vd, current.time, current.energy, current.seqno);
+        QMap<int, bool> lineprops;
+        lineprops[G4Gamma::Definition()->GetPDGEncoding()] = true;
+        lineprops[G4Electron::Definition()->GetPDGEncoding()] = true;
+        lineprops[G4OpticalPhoton::Definition()->GetPDGEncoding()] = true;
+        lineprops[0] = true;
+        trackdata = TrackData(td, vd, current.time, current.energy,
+                              current.seqno, lineprops);
     }
     rayiter = 0;
 
@@ -259,6 +268,19 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vb->addLayout(crb, 0);
     linecount_label = new QLabel("Lines: 0");
     vb->addWidget(linecount_label);
+    line_type_selection = new QListWidget();
+    line_type_selection->addItems(QStringList() << "Gamma"
+                                                << "Electron"
+                                                << "OpticalPhoton"
+                                                << "Other");
+    for (int i = 0; i < line_type_selection->count(); i++) {
+        QListWidgetItem *item = line_type_selection->item(i);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(Qt::Checked);
+    }
+    connect(line_type_selection, SIGNAL(itemChanged(QListWidgetItem *)), this,
+            SLOT(updatePlanes()));
+    vb->addWidget(line_type_selection);
     vb->addStretch(1);
     cont->setLayout(vb);
     QScrollArea *asf = new QScrollArea();
@@ -595,8 +617,18 @@ void Viewer::updatePlanes() {
         res.energy = {std::min(elow, ehigh), std::max(elow, ehigh)};
         res.time = {std::min(tlow, thigh), std::max(tlow, thigh)};
         res.seqno = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
+        QMap<int, bool> lineprops;
+        lineprops[G4Gamma::Definition()->GetPDGEncoding()] =
+            (line_type_selection->item(0)->checkState() == Qt::Checked);
+        lineprops[G4Electron::Definition()->GetPDGEncoding()] =
+            (line_type_selection->item(1)->checkState() == Qt::Checked);
+        lineprops[G4OpticalPhoton::Definition()->GetPDGEncoding()] =
+            (line_type_selection->item(2)->checkState() == Qt::Checked);
+        lineprops[0] =
+            (line_type_selection->item(3)->checkState() == Qt::Checked);
+
         trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
-                              res.energy, res.seqno);
+                              res.energy, res.seqno, lineprops);
         if (0) {
             // Temp disabled on grounds of lag
             QVector<QPointF> ep, tp;
