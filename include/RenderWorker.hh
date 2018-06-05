@@ -170,7 +170,17 @@ public:
 
 class RenderTrackTask : public RenderGraphTask {
 public:
-    RenderTrackTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
+    RenderTrackTask(QRect p, int shard, RenderGraph &h,
+                    QSharedPointer<Context> c, int id);
+    virtual void run();
+
+private:
+    int shard;
+};
+
+class RenderMergeTask : public RenderGraphTask {
+public:
+    RenderMergeTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
     virtual void run();
 };
 

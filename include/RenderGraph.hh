@@ -14,15 +14,21 @@ class RenderGraphTask;
 struct ViewData_s;
 typedef struct ViewData_s ViewData;
 
-class Context {
-public:
-    Context(const ViewData &d, QSharedPointer<QImage> i, int w, int h);
-    ~Context();
-    const ViewData *viewdata;
+typedef struct {
     QRgb *colors;
     double *distances;
+} FlatData;
+
+class Context {
+public:
+    Context(const ViewData &d, QSharedPointer<QImage> i, int nt);
+    ~Context();
+    const ViewData *viewdata;
+    FlatData *partData;
+    FlatData flatData;
     QSharedPointer<QImage> image;
     int renderno;
+    int nthreads;
     volatile int abort_flag;
 };
 
@@ -50,6 +56,8 @@ protected slots:
     friend class RenderGraphTask;
 
 private:
+    void doQueue(int);
+
     QSharedPointer<Context> context;
     QElapsedTimer *timer;
     QThreadPool *pool;
@@ -59,6 +67,7 @@ private:
     typedef struct {
         QVector<int> reqs;
         QRect pxdm;
+        int shard;
         int layer;
         bool inprogress;
     } Task;

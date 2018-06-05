@@ -618,8 +618,7 @@ void RenderRayTask::run() {
     ElemMutables *mutables = new ElemMutables[nelements]();
     int iter = 1;
 
-    QRgb *trackcolors = ctx->colors;
-    G4double *trackdists = ctx->distances;
+    const FlatData *flatData = &ctx->flatData;
 
     const G4ThreeVector &forward = forwardDirection(d.orientation);
 
@@ -633,8 +632,8 @@ void RenderRayTask::run() {
 
             // For merging at correct depth
             int sidx = i * w + j;
-            QRgb trackcol = trackcolors[sidx];
-            G4double trackdist = trackdists[sidx];
+            QRgb trackcol = flatData->colors[sidx];
+            G4double trackdist = flatData->distances[sidx];
 
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
             pts[j] = colorAtPoint(pt, radius, forward, d, iter, mutables,
@@ -653,18 +652,22 @@ void RenderRayTask::run() {
                               Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
 }
 
-RenderTrackTask::RenderTrackTask(QRect p, RenderGraph &h,
+RenderTrackTask::RenderTrackTask(QRect p, int s, RenderGraph &h,
                                  QSharedPointer<Context> c, int i)
-    : RenderGraphTask(p, h, c, i) {}
+    : RenderGraphTask(p, h, c, i), shard(s) {}
 
 void RenderTrackTask::run() {
+    if (ctx->abort_flag) {
+        return;
+    }
+
     int xl = pixels.left();
     int xh = pixels.right();
     int yl = pixels.top();
     int yh = pixels.bottom();
 
-    double *dists = ctx->distances;
-    QRgb *colors = ctx->colors;
+    double *dists = ctx->partData[shard].distances;
+    QRgb *colors = ctx->partData[shard].colors;
     int w = ctx->image->width();
     int h = ctx->image->height();
     const ViewData &d = *ctx->viewdata;
@@ -685,7 +688,10 @@ void RenderTrackTask::run() {
     int mind = w > h ? h : w;
     float rad = std::max(mind / 800.0f, 0.01f);
 
-    for (size_t i = 0; i < ntracks; i++) {
+    size_t tfrom = (ntracks * shard) / ctx->nthreads;
+    size_t tupto = (ntracks * (shard + 1)) / ctx->nthreads;
+
+    for (size_t i = tfrom; i < tupto; i++) {
         if (ctx->abort_flag) {
             return;
         }
@@ -775,16 +781,19 @@ void RenderTrackTask::run() {
                                 int(bc * qGreen(c1) + b * qGreen(c2)),
                                 int(bc * qBlue(c1) + b * qBlue(c2)));
 
+                // TODO: move to the merger phase, & multithread that!
+                // (so, instead, just draw the center point?)
+
                 /* Draw circle */
                 float spot = rad * rws;
-                int ly = int(std::round(y - spot));
-                int hy = int(std::round(y + spot));
+                int ly = int(std::lrint(y - spot));
+                int hy = int(std::lrint(y + spot));
                 for (int ddy = std::max(yl, ly); ddy <= std::min(yh - 1, hy);
                      ddy++) {
                     float lr = std::sqrt(std::max(
                         0.f, spot * spot - float((ddy - y) * (ddy - y))));
-                    int lx = int(std::round(x - lr));
-                    int hx = int(std::round(x + lr));
+                    int lx = int(std::lrint(x - lr));
+                    int hx = int(std::lrint(x + lr));
                     for (int ddx = std::max(xl, lx);
                          ddx <= std::min(xh - 1, hx); ddx++) {
                         int sidx = ddy * w + ddx;
@@ -793,6 +802,45 @@ void RenderTrackTask::run() {
                             colors[sidx] = col;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    QMetaObject::invokeMethod(&home, "queueNext", Qt::QueuedConnection,
+                              Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
+}
+
+RenderMergeTask::RenderMergeTask(QRect p, RenderGraph &h,
+                                 QSharedPointer<Context> c, int i)
+    : RenderGraphTask(p, h, c, i) {}
+
+void RenderMergeTask::run() {
+    // Minimum merge over all partData
+    Context &c = *ctx;
+    if (c.abort_flag) {
+        return;
+    }
+
+    int xl = pixels.left();
+    int xh = pixels.right();
+    int yl = pixels.top();
+    int yh = pixels.bottom();
+    int w = c.image->width();
+    for (int y = yl; y < yh; y++) {
+        for (int x = xl; x < xh; x++) {
+            // Scale up to be beyond anything traceRay produces
+            c.flatData.distances[y * w + x] = 5 * kInfinity;
+        }
+    }
+
+    for (int k = 0; k < c.nthreads; k++) {
+        for (int y = yl; y < yh; y++) {
+            for (int x = xl; x < xh; x++) {
+                int i = y * w + x;
+                if (c.partData[k].distances[i] < c.flatData.distances[i]) {
+                    c.flatData.distances[i] = c.partData[k].distances[i];
+                    c.flatData.colors[i] = c.partData[k].colors[i];
                 }
             }
         }

@@ -5,18 +5,31 @@
 #include <QImage>
 #include <QThreadPool>
 
-Context::Context(const ViewData &d, QSharedPointer<QImage> i, int w, int h) {
+Context::Context(const ViewData &d, QSharedPointer<QImage> im, int nt) {
     viewdata = new ViewData(d);
-    colors = new QRgb[w * h];
-    distances = new double[w * h];
-    image = i;
+    int w = im->width(), h = im->height();
+    image = im;
     abort_flag = false;
+    nthreads = nt;
+
+    partData = new FlatData[nthreads];
+    for (int k = 0; k < nthreads; k++) {
+        partData[k].colors = new QRgb[w * h];
+        partData[k].distances = new double[w * h];
+    }
+    flatData.colors = new QRgb[w * h];
+    flatData.distances = new double[w * h];
 }
 
 Context::~Context() {
     delete viewdata;
-    delete[] colors;
-    delete[] distances;
+    for (int k = 0; k < nthreads; k++) {
+        delete[] partData[k].colors;
+        delete[] partData[k].distances;
+    }
+    delete[] partData;
+    delete flatData.colors;
+    delete flatData.distances;
 }
 
 RenderGraph::RenderGraph(int nthreads) {
@@ -50,7 +63,9 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
     int w = im->width();
     int h = im->height();
 
-    context = QSharedPointer<Context>(new Context(vd, im, w, h));
+    int nthreads = pool->maxThreadCount();
+
+    context = QSharedPointer<Context>(new Context(vd, im, nthreads));
     context->renderno = seqno;
     progress = 0.f;
 
@@ -61,51 +76,72 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
     int z = 0;
     for (int i = 0; i < Ny; i++) {
         // Vertical slice (tracks)
-        int yl = (i * h / Ny);
-        int yh = i == Ny - 1 ? h : ((i + 1) * h / Ny);
         Task g;
         g.layer = 0;
-        g.pxdm = QRect(0, yl, w + 1, yh - yl + 1);
+        g.pxdm = QRect(0, 0, w + 1, h + 1);
         g.reqs = QVector<int>();
+        g.shard = i;
         g.inprogress = false;
         tasks[z] = g;
+        z++;
+    }
+
+    Task tm;
+    tm.layer = 1;
+    tm.shard = 0;
+    tm.pxdm = QRect(0, 0, w + 1, h + 1);
+    tm.reqs = QVector<int>();
+    for (int i = 0; i < Ny; i++) {
+        tm.reqs.push_back(i);
+    }
+    tm.inprogress = false;
+    int zstar = z;
+    tasks[zstar] = tm;
+    z++;
+
+    for (int i = 0; i < Ny; i++) {
+        int yl = (i * h / Ny);
+        int yh = i == Ny - 1 ? h : ((i + 1) * h / Ny);
         for (int k = 0; k < Nx; k++) {
             // Horizontal slice (objects)
             int xl = (k * w / Nx);
             int xh = k == Nx - 1 ? w : ((k + 1) * w / Nx);
             Task j;
-            j.layer = 1;
+            j.layer = 2;
             j.pxdm = QRect(xl, yl, xh - xl + 1, yh - yl + 1);
             j.reqs = QVector<int>();
-            j.reqs.append(z);
+            j.reqs.append(zstar);
             j.inprogress = false;
-            tasks[z + k + 1] = j;
+            tasks[z] = j;
+            z++;
         }
-        z += Nx + 1;
     }
     QVector<int> seeds;
     for (int i = 0; i < tasks.size(); i++) {
         const Task &j = tasks[i];
         if (j.reqs.size() == 0) {
             seeds.append(i);
-            if (seeds.size() >= pool->maxThreadCount()) {
-                break;
-            }
         }
     }
     // Tasks may complete instantaneously, so we select first, start second
     for (int i : seeds) {
-        Task &j = tasks[i];
-        RenderGraphTask *r;
-        if (j.layer == 0) {
-            r = new RenderTrackTask(j.pxdm, *this, context, i);
-        } else {
-            r = new RenderRayTask(j.pxdm, *this, context, i);
-        }
-        j.inprogress = true;
-        // Blocking start
-        pool->start(r);
+        doQueue(i);
     }
+}
+
+void RenderGraph::doQueue(int i) {
+    Task &j = tasks[i];
+    RenderGraphTask *r;
+    if (j.layer == 0) {
+        r = new RenderTrackTask(j.pxdm, j.shard, *this, context, i);
+    } else if (j.layer == 1) {
+        r = new RenderMergeTask(j.pxdm, *this, context, i);
+    } else {
+        r = new RenderRayTask(j.pxdm, *this, context, i);
+    }
+    j.inprogress = true;
+    // Blocking start
+    pool->start(r);
 }
 
 void RenderGraph::abort() {
@@ -129,7 +165,7 @@ void RenderGraph::queueNext(int taskid, int rno) {
     }
     // Removing task marks as complete
     tasks.remove(taskid);
-    int sel = -1;
+    QVector<int> nseeds;
     for (int i : tasks.keys()) {
         bool reqsleft = false;
         for (int j : tasks[i].reqs) {
@@ -139,12 +175,12 @@ void RenderGraph::queueNext(int taskid, int rno) {
             }
         }
         if (!reqsleft && !tasks[i].inprogress) {
-            sel = i;
+            nseeds.append(i);
             break;
         }
     }
 
-    if (sel < 0 && tasks.size() <= 0) {
+    if (nseeds.size() <= 0 && tasks.size() <= 0) {
         // Reset graph
         tasks = QMap<int, Task>();
         context = QSharedPointer<Context>();
@@ -152,17 +188,10 @@ void RenderGraph::queueNext(int taskid, int rno) {
 
         qreal elapsed = 1e-9 * timer->nsecsElapsed();
         emit done(elapsed);
-    } else if (sel >= 0) {
-        Task &j = tasks[sel];
-        RenderGraphTask *r;
-        if (j.layer == 0) {
-            r = new RenderTrackTask(j.pxdm, *this, context, sel);
-        } else {
-            r = new RenderRayTask(j.pxdm, *this, context, sel);
+    } else {
+        for (int z : nseeds) {
+            doQueue(z);
         }
-        j.inprogress = true;
-        // Blocking start
-        pool->start(r);
     }
 }
 
