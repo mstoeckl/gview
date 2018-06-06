@@ -1,23 +1,7 @@
 #pragma once
 
+#include "General.hh"
 #include "Viewer.hh"
-
-class FColor {
-public:
-    FColor();
-    FColor(float, float, float, float = 1.0);
-    QRgb rgba() const;
-    inline float redF() const { return r; }
-    inline float greenF() const { return g; }
-    inline float blueF() const { return b; }
-    inline float alphaF() const { return a; }
-    float magnitude() const;
-    QString hexName() const;
-    static FColor blend(const FColor &a, const FColor &b, float mix);
-
-private:
-    float r, g, b, a;
-};
 
 class RenderPoint {
 public:

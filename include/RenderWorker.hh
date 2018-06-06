@@ -1,5 +1,6 @@
 #pragma once
 
+#include "General.hh"
 #include "RenderGraph.hh"
 
 #include <G4RotationMatrix.hh>
@@ -55,10 +56,16 @@ typedef struct {
 } RayPoint;
 
 typedef struct {
-    int npts;
-    int ptype;
-    size_t offset;
-    G4double bballradius;
+    int32_t npts;
+    int32_t ptype;
+    int64_t event_id;
+    int32_t track_id;
+    int32_t parent_id;
+    // For viewer hooks
+    union {
+        void *hook;
+        size_t offset;
+    };
 } TrackHeader;
 
 typedef struct {
@@ -82,7 +89,6 @@ public:
     size_t npoints;
     TrackHeader *headers;
     TrackPoint *points;
-    LineCollection *tree;
     TrackPrivateData(size_t itracks, size_t ipoints);
     TrackPrivateData(const TrackPrivateData &other);
     ~TrackPrivateData();
@@ -150,23 +156,6 @@ typedef struct Element_s {
 
     std::vector<Element> children;
 } Element;
-
-// Very simple and fast color handling
-class VColor {
-public:
-    VColor(uint8_t r, uint8_t g, uint8_t b) : pr(r), pg(g), pb(b) {}
-    VColor(QRgb rgb) : pr(qRed(rgb)), pg(qGreen(rgb)), pb(qBlue(rgb)) {}
-    static VColor fromRgbF(float r, float g, float b) {
-        return VColor(255.f * r, 255.f * g, 255.f * b);
-    }
-    QRgb rgb() const { return qRgb(pr, pg, pb); }
-    float redF() const { return pr / 255.f; }
-    float greenF() const { return pg / 255.f; }
-    float blueF() const { return pb / 255.f; }
-
-private:
-    uint8_t pr, pg, pb;
-};
 
 typedef struct ViewData_s {
     // What is being viewed

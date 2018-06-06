@@ -10,38 +10,9 @@
 
 #include <G4Material.hh>
 
-static uint32_t randint(uint32_t excl_upper) {
-    return ((uint32_t)qrand()) % excl_upper;
-}
-
 static FColor randColor() {
     return FColor(randint(65536) / 65535., randint(65536) / 65535.,
                   randint(65536) / 65535., 1.0);
-}
-
-FColor::FColor() : r(0.), g(0.), b(0.), a(0.) {}
-FColor::FColor(float ir, float ig, float ib, float ia)
-    : r(ir), g(ig), b(ib), a(ia) {}
-QRgb FColor::rgba() const { return QColor::fromRgbF(r, g, b, a).rgba(); }
-float FColor::magnitude() const { return a * std::max(r, std::max(b, g)); }
-QString FColor::hexName() const {
-    QRgb color = rgba();
-    int cr = qRed(color);
-    int cg = qGreen(color);
-    int cb = qBlue(color);
-    const char *numbers = "0123456789abcdef";
-    return QString("#%1%2%3%4%5%6")
-        .arg(numbers[cr / 16])
-        .arg(numbers[cr % 16])
-        .arg(numbers[cg / 16])
-        .arg(numbers[cg % 16])
-        .arg(numbers[cb / 16])
-        .arg(numbers[cb % 16]);
-}
-FColor FColor::blend(const FColor &a, const FColor &b, float s) {
-    float t = 1. - s;
-    return FColor(t * a.r + s * b.r, t * a.g + s * b.g, t * a.b + s * b.b,
-                  t * a.a + s * b.a);
 }
 
 static RayPoint dummy_point() {

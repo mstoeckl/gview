@@ -1,6 +1,5 @@
 #include "RenderWorker.hh"
 #include "BooleanTree.hh"
-#include "LineCollection.hh"
 
 #include <G4LogicalVolume.hh>
 #include <G4Material.hh>
@@ -369,10 +368,10 @@ void compressTraces(RayPoint *ray) {
     ray->N = p;
 }
 
-static QRgb colorMap(const Intersection &intersection,
-                     const G4ThreeVector &forward, const VColor &base,
-                     const G4ThreeVector &position, double shade_scale,
-                     bool is_clipping_plane) {
+static FColor colorMap(const Intersection &intersection,
+                       const G4ThreeVector &forward, const VColor &base,
+                       const G4ThreeVector &position, double shade_scale,
+                       bool is_clipping_plane) {
     const G4ThreeVector &normal = intersection.normal;
 
     // Opposed normals (i.e, for transp backsides) are mirrored
@@ -395,9 +394,7 @@ static QRgb colorMap(const Intersection &intersection,
             cx *= 0.75;
     }
 
-    return VColor::fromRgbF(cx * base.redF(), cx * base.greenF(),
-                            cx * base.blueF())
-        .rgb();
+    return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF());
 }
 
 void countTree(const Element &e, int &treedepth, int &nelements) {
@@ -433,7 +430,7 @@ static inline double iproject(const G4ThreeVector &point,
 static void trackColors(const TrackHeader &h, const TrackPoint &pa,
                         const TrackPoint &pb, const G4ThreeVector &a,
                         const G4ThreeVector &b, const G4ThreeVector &forward,
-                        QRgb &ca, QRgb &cb, float &wa, float &wb) {
+                        FColor &ca, FColor &cb, float &wa, float &wb) {
     G4ThreeVector normal = b - a;
     double coa = (normal * forward) / normal.mag();
 
@@ -442,11 +439,11 @@ static void trackColors(const TrackHeader &h, const TrackPoint &pa,
 
     double aloge = std::log10(double(pa.energy)) / 2.0;
     double patime = aloge - std::floor(aloge);
-    ca = QColor::fromHsvF(patime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
+    ca = FColor(QColor::fromHsvF(patime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb());
 
     double bloge = std::log10(double(pb.energy)) / 2.0;
     double pbtime = bloge - std::floor(bloge);
-    cb = QColor::fromHsvF(pbtime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb();
+    cb = FColor(QColor::fromHsvF(pbtime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb());
 
     if (h.ptype == 11) {
         // e-
@@ -553,7 +550,8 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
         }
     }
 
-    QRgb col = (line && !rayoverride) ? qRgba(0, 0, 0, 255) : trackcol;
+    FColor col =
+        (line && !rayoverride) ? FColor(0., 0., 0., 1.f) : FColor(trackcol);
     // p indicates the first volume to use the color rule on
     // (p<0 indicates the line dominates)
     for (int k = p; k >= 0; --k) {
@@ -561,19 +559,15 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
         const VColor &base_color =
             d.color_table[ray.intersections[k].elem->ccode];
         const G4ThreeVector &intpos = initPoint(pt, d) + ints[k].dist * forward;
-        QRgb altcol = colorMap(ints[k], forward, base_color, intpos,
-                               1. / d.scale, (k == 0 && ray.front_clipped));
+        FColor altcol = colorMap(ints[k], forward, base_color, intpos,
+                                 1. / d.scale, (k == 0 && ray.front_clipped));
         double e = (d.force_opaque ? 1. : ray.intersections[k].elem->alpha);
-        double f = (1. - e);
         if (!ray.intersections[k].elem->visible) {
             continue;
         }
-        col = qRgba(int(e * qRed(altcol) + f * qRed(col)),
-                    int(e * qGreen(altcol) + f * qGreen(col)),
-                    int(e * qBlue(altcol) + f * qBlue(col)),
-                    int(e * qAlpha(altcol) + f * qAlpha(col)));
+        col = FColor::blend(altcol, col, 1 - e);
     }
-    return col;
+    return col.rgba();
 }
 
 void RenderRayTask::run(Context *ctx) const {
@@ -596,9 +590,9 @@ void RenderRayTask::run(Context *ctx) const {
                ctx->image->height(), w, h);
     }
 #if 0
-		QTime t = QTime::currentTime();
-		qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
-			   nslices);
+        QTime t = QTime::currentTime();
+        qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
+               nslices);
 #endif
 
     int mind = w > h ? h : w;
@@ -699,7 +693,8 @@ void RenderTrackTask::run(Context *ctx) const {
             iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
 
         // Fast clipping for when the track is way out of view
-        int rr = int(2 * mind * header.bballradius / d.scale);
+        float radius = 20.f;
+        int rr = int(2 * mind * radius / d.scale);
         if (sdx + rr <= xl || sdx - rr > xh || sdy + rr <= yl ||
             sdy - rr > yh) {
             continue;
@@ -753,7 +748,7 @@ void RenderTrackTask::run(Context *ctx) const {
             }
 
             float w1, w2;
-            QRgb c1, c2;
+            FColor c1, c2;
             trackColors(header, ep, sp, epos, spos, d.orientation.rowX(), c1,
                         c2, w1, w2);
 
@@ -762,12 +757,9 @@ void RenderTrackTask::run(Context *ctx) const {
                 float y = iy + s * dy;
 
                 float b = n >= 2 ? s / float(n - 1) : 0.5f;
-                float bc = 1.f - b;
-                double off = eoff * double(bc) + soff * double(b);
+                double off = eoff * double(1.f - b) + soff * double(b);
                 float rws = w1 * (1.0f - b) + w2 * b;
-                QRgb col = qRgb(int(bc * qRed(c1) + b * qRed(c2)),
-                                int(bc * qGreen(c1) + b * qGreen(c2)),
-                                int(bc * qBlue(c1) + b * qBlue(c2)));
+                FColor col = FColor::blend(c1, c2, b);
 
                 // TODO: move to the merger phase, & multithread that!
                 // (so, instead, just draw the center point?)
@@ -787,7 +779,7 @@ void RenderTrackTask::run(Context *ctx) const {
                         int sidx = ddy * w + ddx;
                         if (dists[sidx] > off) {
                             dists[sidx] = off;
-                            colors[sidx] = col;
+                            colors[sidx] = col.rgba();
                         }
                     }
                 }
@@ -847,7 +839,7 @@ static void setupBallRadii(TrackHeader *headers, const TrackPoint *points,
             G4ThreeVector pj(tj.x, tj.y, tj.z);
             radius = std::max(radius, (pj - p0).mag());
         }
-        h.bballradius = radius;
+        //        h.bballradius = radius;
     }
 }
 
@@ -897,8 +889,6 @@ TrackData::TrackData(const char *filename) {
         j++;
     }
     free(buf);
-    //    pd->tree = new LineCollection(headers, points, ntracks);
-    pd->tree = NULL;
     setupBallRadii(headers, points, ntracks);
 
     data = QSharedDataPointer<TrackPrivateData>(pd);
@@ -1077,8 +1067,6 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
     TrackPoint *points = pd->points;
     memcpy(headers, ch.data(), sizeof(TrackHeader) * qtracks);
     memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
-    //    pd->tree = new LineCollection(headers, points, qtracks);
-    pd->tree = NULL;
     setupBallRadii(headers, points, qtracks);
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
@@ -1108,12 +1096,6 @@ const TrackPoint *TrackData::getPoints() const {
         return NULL;
     }
     return data.constData()->points;
-}
-const LineCollection *TrackData::getTree() const {
-    if (!data) {
-        return NULL;
-    }
-    return data.constData()->tree;
 }
 
 void TrackData::calcTimeBounds(double &lower, double &upper) const {
@@ -1255,7 +1237,6 @@ TrackPrivateData::TrackPrivateData(size_t itracks, size_t ipoints) {
     npoints = ipoints;
     headers = new TrackHeader[ntracks];
     points = new TrackPoint[npoints];
-    tree = NULL;
 }
 TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
     : QSharedData(other), ntracks(other.ntracks), npoints(other.npoints),
@@ -1265,9 +1246,6 @@ TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
 TrackPrivateData::~TrackPrivateData() {
     delete[] headers;
     delete[] points;
-    if (tree) {
-        delete tree;
-    }
 }
 
 static bool sortbyname(const Element &l, const Element &r) {
