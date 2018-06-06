@@ -33,6 +33,7 @@ private:
 
     RenderGraph graph;
 
+    QImage cached;
     QSharedPointer<QImage> back;
     int back_scale_factor;
     QElapsedTimer back_request_timer;

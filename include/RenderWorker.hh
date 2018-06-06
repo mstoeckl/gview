@@ -162,26 +162,32 @@ typedef struct ViewData_s {
     int level_of_detail;
 } ViewData;
 
-class RenderRayTask : public RenderGraphTask {
+class RenderRayTask : public RenderGraphNode {
 public:
-    RenderRayTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
-    virtual void run();
-};
-
-class RenderTrackTask : public RenderGraphTask {
-public:
-    RenderTrackTask(QRect p, int shard, RenderGraph &h,
-                    QSharedPointer<Context> c, int id);
-    virtual void run();
+    RenderRayTask(QRect p);
+    virtual void run(Context *) const;
 
 private:
+    QRect domain;
+};
+
+class RenderTrackTask : public RenderGraphNode {
+public:
+    RenderTrackTask(QRect p, int shard);
+    virtual void run(Context *) const;
+
+private:
+    QRect domain;
     int shard;
 };
 
-class RenderMergeTask : public RenderGraphTask {
+class RenderMergeTask : public RenderGraphNode {
 public:
-    RenderMergeTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
-    virtual void run();
+    RenderMergeTask(QRect p);
+    virtual void run(Context *) const;
+
+private:
+    QRect domain;
 };
 
 void countTree(const Element &e, int &treedepth, int &nelements);

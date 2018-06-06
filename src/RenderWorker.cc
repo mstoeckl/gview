@@ -471,9 +471,7 @@ static void trackColors(const TrackHeader &h, const TrackPoint &pa,
     }
 }
 
-RenderRayTask::RenderRayTask(QRect p, RenderGraph &h, QSharedPointer<Context> c,
-                             int i)
-    : RenderGraphTask(p, h, c, i) {}
+RenderRayTask::RenderRayTask(QRect p) : RenderGraphNode("ray"), domain(p) {}
 
 QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
                   const ViewData &d, int &iter, ElemMutables *mutables,
@@ -584,22 +582,25 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
     return col;
 }
 
-void RenderRayTask::run() {
-    const ViewData &d = *ctx->viewdata;
+void RenderRayTask::run(Context *ctx) const {
+    const ViewData *d = ctx->viewdata;
 
-    if (!d.elements.solid) {
+    if (!d->elements.solid) {
         return;
     }
     int treedepth;
     int nelements;
-    countTree(d.elements, treedepth, nelements);
+    countTree(d->elements, treedepth, nelements);
     // ^ TODO: allocate traceray buffers to match!
     if (treedepth > 10) {
         qFatal("Excessive tree depth, fatal!");
     }
-    QImage *next = &(*ctx->image);
-    int w = next->width();
-    int h = next->height();
+    int w = ctx->w;
+    int h = ctx->h;
+    if (ctx->image->width() != w || ctx->image->height() != h) {
+        qFatal("Image size mismatch, %d %d vs %d %d", ctx->image->width(),
+               ctx->image->height(), w, h);
+    }
 #if 0
 		QTime t = QTime::currentTime();
 		qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
@@ -608,10 +609,10 @@ void RenderRayTask::run() {
 
     int mind = w > h ? h : w;
 
-    int xl = pixels.left();
-    int xh = pixels.right();
-    int yl = pixels.top();
-    int yh = pixels.bottom();
+    int xl = domain.left();
+    int xh = domain.right();
+    int yl = domain.top();
+    int yh = domain.bottom();
 
     const G4double radius = 0.8 / mind;
     // Zero construct by default
@@ -620,10 +621,10 @@ void RenderRayTask::run() {
 
     const FlatData *flatData = &ctx->flatData;
 
-    const G4ThreeVector &forward = forwardDirection(d.orientation);
+    const G4ThreeVector &forward = forwardDirection(d->orientation);
 
     for (int i = yl; i < yh; i++) {
-        QRgb *pts = reinterpret_cast<QRgb *>(next->scanLine(i));
+        QRgb *pts = reinterpret_cast<QRgb *>(ctx->image->scanLine(i));
         for (int j = xl; j < xh; j++) {
             if (ctx->abort_flag) {
                 delete[] mutables;
@@ -636,40 +637,35 @@ void RenderRayTask::run() {
             G4double trackdist = flatData->distances[sidx];
 
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
-            pts[j] = colorAtPoint(pt, radius, forward, d, iter, mutables,
-                                  trackcol, trackdist);
+            QRgb color = colorAtPoint(pt, radius, forward, *d, iter, mutables,
+                                      trackcol, trackdist);
+            pts[j] = color;
         }
-        QMetaObject::invokeMethod(&home, "progUpdate", Qt::QueuedConnection,
-                                  Q_ARG(int, yh - yl + 1),
-                                  Q_ARG(int, ctx->renderno));
     }
-    if (d.level_of_detail <= -1) {
-        recursivelyPrintNCalls(d.elements, mutables);
+    if (d->level_of_detail <= -1) {
+        recursivelyPrintNCalls(d->elements, mutables);
     }
 
     delete[] mutables;
-    QMetaObject::invokeMethod(&home, "queueNext", Qt::QueuedConnection,
-                              Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
 }
 
-RenderTrackTask::RenderTrackTask(QRect p, int s, RenderGraph &h,
-                                 QSharedPointer<Context> c, int i)
-    : RenderGraphTask(p, h, c, i), shard(s) {}
+RenderTrackTask::RenderTrackTask(QRect p, int s)
+    : RenderGraphNode("track"), domain(p), shard(s) {}
 
-void RenderTrackTask::run() {
+void RenderTrackTask::run(Context *ctx) const {
     if (ctx->abort_flag) {
         return;
     }
 
-    int xl = pixels.left();
-    int xh = pixels.right();
-    int yl = pixels.top();
-    int yh = pixels.bottom();
+    int xl = domain.left();
+    int xh = domain.right();
+    int yl = domain.top();
+    int yh = domain.bottom();
 
     double *dists = ctx->partData[shard].distances;
     QRgb *colors = ctx->partData[shard].colors;
-    int w = ctx->image->width();
-    int h = ctx->image->height();
+    int w = ctx->w;
+    int h = ctx->h;
     const ViewData &d = *ctx->viewdata;
     const TrackData &t = d.tracks;
 
@@ -691,14 +687,10 @@ void RenderTrackTask::run() {
     size_t tfrom = (ntracks * shard) / ctx->nthreads;
     size_t tupto = (ntracks * (shard + 1)) / ctx->nthreads;
 
+    ctx->partData[shard].blank = true;
     for (size_t i = tfrom; i < tupto; i++) {
         if (ctx->abort_flag) {
             return;
-        }
-        if (i % ((ntracks / 20) + 1) == 0) {
-            QMetaObject::invokeMethod(&home, "progUpdate", Qt::QueuedConnection,
-                                      Q_ARG(int, 20 > ntracks ? ntracks : 20),
-                                      Q_ARG(int, ctx->renderno));
         }
 
         const TrackHeader &header = headers[i];
@@ -718,6 +710,8 @@ void RenderTrackTask::run() {
             sdy - rr > yh) {
             continue;
         }
+
+        ctx->partData[shard].blank = false;
 
         for (int j = 1; j < header.npts; j++) {
             // Adopt previous late point as early point
@@ -806,35 +800,35 @@ void RenderTrackTask::run() {
             }
         }
     }
-
-    QMetaObject::invokeMethod(&home, "queueNext", Qt::QueuedConnection,
-                              Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
 }
 
-RenderMergeTask::RenderMergeTask(QRect p, RenderGraph &h,
-                                 QSharedPointer<Context> c, int i)
-    : RenderGraphTask(p, h, c, i) {}
+RenderMergeTask::RenderMergeTask(QRect p)
+    : RenderGraphNode("merge"), domain(p) {}
 
-void RenderMergeTask::run() {
+void RenderMergeTask::run(Context *ctx) const {
     // Minimum merge over all partData
     Context &c = *ctx;
     if (c.abort_flag) {
         return;
     }
 
-    int xl = pixels.left();
-    int xh = pixels.right();
-    int yl = pixels.top();
-    int yh = pixels.bottom();
-    int w = c.image->width();
+    int xl = domain.left();
+    int xh = domain.right();
+    int yl = domain.top();
+    int yh = domain.bottom();
+    int w = ctx->w;
     for (int y = yl; y < yh; y++) {
         for (int x = xl; x < xh; x++) {
             // Scale up to be beyond anything traceRay produces
-            c.flatData.distances[y * w + x] = 5 * kInfinity;
+            c.flatData.distances[y * w + x] = 4 * kInfinity;
+            c.flatData.colors[y * w + x] = qRgba(255, 255, 255, 0.);
         }
     }
 
     for (int k = 0; k < c.nthreads; k++) {
+        if (c.partData[k].blank) {
+            continue;
+        }
         for (int y = yl; y < yh; y++) {
             for (int x = xl; x < xh; x++) {
                 int i = y * w + x;
@@ -845,9 +839,6 @@ void RenderMergeTask::run() {
             }
         }
     }
-
-    QMetaObject::invokeMethod(&home, "queueNext", Qt::QueuedConnection,
-                              Q_ARG(int, this->id), Q_ARG(int, ctx->renderno));
 }
 
 static void setupBallRadii(TrackHeader *headers, const TrackPoint *points,

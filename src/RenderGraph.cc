@@ -3,22 +3,50 @@
 
 #include <QElapsedTimer>
 #include <QImage>
+#include <QSignalMapper>
 #include <QThreadPool>
 
-Context::Context(const ViewData &d, QSharedPointer<QImage> im, int nt) {
+class RenderGraphHelper : public QRunnable {
+public:
+    RenderGraphHelper(QSharedPointer<RenderGraphNode> n,
+                      QSharedPointer<Context> c, RenderGraph *h)
+        : home(h), node(n), context(c) {
+        setAutoDelete(true);
+    }
+    virtual ~RenderGraphHelper() {}
+
+    virtual void run() {
+        node->run(&*context);
+        if (context->abort_flag) {
+            return;
+        }
+        node->status = RenderGraphNode::kComplete;
+        QMetaObject::invokeMethod(home, "queueNext", Qt::QueuedConnection,
+                                  Q_ARG(int, context->renderno));
+    }
+
+private:
+    RenderGraph *home;
+    QSharedPointer<RenderGraphNode> node;
+    QSharedPointer<Context> context;
+};
+
+Context::Context(const ViewData &d, QSharedPointer<QImage> im, int nt,
+                 int seqno)
+    : renderno(seqno), nthreads(nt), w(im->width()), h(im->height()) {
     viewdata = new ViewData(d);
-    int w = im->width(), h = im->height();
     image = im;
     abort_flag = false;
-    nthreads = nt;
 
     partData = new FlatData[nthreads];
     for (int k = 0; k < nthreads; k++) {
         partData[k].colors = new QRgb[w * h];
         partData[k].distances = new double[w * h];
+        partData[k].blank = false;
     }
     flatData.colors = new QRgb[w * h];
     flatData.distances = new double[w * h];
+    flatData.blank = false;
 }
 
 Context::~Context() {
@@ -28,8 +56,8 @@ Context::~Context() {
         delete[] partData[k].distances;
     }
     delete[] partData;
-    delete flatData.colors;
-    delete flatData.distances;
+    delete[] flatData.colors;
+    delete[] flatData.distances;
 }
 
 RenderGraph::RenderGraph(int nthreads) {
@@ -37,8 +65,6 @@ RenderGraph::RenderGraph(int nthreads) {
     pool->setMaxThreadCount(nthreads);
 
     timer = new QElapsedTimer();
-
-    qRegisterMetaType<RenderGraphTask *>("RenderGraphTask*");
 
     seqno = 0;
 }
@@ -48,10 +74,9 @@ RenderGraph::~RenderGraph() {
     if (!context.isNull()) {
         context->abort_flag = true;
     }
-    // Reset graph
-    tasks = QMap<int, Task>();
+    // Reset graph; nodes are reference counted
+    tasks.clear();
     context = QSharedPointer<Context>();
-    seqno++;
     pool->deleteLater();
 
     delete timer;
@@ -65,83 +90,62 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
 
     int nthreads = pool->maxThreadCount();
 
-    context = QSharedPointer<Context>(new Context(vd, im, nthreads));
-    context->renderno = seqno;
+    context = QSharedPointer<Context>(new Context(vd, im, nthreads, seqno));
+    seqno++;
+
     progress = 0.f;
 
-    tasks = QMap<int, Task>();
+    tasks.clear();
 
-    int Ny = pool->maxThreadCount();
-    int Nx = pool->maxThreadCount();
-    int z = 0;
-    for (int i = 0; i < Ny; i++) {
-        // Vertical slice (tracks)
-        Task g;
-        g.layer = 0;
-        g.pxdm = QRect(0, 0, w + 1, h + 1);
-        g.reqs = QVector<int>();
-        g.shard = i;
-        g.inprogress = false;
-        tasks[z] = g;
-        z++;
-    }
+    QRect fullWindow = QRect(0, 0, w + 1, h + 1);
+    QVector<QRect> panes;
 
-    Task tm;
-    tm.layer = 1;
-    tm.shard = 0;
-    tm.pxdm = QRect(0, 0, w + 1, h + 1);
-    tm.reqs = QVector<int>();
-    for (int i = 0; i < Ny; i++) {
-        tm.reqs.push_back(i);
-    }
-    tm.inprogress = false;
-    int zstar = z;
-    tasks[zstar] = tm;
-    z++;
-
+    const int Ny = 2 * nthreads;
+    const int Nx = 2;
     for (int i = 0; i < Ny; i++) {
         int yl = (i * h / Ny);
         int yh = i == Ny - 1 ? h : ((i + 1) * h / Ny);
         for (int k = 0; k < Nx; k++) {
-            // Horizontal slice (objects)
             int xl = (k * w / Nx);
             int xh = k == Nx - 1 ? w : ((k + 1) * w / Nx);
-            Task j;
-            j.layer = 2;
-            j.pxdm = QRect(xl, yl, xh - xl + 1, yh - yl + 1);
-            j.reqs = QVector<int>();
-            j.reqs.append(zstar);
-            j.inprogress = false;
-            tasks[z] = j;
-            z++;
+            panes.append(QRect(xl, yl, xh - xl + 1, yh - yl + 1));
         }
     }
-    QVector<int> seeds;
-    for (int i = 0; i < tasks.size(); i++) {
-        const Task &j = tasks[i];
-        if (j.reqs.size() == 0) {
-            seeds.append(i);
+
+    if (1) {
+        // Unbuffered mode!
+        RenderMergeTask *merge = new RenderMergeTask(fullWindow);
+        for (int shard = 0; shard < nthreads; shard++) {
+            RenderTrackTask *track = new RenderTrackTask(fullWindow, shard);
+            merge->reqs.push_back(track);
+            tasks.push_back(QSharedPointer<RenderGraphNode>(track));
         }
+        tasks.push_back(QSharedPointer<RenderGraphNode>(merge));
+        for (int i = 0; i < panes.size(); i++) {
+            RenderRayTask *ray = new RenderRayTask(panes[i]);
+            ray->reqs.push_back(merge);
+            tasks.push_back(QSharedPointer<RenderGraphNode>(ray));
+        }
+    } else {
+        // Buffered mode!
     }
-    // Tasks may complete instantaneously, so we select first, start second
-    for (int i : seeds) {
-        doQueue(i);
+
+    for (QSharedPointer<RenderGraphNode> j : tasks) {
+        j->status = RenderGraphNode::kWaiting;
+
+        if (j->reqs.size() == 0) {
+            doQueue(j);
+        }
     }
 }
 
-void RenderGraph::doQueue(int i) {
-    Task &j = tasks[i];
-    RenderGraphTask *r;
-    if (j.layer == 0) {
-        r = new RenderTrackTask(j.pxdm, j.shard, *this, context, i);
-    } else if (j.layer == 1) {
-        r = new RenderMergeTask(j.pxdm, *this, context, i);
+void RenderGraph::doQueue(QSharedPointer<RenderGraphNode> node) {
+    node->status = RenderGraphNode::kActive;
+    if (1) {
+        pool->start(new RenderGraphHelper(node, context, this));
     } else {
-        r = new RenderRayTask(j.pxdm, *this, context, i);
+        RenderGraphHelper(node, context, this).run();
     }
-    j.inprogress = true;
-    // Blocking start
-    pool->start(r);
 }
 
 void RenderGraph::abort() {
@@ -151,72 +155,64 @@ void RenderGraph::abort() {
     // Fast terminate currently running actions
     context->abort_flag = true;
 
-    // Reset graph
-    tasks = QMap<int, Task>();
+    // Reset graph; nodes are reference counted
+    tasks.clear();
     context = QSharedPointer<Context>();
-    seqno++;
 
     emit aborted();
 }
 
-void RenderGraph::queueNext(int taskid, int rno) {
-    if (context.isNull() || rno != context->renderno || context->abort_flag) {
+void RenderGraph::queueNext(int renderno) {
+    if (context.isNull() || renderno != context->renderno) {
         return;
     }
-    // Removing task marks as complete
-    tasks.remove(taskid);
-    QVector<int> nseeds;
-    for (int i : tasks.keys()) {
+
+    QVector<QSharedPointer<RenderGraphNode>> nseeds;
+    int n_incomplete = 0;
+    for (QSharedPointer<RenderGraphNode> m : tasks) {
+        if (m->status != RenderGraphNode::kComplete) {
+            n_incomplete++;
+        }
+
+        if (m->status != RenderGraphNode::kWaiting) {
+            continue;
+        }
+
         bool reqsleft = false;
-        for (int j : tasks[i].reqs) {
-            if (tasks.contains(j)) {
+        for (RenderGraphNode *p : m->reqs) {
+            if (p->status != RenderGraphNode::kComplete) {
                 reqsleft = true;
                 break;
             }
         }
-        if (!reqsleft && !tasks[i].inprogress) {
-            nseeds.append(i);
-            break;
+        if (!reqsleft) {
+            nseeds.append(m);
         }
     }
 
-    if (nseeds.size() <= 0 && tasks.size() <= 0) {
+    if (n_incomplete <= 0) {
         // Reset graph
-        tasks = QMap<int, Task>();
         context = QSharedPointer<Context>();
-        seqno++;
 
         qreal elapsed = 1e-9 * timer->nsecsElapsed();
         emit done(elapsed);
     } else {
-        for (int z : nseeds) {
-            doQueue(z);
+        for (QSharedPointer<RenderGraphNode> t : nseeds) {
+            doQueue(t);
         }
     }
-}
 
-void RenderGraph::progUpdate(int steps, int rno) {
-    if (context.isNull() || rno != context->renderno || context->abort_flag) {
-        return;
-    }
-
-    // TODO: figure out ratcheting when
-    // tasks complete in an efficient way...
+    // Update progress
     float op = progress;
-    progress +=
-        1. / (steps * pool->maxThreadCount() * (1 + pool->maxThreadCount()));
+    progress += 1. / tasks.size();
     if (int(100 * op) != int(100 * progress)) {
         emit progressed(int(100 * progress));
     }
 }
 
-RenderGraphTask::RenderGraphTask(QRect p, RenderGraph &h,
-                                 QSharedPointer<Context> c, int i)
-    : home(h) {
-    pixels = p;
-    ctx = c;
-    id = i;
-    this->setAutoDelete(true);
+RenderGraphNode::RenderGraphNode(const char *type) {
+    status = kWaiting;
+    name = type;
 }
 
-RenderGraphTask::~RenderGraphTask() {}
+RenderGraphNode::~RenderGraphNode() {}

@@ -10,26 +10,48 @@
 
 class QElapsedTimer;
 class QThreadPool;
-class RenderGraphTask;
+class Context;
 struct ViewData_s;
 typedef struct ViewData_s ViewData;
+
+class RenderGraphNode {
+public:
+    RenderGraphNode(const char *type);
+    virtual ~RenderGraphNode();
+
+    typedef enum { kWaiting, kActive, kComplete } WorkStatus;
+
+    virtual void run(Context *c) const = 0;
+
+public:
+    QVector<RenderGraphNode *> reqs;
+    volatile WorkStatus status;
+    const char *name;
+};
 
 typedef struct {
     QRgb *colors;
     double *distances;
+    bool blank;
 } FlatData;
 
 class Context {
 public:
-    Context(const ViewData &d, QSharedPointer<QImage> i, int nt);
+    Context(const ViewData &d, QSharedPointer<QImage> i, int nt, int seqno);
     ~Context();
+    const int renderno;
+    const int nthreads;
+    const int w, h;
+
     const ViewData *viewdata;
     FlatData *partData;
     FlatData flatData;
     QSharedPointer<QImage> image;
-    int renderno;
-    int nthreads;
+
     volatile int abort_flag;
+
+private:
+    Context(const Context &) = delete;
 };
 
 class RenderGraph : public QObject {
@@ -50,13 +72,12 @@ signals:
     void progressed(int);
 
 protected slots:
-    void queueNext(int, int);
-    void progUpdate(int, int);
+    void queueNext(int);
 
     friend class RenderGraphTask;
 
 private:
-    void doQueue(int);
+    void doQueue(QSharedPointer<RenderGraphNode> node);
 
     QSharedPointer<Context> context;
     QElapsedTimer *timer;
@@ -64,24 +85,5 @@ private:
     float progress;
     int seqno;
 
-    typedef struct {
-        QVector<int> reqs;
-        QRect pxdm;
-        int shard;
-        int layer;
-        bool inprogress;
-    } Task;
-    QMap<int, Task> tasks;
-};
-
-class RenderGraphTask : public QRunnable {
-public:
-    RenderGraphTask(QRect p, RenderGraph &h, QSharedPointer<Context> c, int id);
-    virtual ~RenderGraphTask();
-    int id;
-
-protected:
-    QRect pixels;
-    RenderGraph &home;
-    QSharedPointer<Context> ctx;
+    QVector<QSharedPointer<RenderGraphNode>> tasks;
 };

@@ -93,8 +93,8 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     : QWidget(), currView(v), trackdata(tdr), graph(threadCount()) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
-    back = QSharedPointer<QImage>(new QImage(50, 50, QImage::Format_RGB32));
-    back->fill(QColor::fromHslF(0.3, 0.5, 0.7));
+    cached = QImage(50, 50, QImage::Format_RGB32);
+    cached.fill(QColor::fromHslF(0.3, 0.5, 0.7));
     back_scale_factor = 1;
     back_request_timer = QElapsedTimer();
 
@@ -178,11 +178,10 @@ void RenderWidget::completed(qreal time_secs) {
         arrived = aCompl;
     }
 
-    *back = fastIntegerScale(*back, back_scale_factor);
+    cached = fastIntegerScale(*back, back_scale_factor);
     this->repaint();
 
-    int scale = std::max(width() / back->width(), height() / back->height());
-    if (scale == immediate_lod) {
+    if (back_scale_factor == immediate_lod) {
         /* Only change immediate_lod via its result */
         qreal time_per_pixel = time_secs / (back->width() * back->height());
         qreal target_pixels = GOAL_FRAME_TIME / time_per_pixel;
@@ -216,8 +215,8 @@ void RenderWidget::paintEvent(QPaintEvent *) {
 
     QPainter q(this);
     QPoint corner =
-        this->rect().center() - QPoint(back->width() / 2, back->height() / 2);
-    q.drawImage(corner, *back);
+        this->rect().center() - QPoint(cached.width() / 2, cached.height() / 2);
+    q.drawImage(corner, cached);
     if (arrived == aCompl) {
         arrived = aThere;
     }
