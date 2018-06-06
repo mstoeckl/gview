@@ -530,23 +530,22 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
                (coord.y() - h / 2.) / (2. * mind));
     const int M = 50;
     Intersection ints[M + 1];
-    const Element *elems[M];
     int td, nelem;
     countTree(vd.elements, td, nelem);
     Q_UNUSED(td);
     ElemMutables *mutables = new ElemMutables[nelem]();
-    int m =
+    RayPoint rpt =
         traceRay(initPoint(pt, vd), forwardDirection(vd.orientation),
-                 vd.elements, vd.clipping_planes, elems, ints, M, 1, mutables);
+                 vd.elements, vd.clipping_planes, ints, M, 1, mutables);
     delete[] mutables;
     rayiter++;
-    m = compressTraces(elems, ints, m);
+    compressTraces(&rpt);
     ray_table->clear();
     ray_list.clear();
-    for (int j = 0; j < m; j++) {
-        QString name(elems[j]->name.data());
+    for (int j = 0; j < rpt.N; j++) {
+        QString name(rpt.intersections[j].elem->name.data());
         ray_table->addItem(name);
-        ray_list.push_back(elems[j]);
+        ray_list.push_back(rpt.intersections[j].elem);
     }
 
     if (!clicked)

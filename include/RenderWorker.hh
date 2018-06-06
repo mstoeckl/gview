@@ -17,6 +17,7 @@ class G4Material;
 class G4VSolid;
 class QProgressDialog;
 
+typedef struct Element_s Element;
 typedef struct ViewData_s ViewData;
 
 typedef struct {
@@ -25,11 +26,33 @@ typedef struct {
     // Keep n*x >= o; Drop n*x < o
 } Plane;
 
+class CompactNormal {
+public:
+    CompactNormal() : x(0.), y(0.), z(0.) {}
+    CompactNormal(G4ThreeVector n) : x(n.x()), y(n.y()), z(n.z()) {}
+    operator G4ThreeVector() const { return G4ThreeVector(x, y, z); }
+
+    float x;
+    float y;
+    float z;
+};
+
 typedef struct {
-    G4ThreeVector normal;
+    // The normal at the intersection
+    CompactNormal normal;
+    // Distance from ray start to intersection
     G4double dist;
-    bool is_clipping_plane;
+    // Volume behind the intersection
+    const Element *elem;
 } Intersection;
+
+typedef struct {
+    Intersection *intersections;
+    int N;
+    // TODO: record clipping plane index
+    bool front_clipped;
+    bool back_clipped;
+} RayPoint;
 
 typedef struct {
     int npts;
@@ -125,7 +148,7 @@ typedef struct Element_s {
     //    mutable int niter;
     //    mutable double abs_dist;
 
-    std::vector<struct Element_s> children;
+    std::vector<Element> children;
 } Element;
 
 // Very simple and fast color handling
@@ -193,12 +216,12 @@ private:
 void countTree(const Element &e, int &treedepth, int &nelements);
 G4ThreeVector forwardDirection(const G4RotationMatrix &);
 G4ThreeVector initPoint(const QPointF &, const ViewData &);
-int traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
-             const Element &root, const std::vector<Plane> &clipping_planes,
-             const Element *hits[], Intersection ints[], int maxhits,
-             long iteration, ElemMutables mutables[],
-             bool first_visible_hit = false);
-int compressTraces(const Element *hits[], Intersection ints[], int m);
+RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
+                  const Element &root,
+                  const std::vector<Plane> &clipping_planes,
+                  Intersection *intersections, int maxhits, long iteration,
+                  ElemMutables mutables[], bool first_visible_hit = false);
+void compressTraces(RayPoint *pt);
 
 class G4VPhysicalVolume;
 Element convertCreation(const G4VPhysicalVolume *phys,

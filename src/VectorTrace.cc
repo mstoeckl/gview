@@ -44,65 +44,57 @@ FColor FColor::blend(const FColor &a, const FColor &b, float s) {
                   t * a.a + s * b.a);
 }
 
-RenderPoint::RenderPoint() {
-    // Initialize to nan to break use when uninitialized
-    double nan = std::numeric_limits<double>::quiet_NaN();
-    coords = QPointF(nan, nan);
-    intersections = NULL;
-    elements = NULL;
-    nhits = 0;
+static RayPoint dummy_point() {
+    RayPoint r;
+    r.N = 0;
+    r.front_clipped = false;
+    r.back_clipped = false;
+    r.intersections = NULL;
+    return r;
+}
+static RayPoint copy_alloc_point(RayPoint ray) {
+    if (ray.intersections) {
+        Intersection *oi = ray.intersections;
+        ray.intersections = new Intersection[ray.N];
+        for (int i = 0; i < ray.N; i++) {
+            ray.intersections[i] = oi[i];
+        }
+    }
+    return ray;
+}
+
+RenderPoint::RenderPoint()
+    : coords(std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::quiet_NaN()),
+      ray(dummy_point()) {
     ideal_color = FColor();
     region_class = -1;
     show_point = true;
 }
-RenderPoint::RenderPoint(QPointF spot, int inhits, const Intersection *srcints,
-                         const Element **srcelems) {
-    coords = spot;
-    nhits = inhits;
-    elements = new Element *[nhits];
-    intersections = new Intersection[nhits + 1];
-    memcpy(elements, srcelems, nhits * sizeof(Element *));
-    memcpy(intersections, srcints, (nhits + 1) * sizeof(Intersection));
+RenderPoint::RenderPoint(QPointF spot, const RayPoint &rpt)
+    : coords(spot), ray(copy_alloc_point(rpt)) {
     ideal_color = FColor();
     region_class = -1;
     subregion_class = -1;
     show_point = true;
 }
 RenderPoint::~RenderPoint() {
-    if (elements)
-        delete[] elements;
-    if (intersections)
-        delete[] intersections;
+    if (ray.intersections)
+        delete[] ray.intersections;
 }
-RenderPoint::RenderPoint(const RenderPoint &other) {
-    nhits = other.nhits;
-    coords = other.coords;
+RenderPoint::RenderPoint(const RenderPoint &other)
+    : coords(other.coords), ray(copy_alloc_point(other.ray)) {
     ideal_color = other.ideal_color;
     region_class = other.region_class;
     subregion_class = other.subregion_class;
     show_point = other.show_point;
-    if (other.intersections) {
-        intersections = new Intersection[nhits + 1];
-        memcpy(intersections, other.intersections,
-               (nhits + 1) * sizeof(Intersection));
-    } else {
-        intersections = NULL;
-    }
-    if (other.elements) {
-        elements = new Element *[nhits];
-        memcpy(elements, other.elements, nhits * sizeof(Element *));
-    } else {
-        elements = NULL;
-    }
 }
 RenderPoint &RenderPoint::operator=(RenderPoint copy_of_other) {
     swap(copy_of_other);
     return *this;
 }
 void RenderPoint::swap(RenderPoint &other) {
-    std::swap(intersections, other.intersections);
-    std::swap(elements, other.elements);
-    std::swap(nhits, other.nhits);
+    std::swap(ray, other.ray);
     std::swap(region_class, other.region_class);
     std::swap(subregion_class, other.subregion_class);
     std::swap(coords, other.coords);
@@ -274,57 +266,60 @@ void VectorTracer::reset(bool transp, const QSize &size,
 }
 int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
     // Dummy points always match each other
-    if (!a.intersections && !b.intersections)
+    const RayPoint &ra = a.ray;
+    const RayPoint &rb = b.ray;
+
+    if (!ra.intersections && !rb.intersections)
         return -1;
 
     if (!transparent_volumes) {
         // Consider only the first disagreement in visible volumes
         // Q: should compressTraces automatically vanish invisible volumes?
         // and use a null element gap instead?
-        if (!a.intersections || !b.intersections)
+        if (!ra.intersections || !rb.intersections)
             return 0;
-        Element *first_a = NULL, *first_b = NULL;
+        const Element *first_a = NULL, *first_b = NULL;
         Intersection *first_ia = NULL, *first_ib = NULL;
-        for (int i = 0; i < a.nhits; i++) {
-            if (a.elements[i]->visible) {
-                first_a = a.elements[i];
-                first_ia = &a.intersections[i];
+        for (int i = 0; i < ra.N; i++) {
+            if (ra.intersections[i].elem->visible) {
+                first_a = ra.intersections[i].elem;
+                first_ia = &ra.intersections[i];
                 break;
             }
         }
-        for (int i = 0; i < b.nhits; i++) {
-            if (b.elements[i]->visible) {
-                first_b = b.elements[i];
-                first_ib = &b.intersections[i];
+        for (int i = 0; i < rb.N; i++) {
+            if (rb.intersections[i].elem->visible) {
+                first_b = rb.intersections[i].elem;
+                first_ib = &rb.intersections[i];
                 break;
             }
         }
         if (first_a != first_b) {
             return 0;
         }
-        if (first_ia && first_ib &&
-            first_ia->is_clipping_plane != first_ib->is_clipping_plane) {
+        if (first_ia && first_ib && ra.front_clipped != rb.front_clipped) {
             return 0;
         }
         return -1;
     } else {
-        for (int i = 0; i < std::min(a.nhits, b.nhits); i++) {
-            if (a.elements[i] != b.elements[i] ||
-                a.intersections[i].is_clipping_plane !=
-                    b.intersections[i].is_clipping_plane) {
+        if (ra.front_clipped != rb.front_clipped) {
+            return 0;
+        }
+
+        for (int i = 0; i < std::min(ra.N, rb.N); i++) {
+            if (ra.intersections[i].elem != rb.intersections[i].elem) {
                 return i;
             }
         }
-        if (a.nhits != b.nhits) {
-            return std::min(a.nhits, b.nhits);
+        if (ra.N != rb.N) {
+            return std::min(ra.N, rb.N);
         }
-        if (!a.intersections || !b.intersections)
+        if (!ra.intersections || !rb.intersections)
             return 0;
 
-        int n = a.nhits; // also = b.nhits
-        if (a.intersections[n].is_clipping_plane !=
-            b.intersections[n].is_clipping_plane) {
-            return n;
+        if (ra.back_clipped != rb.back_clipped) {
+            // note ra.N == rb.N
+            return ra.N - 1;
         }
 
         // no failure
@@ -333,10 +328,10 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
 }
 
 static Intersection *first_nontrivial_intersection(const RenderPoint &p) {
-    for (int i = 0; i <= p.nhits; i++) {
-        if ((i > 0 && p.elements[i - 1]->visible) ||
-            (i < p.nhits && p.elements[i]->visible)) {
-            return &p.intersections[i];
+    for (int i = 0; i < p.ray.N; i++) {
+        if ((i > 0 && p.ray.intersections[i - 1].elem->visible) ||
+            (i < p.ray.N && p.ray.intersections[i].elem->visible)) {
+            return &p.ray.intersections[i];
             break;
         }
     }
@@ -353,8 +348,7 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
     if (spot.x() < bound_low.x() - eps || spot.y() < bound_low.y() - eps ||
         spot.x() > bound_high.x() + eps || spot.y() > bound_high.y() + eps) {
         // Spot out of bounds; return dummy point
-        RenderPoint r;
-        r.coords = spot;
+        RenderPoint r(spot, dummy_point());
         return r;
     }
 
@@ -368,23 +362,21 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
         }
     }
     const int dlimit = 100;
-    const Element *hits[dlimit];
     Intersection ints[dlimit + 1];
 
-    int m = traceRay(initPoint(spot, view_data),
-                     forwardDirection(view_data.orientation),
-                     view_data.elements, view_data.clipping_planes, hits, ints,
-                     dlimit, ray_iteration, ray_mutables);
+    RayPoint rpt = traceRay(initPoint(spot, view_data),
+                            forwardDirection(view_data.orientation),
+                            view_data.elements, view_data.clipping_planes, ints,
+                            dlimit, ray_iteration, ray_mutables);
     ray_iteration++;
-    m = compressTraces(hits, ints, m);
+    compressTraces(&rpt);
 
-    return RenderPoint(spot, m, ints, hits);
+    return RenderPoint(spot, rpt);
 }
 RenderPoint VectorTracer::getPoint(QPoint p) {
     if (p.x() < 0 || p.y() < 0 || p.x() >= grid_size.width() ||
         p.y() >= grid_size.height()) {
-        RenderPoint q;
-        q.coords = grid_coord_to_point(p, grid_size);
+        RenderPoint q(grid_coord_to_point(p, grid_size), dummy_point());
         return q;
     } else {
         return grid_points[p.x() * grid_size.height() + p.y()];
@@ -430,10 +422,10 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
 
     // Step 2: bisect on cause of difference
     Intersection cx_inside =
-        transparent_volumes ? result_inside->intersections[cd]
+        transparent_volumes ? result_inside->ray.intersections[cd]
                             : *first_nontrivial_intersection(*result_inside);
     Intersection cx_outside =
-        transparent_volumes ? result_outside->intersections[cd]
+        transparent_volumes ? result_outside->ray.intersections[cd]
                             : *first_nontrivial_intersection(*result_outside);
     const int nsubdivisions = 20;
     for (int i = 0; i < nsubdivisions; i++) {
@@ -441,11 +433,11 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
             queryPoint(0.5 * (result_inside->coords + result_outside->coords));
         Intersection cx_mid;
         if (transparent_volumes) {
-            if (mid.nhits < cd) {
+            if (mid.ray.N <= cd) {
                 // Size failure for midpoint; abort
                 return;
             }
-            cx_mid = mid.intersections[cd];
+            cx_mid = mid.ray.intersections[cd];
         } else {
             Intersection *k = first_nontrivial_intersection(mid);
             if (!k) {
@@ -462,8 +454,8 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
                 *result_outside = mid;
             }
         } else {
-            if (cx_mid.normal.dot(cx_inside.normal) >
-                cx_mid.normal.dot(cx_outside.normal)) {
+            if (G4ThreeVector(cx_mid.normal).dot(cx_inside.normal) >
+                G4ThreeVector(cx_mid.normal).dot(cx_outside.normal)) {
                 *result_inside = mid;
             } else {
                 *result_outside = mid;
@@ -486,15 +478,17 @@ static FColor retractionMerge(const RenderPoint &pt, FColor seed,
                               const QVector<FColor> &color_table,
                               int startpoint, bool transparent_volumes) {
     for (int k = startpoint; k >= 0; --k) {
-        if (!pt.elements[k]->visible) {
+        if (!pt.ray.intersections[k].elem->visible) {
             continue;
         }
 
         // We use the intersection before the volume
-        const FColor &base_color = color_table[pt.elements[k]->ccode];
-        FColor alt_color =
-            intersectionColor(pt.intersections[k].normal, normal, base_color);
-        double e = transparent_volumes ? pt.elements[k]->alpha : 1.0;
+        const FColor &base_color =
+            color_table[pt.ray.intersections[k].elem->ccode];
+        FColor alt_color = intersectionColor(pt.ray.intersections[k].normal,
+                                             normal, base_color);
+        double e =
+            transparent_volumes ? pt.ray.intersections[k].elem->alpha : 1.0;
 
         seed = FColor::blend(seed, alt_color, e);
     }
@@ -504,7 +498,7 @@ FColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
 
     FColor color(0.9, 0.9, 0.9, 0.1);
     return retractionMerge(pt, color, view_data.orientation.rowX(),
-                           element_colors, pt.nhits - 1, transparent_volumes);
+                           element_colors, pt.ray.N - 2, transparent_volumes);
 }
 FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
                                             const RenderPoint &outside) {
@@ -1069,8 +1063,8 @@ void VectorTracer::computeEdges() {
             }
         }
 
-        qDebug("Construction region boundaries %d: %d segments", cls,
-               segs.length());
+        qDebug("Constructing region boundaries %d of %d: %d segments", cls,
+               grid_nclasses, segs.length());
 
         QVector<QPolygon> loops = size_sorted_loops_from_seg(segs);
 
@@ -1088,12 +1082,11 @@ void VectorTracer::computeEdges() {
         region.ymin = ymin;
         region.ymax = ymax;
         region.is_clipped_patch = false;
-        if (class_representative.intersections) {
-            region.is_clipped_patch =
-                class_representative.intersections[0].is_clipping_plane;
+        if (class_representative.ray.intersections) {
+            region.is_clipped_patch = class_representative.ray.front_clipped;
         }
-        if (class_representative.nhits > 0) {
-            if (!class_representative.elements[0]->visible)
+        if (class_representative.ray.N > 0) {
+            if (!class_representative.ray.intersections[0].elem->visible)
                 region.is_clipped_patch = false;
         }
 
@@ -1189,17 +1182,17 @@ static bool crease_check(const Intersection &a0, const Intersection &a1,
                          const QPointF &c0, const QPointF &c1,
                          const ViewData &view_data, double cos_alpha,
                          double min_jump, bool *is_jump) {
-    if (a0.normal.mag() < 1e-10 || a1.normal.mag() < 1e-10) {
+    G4ThreeVector n0(a0.normal), n1(a1.normal);
+
+    if (n0.mag() < 1e-10 || n1.mag() < 1e-10) {
         // empty normals
         return false;
     }
-    if (std::abs(a0.normal.mag() - 1.0) > 1e-10 ||
-        std::abs(a1.normal.mag() - 1.0) > 1e-10) {
-        qFatal("Non-normal nontrivial normals %f %f", a0.normal.mag(),
-               a1.normal.mag());
+    if (std::abs(n0.mag() - 1.0) > 0.01 || std::abs(n1.mag() - 1.0) > 0.01) {
+        qFatal("Non-normal nontrivial normals %.18f %.18f", n0.mag(), n1.mag());
     }
 
-    if (a0.normal.dot(a1.normal) < cos_alpha) {
+    if (n0.dot(n1) < cos_alpha) {
         if (is_jump)
             *is_jump = false;
         return true;
@@ -1212,7 +1205,7 @@ static bool crease_check(const Intersection &a0, const Intersection &a1,
         view_data.scale * view_data.orientation.rowZ() * (c1.x() - c0.x());
     const G4ThreeVector &F = view_data.orientation.rowX();
     G4ThreeVector disp = dx + dy;
-    G4ThreeVector N = 0.5 * (a0.normal + a1.normal);
+    G4ThreeVector N = 0.5 * (n0 + n1);
     if (std::abs(N.dot(F)) < 1e-10)
         return false;
 
@@ -1232,13 +1225,13 @@ int VectorTracer::crease_depth(const RenderPoint &q0, const RenderPoint &q1,
                                double cos_alpha, double min_jump,
                                bool *is_jump) {
     // We assume no significant mismatches
-    if (!q0.intersections || !q1.intersections)
+    if (!q0.ray.intersections || !q1.ray.intersections)
         return -1;
 
     if (transparent_volumes) {
-        for (int i = 0; i <= std::min(q0.nhits, q1.nhits); i++) {
-            const Intersection &a0 = q0.intersections[i];
-            const Intersection &a1 = q1.intersections[i];
+        for (int i = 0; i < std::min(q0.ray.N, q1.ray.N); i++) {
+            const Intersection &a0 = q0.ray.intersections[i];
+            const Intersection &a1 = q1.ray.intersections[i];
             if (crease_check(a0, a1, q0.coords, q1.coords, view_data, cos_alpha,
                              min_jump, is_jump)) {
                 return i;

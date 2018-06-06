@@ -21,8 +21,7 @@ private:
 
 class RenderPoint {
 public:
-    RenderPoint(QPointF spot, int nhits, const Intersection *srcints,
-                const Element **srcelems);
+    RenderPoint(QPointF spot, const RayPoint &rpt);
     RenderPoint();
     ~RenderPoint();
 
@@ -30,9 +29,8 @@ public:
     RenderPoint &operator=(RenderPoint);
 
     QPointF coords;
-    int nhits;
-    Intersection *intersections;
-    Element **elements;
+    RayPoint ray;
+
     FColor ideal_color;
     int region_class;
     int subregion_class;

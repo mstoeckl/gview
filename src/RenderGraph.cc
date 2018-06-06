@@ -16,6 +16,9 @@ public:
     virtual ~RenderGraphHelper() {}
 
     virtual void run() {
+        if (context->abort_flag) {
+            return;
+        }
         node->run(&*context);
         if (context->abort_flag) {
             return;
