@@ -18,7 +18,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-static long recursivelySumNCalls(const Element &r, const ElemMutables e[]) {
+long recursivelySumNCalls(const Element &r, const ElemMutables e[]) {
     long s = e[r.ecode].ngeocalls;
     for (size_t k = 0; k < r.children.size(); k++) {
         s += recursivelySumNCalls(r.children[k], e);
@@ -26,8 +26,8 @@ static long recursivelySumNCalls(const Element &r, const ElemMutables e[]) {
     return s;
 }
 
-static void recursivelyPrintNCalls(const Element &r, const ElemMutables e[],
-                                   int depth = 0, long net = 0) {
+void recursivelyPrintNCalls(const Element &r, const ElemMutables e[], int depth,
+                            long net) {
     if (net == 0) {
         net = recursivelySumNCalls(r, e);
     }
@@ -416,64 +416,10 @@ void countTree(const Element &e, int &treedepth, int &nelements) {
     nelements = n + 1;
 }
 
-static inline double iproject(const G4ThreeVector &point,
-                              const G4ThreeVector &dcamera,
-                              const G4double &dscale,
-                              const G4RotationMatrix &ori, int w, int h,
-                              int *dx, int *dy) {
-    G4ThreeVector local = ori * (point - dcamera);
-    G4double idscale = 1 / dscale;
-    double fy = local.y() * idscale;
-    double fx = local.z() * idscale;
-    double off = local.x();
-    int dmind = 2 * std::min(w, h);
-    *dx = int(0.5 * w + fx * dmind);
-    *dy = int(0.5 * h + fy * dmind);
-    return off;
-}
-
-static void trackColors(const TrackHeader &h, const TrackPoint &pa,
-                        const TrackPoint &pb, const G4ThreeVector &a,
-                        const G4ThreeVector &b, const G4ThreeVector &forward,
-                        FColor &ca, FColor &cb, float &wa, float &wb) {
-    G4ThreeVector normal = b - a;
-    double coa = (normal * forward) / normal.mag();
-
-    //    double mtime = double(pa.time) * (1. - interp) * double(pb.time) *
-    //    double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
-
-    double aloge = std::log10(double(pa.energy)) / 2.0;
-    double patime = aloge - std::floor(aloge);
-    ca = FColor(QColor::fromHsvF(patime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb());
-
-    double bloge = std::log10(double(pb.energy)) / 2.0;
-    double pbtime = bloge - std::floor(bloge);
-    cb = FColor(QColor::fromHsvF(pbtime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb());
-
-    if (h.ptype == 11) {
-        // e-
-        wa = 1.0f;
-        wb = 1.0f;
-    } else if (h.ptype == 22) {
-        // gamma
-        wa = 0.7f;
-        wb = 0.7f;
-    } else {
-        // others (optiphoton)
-        wa = 0.5f;
-        wb = 0.5f;
-    }
-}
-
-RenderRayTask::RenderRayTask(QRect p) : RenderGraphNode("ray"), domain(p) {}
-
-QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
-                  const ViewData &d, int &iter, ElemMutables *mutables,
-                  QRgb trackcol, G4double trackdist) {
-    const int M = 30;
-    Intersection ints[M + 1];
-    Intersection altints[M + 1];
-
+RayPoint rayAtPoint(const QPointF &pt, qreal radius,
+                    const G4ThreeVector &forward, const ViewData &d, int &iter,
+                    ElemMutables *mutables, Intersection *ints,
+                    Intersection *altints, int M, int *ndevs) {
     RayPoint ray =
         traceRay(initPoint(pt, d), forward, d.elements, d.clipping_planes, ints,
                  M, iter, mutables, d.force_opaque);
@@ -484,7 +430,6 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
     int p = ray.N - 1;
     bool line = false;
     if (d.level_of_detail <= -1) {
-        int ndevs[M + 1];
         for (int k = 0; k < M + 1; k++) {
             ndevs[k] = 0;
         }
@@ -544,9 +489,20 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
         ray.N = p + 1;
     }
 
+    if (line) {
+        ray.N = p + 1;
+        ray.intersections[p].elem = (Element *)(-1);
+    }
+    return ray;
+}
+
+QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
+                 const ViewData &d, const QPointF &pt,
+                 const G4ThreeVector &forward) {
     bool rayoverride = false;
+    int p = ray.N - 1;
     for (int k = 0; k < ray.N; k++) {
-        if (ints[k].dist > trackdist) {
+        if (ray.intersections[k].dist > trackdist) {
             p = k - 1;
             // WARNING: there exist exceptions!
             // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
@@ -554,7 +510,10 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
             break;
         }
     }
-
+    bool line = ray.intersections[ray.N - 1].elem == (Element *)(-1);
+    if (line && p == ray.N - 1) {
+        p = ray.N - 2;
+    }
     FColor col =
         (line && !rayoverride) ? FColor(0., 0., 0., 1.f) : FColor(trackcol);
     // p indicates the first volume to use the color rule on
@@ -563,9 +522,11 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
         // We use the intersection before the volume
         const VColor &base_color =
             d.color_table[ray.intersections[k].elem->ccode];
-        const G4ThreeVector &intpos = initPoint(pt, d) + ints[k].dist * forward;
-        FColor altcol = colorMap(ints[k], forward, base_color, intpos,
-                                 1. / d.scale, (k == 0 && ray.front_clipped));
+        const G4ThreeVector &intpos =
+            initPoint(pt, d) + ray.intersections[k].dist * forward;
+        FColor altcol =
+            colorMap(ray.intersections[k], forward, base_color, intpos,
+                     1. / d.scale, (k == 0 && ray.front_clipped));
         double e = (d.force_opaque ? 1. : ray.intersections[k].elem->alpha);
         if (!ray.intersections[k].elem->visible) {
             continue;
@@ -573,274 +534,6 @@ QRgb colorAtPoint(const QPointF &pt, qreal radius, const G4ThreeVector &forward,
         col = FColor::blend(altcol, col, 1 - e);
     }
     return col.rgba();
-}
-
-void RenderRayTask::run(Context *ctx) const {
-    const ViewData *d = ctx->viewdata;
-
-    if (!d->elements.solid) {
-        return;
-    }
-    int treedepth;
-    int nelements;
-    countTree(d->elements, treedepth, nelements);
-    // ^ TODO: allocate traceray buffers to match!
-    if (treedepth > 10) {
-        qFatal("Excessive tree depth, fatal!");
-    }
-    int w = ctx->w;
-    int h = ctx->h;
-    if (ctx->image->width() != w || ctx->image->height() != h) {
-        qFatal("Image size mismatch, %d %d vs %d %d", ctx->image->width(),
-               ctx->image->height(), w, h);
-    }
-#if 0
-        QTime t = QTime::currentTime();
-        qDebug("render lod %d w %d h %d | %d of %d", d.level_of_detail, w, h, slice,
-               nslices);
-#endif
-
-    int mind = w > h ? h : w;
-
-    int xl = domain.left();
-    int xh = domain.right();
-    int yl = domain.top();
-    int yh = domain.bottom();
-
-    const G4double radius = 0.8 / mind;
-    // Zero construct by default
-    ElemMutables *mutables = new ElemMutables[nelements]();
-    int iter = 1;
-
-    const FlatData *flatData = &ctx->flatData;
-
-    const G4ThreeVector &forward = forwardDirection(d->orientation);
-
-    for (int i = yl; i < yh; i++) {
-        QRgb *pts = reinterpret_cast<QRgb *>(ctx->image->scanLine(i));
-        for (int j = xl; j < xh; j++) {
-            if (ctx->abort_flag) {
-                delete[] mutables;
-                return;
-            }
-
-            // For merging at correct depth
-            int sidx = i * w + j;
-            QRgb trackcol = flatData->colors[sidx];
-            G4double trackdist = flatData->distances[sidx];
-
-            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
-            QRgb color = colorAtPoint(pt, radius, forward, *d, iter, mutables,
-                                      trackcol, trackdist);
-            pts[j] = color;
-        }
-    }
-    if (d->level_of_detail <= -1) {
-        recursivelyPrintNCalls(d->elements, mutables);
-    }
-
-    delete[] mutables;
-}
-
-RenderTrackTask::RenderTrackTask(QRect p, int s)
-    : RenderGraphNode("track"), domain(p), shard(s) {}
-
-void RenderTrackTask::run(Context *ctx) const {
-    if (ctx->abort_flag) {
-        return;
-    }
-
-    // Blank unless we make a change
-    ctx->partData[shard].blank = true;
-
-    int xl = domain.left();
-    int xh = domain.right();
-    int yl = domain.top();
-    int yh = domain.bottom();
-
-    int w = ctx->w;
-    int h = ctx->h;
-    const ViewData &d = *ctx->viewdata;
-    const TrackData &t = d.tracks;
-
-    size_t ntracks = t.getNTracks();
-    size_t tfrom = (ntracks * shard) / ctx->nthreads;
-    size_t tupto = (ntracks * (shard + 1)) / ctx->nthreads;
-    if (tfrom == tupto) {
-        return;
-    }
-
-    // Might have tracks, so we fill background
-    double *dists = ctx->partData[shard].distances;
-    QRgb *colors = ctx->partData[shard].colors;
-    for (int y = yl; y < yh; y++) {
-        for (int x = xl; x < xh; x++) {
-            // Scale up to be beyond anything traceRay produces
-            dists[y * w + x] = 4 * kInfinity;
-            colors[y * w + x] = qRgba(255, 255, 255, 0.);
-        }
-    }
-
-    int mind = w > h ? h : w;
-    float rad = std::max(mind / 800.0f, 0.01f);
-
-    const TrackBlock *blocks = t.getBlocks();
-    const TrackMetaData *metadata = t.getMeta();
-    size_t i = 0;
-    for (size_t z = 0; z < tfrom; z++) {
-        i += blocks[i].h.npts + 1;
-    }
-
-    for (size_t z = tfrom; z < tupto; z++) {
-        if (ctx->abort_flag) {
-            return;
-        }
-
-        // Jump to next track
-        const TrackHeader &header = blocks[i].h;
-        const TrackPoint *tp = (TrackPoint *)&blocks[i + 1];
-        i += header.npts + 1;
-
-        // Project calculations 1 point ahead
-        TrackPoint sp = tp[0];
-        G4ThreeVector spos(sp.x, sp.y, sp.z);
-        int sdx, sdy;
-        double soff;
-        soff =
-            iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
-
-        // Fast entire track clipping heuristic
-        int rr = int(2 * mind * metadata[z].ballRadius / d.scale);
-        if (sdx + rr <= xl || sdx - rr > xh || sdy + rr <= yl ||
-            sdy - rr > yh) {
-            continue;
-        }
-
-        ctx->partData[shard].blank = false;
-
-        for (int j = 1; j < header.npts; j++) {
-            // Adopt previous late point as early point
-            TrackPoint ep = sp;
-            int edx = sdx, edy = sdy;
-            double eoff = soff;
-            G4ThreeVector epos = spos;
-            // Calculate new late point
-            sp = tp[j];
-            spos = G4ThreeVector(sp.x, sp.y, sp.z);
-            soff = iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx,
-                            &sdy);
-
-            if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
-                (edx >= xh && sdx >= xh) || (edy >= yh && sdy >= yh)) {
-                continue;
-            }
-
-            // NOTE: single point lines are acceptable
-            float dy, dx;
-            int n;
-            if (std::abs(sdx - edx) > std::abs(sdy - edy)) {
-                n = std::abs(sdx - edx) + 1;
-                dx = sdx - edx > 0 ? 1.0 : -1.0;
-                dy = float(sdy - edy) / float(n);
-            } else {
-                n = std::abs(sdy - edy) + 1;
-                dy = sdy - edy > 0 ? 1.0 : -1.0;
-                dx = float(sdx - edx) / float(n);
-            }
-            float ix = edx;
-            float iy = edy;
-
-            int uxl = dx == 0.0f ? 0 : int((xl - edx) / dx);
-            int uyl = dy == 0.0f ? 0 : int((yl - edy) / dy);
-            int uxh = dx == 0.0f ? INT_MAX : int((xh - edx) / dx);
-            int uyh = dy == 0.0f ? INT_MAX : int((yh - edy) / dy);
-
-            // Extra buffers are just in case
-            int near = std::max(std::min(uxl, uxh), std::min(uyl, uyh)) - 1;
-            int far = std::min(std::max(uxl, uxh), std::max(uyl, uyh)) + 1;
-
-            if (std::max(near, 0) > std::min(far, n)) {
-                continue;
-            }
-
-            float w1, w2;
-            FColor c1, c2;
-            trackColors(header, ep, sp, epos, spos, d.orientation.rowX(), c1,
-                        c2, w1, w2);
-
-            for (int s = std::max(near, 0); s < std::min(far, n); s++) {
-                float x = ix + s * dx;
-                float y = iy + s * dy;
-
-                float b = n >= 2 ? s / float(n - 1) : 0.5f;
-                double off = eoff * double(1.f - b) + soff * double(b);
-                float rws = w1 * (1.0f - b) + w2 * b;
-                FColor col = FColor::blend(c1, c2, b);
-
-                // TODO: move to the merger phase, & multithread that!
-                // (so, instead, just draw the center point?)
-
-                /* Draw circle */
-                float spot = rad * rws;
-                int ly = int(std::lrint(y - spot));
-                int hy = int(std::lrint(y + spot));
-                for (int ddy = std::max(yl, ly); ddy <= std::min(yh - 1, hy);
-                     ddy++) {
-                    float lr = std::sqrt(std::max(
-                        0.f, spot * spot - float((ddy - y) * (ddy - y))));
-                    int lx = int(std::lrint(x - lr));
-                    int hx = int(std::lrint(x + lr));
-                    for (int ddx = std::max(xl, lx);
-                         ddx <= std::min(xh - 1, hx); ddx++) {
-                        int sidx = ddy * w + ddx;
-                        if (dists[sidx] > off) {
-                            dists[sidx] = off;
-                            colors[sidx] = col.rgba();
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-RenderMergeTask::RenderMergeTask(QRect p)
-    : RenderGraphNode("merge"), domain(p) {}
-
-void RenderMergeTask::run(Context *ctx) const {
-    // Minimum merge over all partData
-    Context &c = *ctx;
-    if (c.abort_flag) {
-        return;
-    }
-
-    int xl = domain.left();
-    int xh = domain.right();
-    int yl = domain.top();
-    int yh = domain.bottom();
-    int w = ctx->w;
-    for (int y = yl; y < yh; y++) {
-        for (int x = xl; x < xh; x++) {
-            // Scale up to be beyond anything traceRay produces
-            c.flatData.distances[y * w + x] = 4 * kInfinity;
-            c.flatData.colors[y * w + x] = qRgba(255, 255, 255, 0.);
-        }
-    }
-
-    for (int k = 0; k < c.nthreads; k++) {
-        if (c.partData[k].blank) {
-            continue;
-        }
-        for (int y = yl; y < yh; y++) {
-            for (int x = xl; x < xh; x++) {
-                int i = y * w + x;
-                if (c.partData[k].distances[i] < c.flatData.distances[i]) {
-                    c.flatData.distances[i] = c.partData[k].distances[i];
-                    c.flatData.colors[i] = c.partData[k].colors[i];
-                }
-            }
-        }
-    }
 }
 
 static TrackMetaData *setupBallRadii(const TrackBlock *blocks, size_t ntracks) {

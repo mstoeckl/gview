@@ -38,7 +38,7 @@ public:
     float z;
 };
 
-typedef struct {
+typedef struct Intersection_s {
     // The normal at the intersection
     CompactNormal normal;
     // Distance from ray start to intersection
@@ -47,7 +47,7 @@ typedef struct {
     const Element *elem;
 } Intersection;
 
-typedef struct {
+typedef struct RayPoint_s {
     Intersection *intersections;
     int N;
     // TODO: record clipping plane index
@@ -183,34 +183,6 @@ typedef struct ViewData_s {
     int level_of_detail;
 } ViewData;
 
-class RenderRayTask : public RenderGraphNode {
-public:
-    RenderRayTask(QRect p);
-    virtual void run(Context *) const;
-
-private:
-    QRect domain;
-};
-
-class RenderTrackTask : public RenderGraphNode {
-public:
-    RenderTrackTask(QRect p, int shard);
-    virtual void run(Context *) const;
-
-private:
-    QRect domain;
-    int shard;
-};
-
-class RenderMergeTask : public RenderGraphNode {
-public:
-    RenderMergeTask(QRect p);
-    virtual void run(Context *) const;
-
-private:
-    QRect domain;
-};
-
 void countTree(const Element &e, int &treedepth, int &nelements);
 G4ThreeVector forwardDirection(const G4RotationMatrix &);
 G4ThreeVector initPoint(const QPointF &, const ViewData &);
@@ -219,9 +191,20 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
                   const std::vector<Plane> &clipping_planes,
                   Intersection *intersections, int maxhits, long iteration,
                   ElemMutables mutables[], bool first_visible_hit = false);
+RayPoint rayAtPoint(const QPointF &pt, qreal radius,
+                    const G4ThreeVector &forward, const ViewData &d, int &iter,
+                    ElemMutables *mutables, Intersection *ints,
+                    Intersection *altints, int M, int *ndevs);
+QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
+                 const ViewData &d, const QPointF &pt,
+                 const G4ThreeVector &forward);
+
 void compressTraces(RayPoint *pt);
 
 class G4VPhysicalVolume;
 Element convertCreation(const G4VPhysicalVolume *phys,
                         G4RotationMatrix rot = G4RotationMatrix(),
                         int *counter = NULL);
+long recursivelySumNCalls(const Element &r, const ElemMutables e[]);
+void recursivelyPrintNCalls(const Element &r, const ElemMutables e[],
+                            int depth = 0, long net = 0);

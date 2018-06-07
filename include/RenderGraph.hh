@@ -13,21 +13,8 @@ class QThreadPool;
 class Context;
 struct ViewData_s;
 typedef struct ViewData_s ViewData;
-
-class RenderGraphNode {
-public:
-    RenderGraphNode(const char *type);
-    virtual ~RenderGraphNode();
-
-    typedef enum { kWaiting, kActive, kComplete } WorkStatus;
-
-    virtual void run(Context *c) const = 0;
-
-public:
-    QVector<RenderGraphNode *> reqs;
-    volatile WorkStatus status;
-    const char *name;
-};
+typedef struct RayPoint_s RayPoint;
+typedef struct Intersection_s Intersection;
 
 typedef struct {
     QRgb *colors;
@@ -35,10 +22,13 @@ typedef struct {
     bool blank;
 } FlatData;
 
+class RenderGraphNode;
+
 class Context {
 public:
     Context(const ViewData &d, QSharedPointer<QImage> i, int nt, int seqno);
     ~Context();
+
     const int renderno;
     const int nthreads;
     const int w, h;
@@ -47,6 +37,8 @@ public:
     FlatData *partData;
     FlatData flatData;
     QSharedPointer<QImage> image;
+    RayPoint *raydata;
+    Intersection **intersection_store;
 
     volatile int abort_flag;
 

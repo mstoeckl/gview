@@ -1,9 +1,11 @@
 #include "RenderGraph.hh"
+#include "RenderTask.hh"
 #include "RenderWorker.hh"
 
 #include <QElapsedTimer>
 #include <QImage>
 #include <QSignalMapper>
+#include <QThread>
 #include <QThreadPool>
 
 class RenderGraphHelper : public QRunnable {
@@ -50,6 +52,8 @@ Context::Context(const ViewData &d, QSharedPointer<QImage> im, int nt,
     flatData.colors = new QRgb[w * h];
     flatData.distances = new double[w * h];
     flatData.blank = false;
+    raydata = new RayPoint[w * h];
+    intersection_store = new Intersection *[nthreads * 4]();
 }
 
 Context::~Context() {
@@ -61,6 +65,13 @@ Context::~Context() {
     delete[] partData;
     delete[] flatData.colors;
     delete[] flatData.distances;
+    delete[] raydata;
+    for (int i = 0; i < nthreads * 4; i++) {
+        if (intersection_store[i]) {
+            free(intersection_store[i]);
+        }
+    }
+    delete[] intersection_store;
 }
 
 RenderGraph::RenderGraph(int nthreads) {
@@ -115,7 +126,7 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
         }
     }
 
-    if (1) {
+    if (0) {
         // Unbuffered mode!
         RenderMergeTask *merge = new RenderMergeTask(fullWindow);
         for (int shard = 0; shard < nthreads; shard++) {
@@ -131,6 +142,21 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
         }
     } else {
         // Buffered mode!
+        RenderMergeTask *merge = new RenderMergeTask(fullWindow);
+        RenderColorTask *color = new RenderColorTask(fullWindow);
+        for (int shard = 0; shard < nthreads; shard++) {
+            RenderTrackTask *track = new RenderTrackTask(fullWindow, shard);
+            merge->reqs.push_back(track);
+            tasks.push_back(QSharedPointer<RenderGraphNode>(track));
+        }
+        color->reqs.push_back(merge);
+        for (int i = 0; i < panes.size(); i++) {
+            RenderRayBufferTask *raybuf = new RenderRayBufferTask(panes[i], i);
+            color->reqs.push_back(raybuf);
+            tasks.push_back(QSharedPointer<RenderGraphNode>(raybuf));
+        }
+        tasks.push_back(QSharedPointer<RenderGraphNode>(merge));
+        tasks.push_back(QSharedPointer<RenderGraphNode>(color));
     }
 
     for (QSharedPointer<RenderGraphNode> j : tasks) {
