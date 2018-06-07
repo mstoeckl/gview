@@ -61,11 +61,7 @@ typedef struct {
     int64_t event_id;
     int32_t track_id;
     int32_t parent_id;
-    // For viewer hooks
-    union {
-        void *hook;
-        size_t offset;
-    };
+    uint64_t unused;
 } TrackHeader;
 
 typedef struct {
@@ -83,15 +79,29 @@ typedef struct {
     size_t low, high;
 } IRange;
 
+typedef union {
+    TrackHeader h;
+    TrackPoint p;
+} TrackBlock;
+
+typedef struct {
+    double ballRadius;
+} TrackMetaData;
+
 class TrackPrivateData : public QSharedData {
 public:
     size_t ntracks;
-    size_t npoints;
-    TrackHeader *headers;
-    TrackPoint *points;
-    TrackPrivateData(size_t itracks, size_t ipoints);
+    size_t nblocks;
+    TrackBlock *data;
+    TrackMetaData *meta;
+
+    TrackPrivateData(size_t itracks, size_t iblocks, TrackBlock *idata);
+    explicit TrackPrivateData(const char *filename);
     TrackPrivateData(const TrackPrivateData &other);
     ~TrackPrivateData();
+
+private:
+    size_t mmapbytes;
 };
 
 class TrackData {
@@ -103,11 +113,10 @@ public:
               Range selenergies, IRange selidxs,
               const QMap<int, bool> &type_active);
     ~TrackData();
-    size_t getNPoints() const;
+    size_t getNBlocks() const;
     size_t getNTracks() const;
-    const TrackHeader *getHeaders() const;
-    const TrackPoint *getPoints() const;
-    const LineCollection *getTree() const;
+    const TrackBlock *getBlocks() const;
+    const TrackMetaData *getMeta() const;
     void calcTimeBounds(double &lower, double &upper) const;
     void calcEnergyBounds(double &lower, double &upper) const;
     void constructRangeHistograms(QVector<QPointF> &tp, QVector<QPointF> &ep,

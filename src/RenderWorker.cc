@@ -13,6 +13,11 @@
 #include <QImage>
 #include <QPointF>
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 static long recursivelySumNCalls(const Element &r, const ElemMutables e[]) {
     long s = e[r.ecode].ngeocalls;
     for (size_t k = 0; k < r.children.size(); k++) {
@@ -645,18 +650,29 @@ void RenderTrackTask::run(Context *ctx) const {
         return;
     }
 
+    // Blank unless we make a change
+    ctx->partData[shard].blank = true;
+
     int xl = domain.left();
     int xh = domain.right();
     int yl = domain.top();
     int yh = domain.bottom();
 
-    double *dists = ctx->partData[shard].distances;
-    QRgb *colors = ctx->partData[shard].colors;
     int w = ctx->w;
     int h = ctx->h;
     const ViewData &d = *ctx->viewdata;
     const TrackData &t = d.tracks;
 
+    size_t ntracks = t.getNTracks();
+    size_t tfrom = (ntracks * shard) / ctx->nthreads;
+    size_t tupto = (ntracks * (shard + 1)) / ctx->nthreads;
+    if (tfrom == tupto) {
+        return;
+    }
+
+    // Might have tracks, so we fill background
+    double *dists = ctx->partData[shard].distances;
+    QRgb *colors = ctx->partData[shard].colors;
     for (int y = yl; y < yh; y++) {
         for (int x = xl; x < xh; x++) {
             // Scale up to be beyond anything traceRay produces
@@ -665,24 +681,25 @@ void RenderTrackTask::run(Context *ctx) const {
         }
     }
 
-    size_t ntracks = t.getNTracks();
-    const TrackHeader *headers = t.getHeaders();
-    const TrackPoint *points = t.getPoints();
-
     int mind = w > h ? h : w;
     float rad = std::max(mind / 800.0f, 0.01f);
 
-    size_t tfrom = (ntracks * shard) / ctx->nthreads;
-    size_t tupto = (ntracks * (shard + 1)) / ctx->nthreads;
+    const TrackBlock *blocks = t.getBlocks();
+    const TrackMetaData *metadata = t.getMeta();
+    size_t i = 0;
+    for (size_t z = 0; z < tfrom; z++) {
+        i += blocks[i].h.npts + 1;
+    }
 
-    ctx->partData[shard].blank = true;
-    for (size_t i = tfrom; i < tupto; i++) {
+    for (size_t z = tfrom; z < tupto; z++) {
         if (ctx->abort_flag) {
             return;
         }
 
-        const TrackHeader &header = headers[i];
-        const TrackPoint *tp = &points[header.offset];
+        // Jump to next track
+        const TrackHeader &header = blocks[i].h;
+        const TrackPoint *tp = (TrackPoint *)&blocks[i + 1];
+        i += header.npts + 1;
 
         // Project calculations 1 point ahead
         TrackPoint sp = tp[0];
@@ -692,9 +709,8 @@ void RenderTrackTask::run(Context *ctx) const {
         soff =
             iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
 
-        // Fast clipping for when the track is way out of view
-        float radius = 20.f;
-        int rr = int(2 * mind * radius / d.scale);
+        // Fast entire track clipping heuristic
+        int rr = int(2 * mind * metadata[z].ballRadius / d.scale);
         if (sdx + rr <= xl || sdx - rr > xh || sdy + rr <= yl ||
             sdy - rr > yh) {
             continue;
@@ -827,71 +843,31 @@ void RenderMergeTask::run(Context *ctx) const {
     }
 }
 
-static void setupBallRadii(TrackHeader *headers, const TrackPoint *points,
-                           size_t ntracks) {
-    for (size_t i = 0; i < ntracks; i++) {
-        TrackHeader &h = headers[i];
-        const TrackPoint &t0 = points[h.offset];
-        G4ThreeVector p0(t0.x, t0.y, t0.z);
+static TrackMetaData *setupBallRadii(const TrackBlock *blocks, size_t ntracks) {
+    TrackMetaData *meta = new TrackMetaData[ntracks];
+    size_t i = 0;
+
+    for (size_t z = 0; z < ntracks; z++) {
+        const TrackHeader &h = blocks[i].h;
+        const TrackBlock *pts = &blocks[i + 1];
+        i += h.npts + 1;
+
+        G4ThreeVector p0(pts[0].p.x, pts[0].p.y, pts[0].p.z);
         G4double radius = 0.0;
-        for (size_t j = h.offset + 1; j < h.offset + size_t(h.npts); j++) {
-            const TrackPoint &tj = points[j];
+        for (int32_t j = 0; j < h.npts; j++) {
+            const TrackPoint &tj = pts[j].p;
             G4ThreeVector pj(tj.x, tj.y, tj.z);
             radius = std::max(radius, (pj - p0).mag());
         }
-        //        h.bballradius = radius;
+        meta[z].ballRadius = radius;
     }
+    return meta;
 }
 
 TrackData::TrackData() {}
 
 TrackData::TrackData(const char *filename) {
-    FILE *f = fopen(filename, "rb");
-    fseek(f, 0, SEEK_END);
-    size_t fsize = size_t(ftell(f));
-    fseek(f, 0, SEEK_SET);
-    char *buf = reinterpret_cast<char *>(malloc(fsize));
-    fread(buf, fsize, 1, f);
-    fclose(f);
-
-    size_t blocksize = sizeof(TrackPoint);
-    size_t n = fsize / blocksize;
-    size_t ntracks = 0;
-    for (size_t i = 0; i < n;) {
-        const TrackHeader &h =
-            *reinterpret_cast<TrackHeader *>(&buf[blocksize * i]);
-        i += 1 + size_t(h.npts);
-        ntracks++;
-    }
-
-    TrackPrivateData *pd = new TrackPrivateData(ntracks, n - ntracks);
-    TrackHeader *headers = pd->headers;
-    TrackPoint *points = pd->points;
-    size_t j = 0;
-    for (size_t i = 0; i < ntracks; i++) {
-        const TrackHeader &h =
-            *reinterpret_cast<TrackHeader *>(&buf[blocksize * j]);
-        headers[i].npts = h.npts;
-        headers[i].ptype = h.ptype;
-        headers[i].offset = j - i;
-        size_t start = j + size_t(h.npts);
-        for (; j < start; j++) {
-            if (j >= n - 1) {
-                /* Truncated ! */
-                headers[i].npts = j - i - headers[i].offset;
-                qWarning("Track file truncated at %lu leaving run length %d",
-                         j + 1, headers[i].npts);
-                break;
-            }
-            points[j - i] =
-                *reinterpret_cast<TrackPoint *>(&buf[blocksize * (j + 1)]);
-        }
-        j++;
-    }
-    free(buf);
-    setupBallRadii(headers, points, ntracks);
-
-    data = QSharedDataPointer<TrackPrivateData>(pd);
+    data = QSharedDataPointer<TrackPrivateData>(new TrackPrivateData(filename));
 }
 
 TrackData::TrackData(const TrackData &other) : data(other.data) {}
@@ -950,42 +926,53 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
                      Range erange, IRange selidxs,
                      const QMap<int, bool> &type_active) {
     size_t otracks = other.getNTracks();
-    const TrackHeader *oheaders = other.getHeaders();
-    const TrackPoint *opoints = other.getPoints();
+    const TrackBlock *oblocks = other.getBlocks();
 
-    std::vector<TrackHeader> ch;
-    std::vector<TrackPoint> cp;
-    // Should yield extra space except for pathological cases
-    ch.reserve(other.getNTracks());
-    cp.reserve(other.getNPoints());
+    // Worst case allocation is one track (header+2 pts) per line segment
+    TrackBlock *buf =
+        (TrackBlock *)malloc(3 * other.getNBlocks() * sizeof(TrackBlock));
+    size_t qtracks = 0;
+    size_t qblocks = 0;
+
     float tlow = float(trange.low), thigh = float(trange.high);
     float elow = float(erange.low), ehigh = float(erange.high);
     size_t nlow = std::max(size_t(0), selidxs.low - 1);
     size_t nhigh = std::min(otracks, selidxs.high);
-    for (size_t i = nlow; i < nhigh; i++) {
-        bool typekeep = type_active.value(oheaders[i].ptype, type_active[0]);
+    // Scan up to track (selidxs.low-1)
+
+    size_t i = 0;
+    for (size_t z = 0; z < nlow; z++) {
+        i += oblocks[i].h.npts + 1;
+    }
+
+    for (size_t z = nlow; z < nhigh; z++) {
+        const TrackHeader &oheader = oblocks[i].h;
+        const TrackPoint *seq = (TrackPoint *)&oblocks[i + 1];
+        i += oheader.npts + 1;
+        size_t qheader = -1;
+
+        bool typekeep = type_active.value(oheader.ptype, type_active[0]);
         if (!typekeep) {
             continue;
         }
 
-        const TrackPoint *seq = &opoints[oheaders[i].offset];
-        int npts = oheaders[i].npts;
         G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);
         bool intime = seq[0].time >= tlow && seq[0].time <= thigh;
         bool inenergy = seq[0].energy >= elow && seq[0].energy <= ehigh;
         bool inconvex = insideConvex(vd.clipping_planes, fts);
         bool started = false;
         if (inconvex && intime && inenergy) {
-            TrackHeader h;
-            h.offset = cp.size();
-            h.ptype = oheaders[i].ptype;
+            TrackHeader h = oheader;
             h.npts = 1;
-            ch.push_back(h);
-            cp.push_back(seq[0]);
+            qtracks++;
+            qheader = qblocks;
+            buf[qblocks].h = h;
+            buf[qblocks + 1].p = seq[0];
+            qblocks += 2;
             started = true;
         }
 
-        for (int j = 0; j < npts - 1; j++) {
+        for (int j = 0; j < oheader.npts - 1; j++) {
             double low, high;
             G4ThreeVector pl(seq[j].x, seq[j].y, seq[j].z);
             G4ThreeVector ph(seq[j + 1].x, seq[j + 1].y, seq[j + 1].z);
@@ -1007,40 +994,44 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
             if (low <= 0. && high >= 1.) {
                 // Keep point
                 if (!started) {
-                    TrackHeader h;
-                    h.offset = cp.size();
-                    h.ptype = oheaders[i].ptype;
+                    TrackHeader h = oheader;
                     h.npts = 1;
-                    ch.push_back(h);
-                    cp.push_back(seq[j]);
+                    qheader = qblocks;
+                    buf[qblocks].h = h;
+                    buf[qblocks + 1].p = seq[j];
+                    qblocks += 2;
                 }
-                ch[ch.size() - 1].npts++;
-                cp.push_back(seq[j + 1]);
+                buf[qheader].h.npts++;
+                buf[qblocks].p = seq[j + 1];
+                qblocks++;
             } else if (low <= 0. && high < 1.) {
                 if (high > 0.) {
                     if (!started) {
-                        TrackHeader h;
-                        h.offset = cp.size();
-                        h.ptype = oheaders[i].ptype;
+                        TrackHeader h = oheader;
                         h.npts = 1;
-                        ch.push_back(h);
-                        cp.push_back(seq[j]);
+                        qtracks++;
+                        qheader = qblocks;
+                        buf[qblocks].h = h;
+                        buf[qblocks + 1].p = seq[j];
+                        qblocks += 2;
                     }
-                    ch[ch.size() - 1].npts++;
-                    cp.push_back(linmix(seq[j], seq[j + 1], high));
+                    buf[qheader].h.npts++;
+                    buf[qblocks].p = linmix(seq[j], seq[j + 1], high);
+                    qblocks++;
                 } else {
                     // Not there entirely
                 }
             } else if (low > 0. && high >= 1.) {
                 if (low < 1.) {
                     // Starting new sequence
-                    TrackHeader h;
-                    h.offset = cp.size();
-                    h.ptype = oheaders[i].ptype;
+                    TrackHeader h = oheader;
                     h.npts = 2;
-                    ch.push_back(h);
-                    cp.push_back(linmix(seq[j], seq[j + 1], low));
-                    cp.push_back(seq[j + 1]);
+                    qtracks++;
+                    qheader = qblocks;
+                    buf[qblocks].h = h;
+                    buf[qblocks + 1].p = linmix(seq[j], seq[j + 1], low);
+                    buf[qblocks + 2].p = seq[j + 1];
+                    qblocks += 3;
                 } else {
                     // Not there entirely
                 }
@@ -1048,36 +1039,32 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
                 if (high < 1. && low > 0. && low < high) {
                     // low > 0, high < 1
                     // A whole new short segment...
-                    TrackHeader h;
-                    h.offset = cp.size();
-                    h.ptype = oheaders[i].ptype;
+                    TrackHeader h = oheader;
                     h.npts = 2;
-                    ch.push_back(h);
-                    cp.push_back(linmix(seq[j], seq[j + 1], low));
-                    cp.push_back(linmix(seq[j], seq[j + 1], high));
+                    qtracks++;
+                    qheader = qblocks;
+                    buf[qblocks].h = h;
+                    buf[qblocks + 1].p = linmix(seq[j], seq[j + 1], low);
+                    buf[qblocks + 2].p = linmix(seq[j], seq[j + 1], high);
+                    qblocks += 3;
                 }
             }
         }
     }
 
-    size_t qtracks = ch.size();
-    size_t qpoints = cp.size();
-    TrackPrivateData *pd = new TrackPrivateData(qtracks, qpoints);
-    TrackHeader *headers = pd->headers;
-    TrackPoint *points = pd->points;
-    memcpy(headers, ch.data(), sizeof(TrackHeader) * qtracks);
-    memcpy(points, cp.data(), sizeof(TrackPoint) * qpoints);
-    setupBallRadii(headers, points, qtracks);
+    // Shrink buffer as necessary
+    buf = (TrackBlock *)realloc(buf, qblocks * sizeof(TrackBlock));
+    TrackPrivateData *pd = new TrackPrivateData(qtracks, qblocks, buf);
     data = QSharedDataPointer<TrackPrivateData>(pd);
 }
 
 TrackData::~TrackData() {}
 
-size_t TrackData::getNPoints() const {
+size_t TrackData::getNBlocks() const {
     if (!data) {
         return 0;
     }
-    return data.constData()->npoints;
+    return data.constData()->nblocks;
 }
 size_t TrackData::getNTracks() const {
     if (!data) {
@@ -1085,17 +1072,18 @@ size_t TrackData::getNTracks() const {
     }
     return data.constData()->ntracks;
 }
-const TrackHeader *TrackData::getHeaders() const {
+const TrackBlock *TrackData::getBlocks() const {
     if (!data) {
         return NULL;
     }
-    return data.constData()->headers;
+    return data.constData()->data;
 }
-const TrackPoint *TrackData::getPoints() const {
+
+const TrackMetaData *TrackData::getMeta() const {
     if (!data) {
         return NULL;
     }
-    return data.constData()->points;
+    return data.constData()->meta;
 }
 
 void TrackData::calcTimeBounds(double &lower, double &upper) const {
@@ -1104,11 +1092,17 @@ void TrackData::calcTimeBounds(double &lower, double &upper) const {
     if (!data) {
         return;
     }
-    TrackPoint *pts = data.constData()->points;
-    size_t npts = data.constData()->npoints;
-    for (size_t i = 0; i < npts; i++) {
-        upper = std::fmax(pts[i].time, upper);
-        lower = std::fmin(pts[i].time, lower);
+    TrackBlock *blocks = data.constData()->data;
+    size_t ntracks = data.constData()->ntracks;
+    size_t i = 0;
+    for (size_t k = 0; k < ntracks; k++) {
+        size_t npts = blocks[i].h.npts;
+        i++;
+        for (size_t j = 0; j < npts; j++) {
+            upper = std::fmax(blocks[i].p.time, upper);
+            lower = std::fmin(blocks[i].p.time, lower);
+            i++;
+        }
     }
 }
 void TrackData::calcEnergyBounds(double &lower, double &upper) const {
@@ -1117,13 +1111,19 @@ void TrackData::calcEnergyBounds(double &lower, double &upper) const {
     if (!data) {
         return;
     }
-    TrackPoint *pts = data.constData()->points;
-    size_t npts = data.constData()->npoints;
-    for (size_t i = 0; i < npts; i++) {
-        float e = pts[i].energy;
-        upper = std::fmax(e, upper);
-        if (e > 0.) {
-            lower = std::fmin(pts[i].energy, lower);
+    TrackBlock *blocks = data.constData()->data;
+    size_t ntracks = data.constData()->ntracks;
+    size_t i = 0;
+    for (size_t k = 0; k < ntracks; k++) {
+        size_t npts = blocks[i].h.npts;
+        i++;
+        for (size_t j = 0; j < npts; j++) {
+            float e = blocks[i].p.energy;
+            upper = std::fmax(e, upper);
+            if (e > 0.) {
+                lower = std::fmin(e, lower);
+            }
+            i++;
         }
     }
 }
@@ -1186,16 +1186,23 @@ static void constructRangeHistogram(const std::vector<float> &starts,
 void TrackData::constructRangeHistograms(QVector<QPointF> &tp,
                                          QVector<QPointF> &ep, const Range &tr,
                                          const Range &er) const {
-    TrackPoint *pts = data.constData()->points;
-    TrackHeader *headers = data.constData()->headers;
-    size_t nheaders = data.constData()->ntracks;
+    TrackBlock *blocks = data.constData()->data;
+    size_t ntracks = data.constData()->ntracks;
+
     std::vector<float> tstarts, tends, tspikes;
     std::vector<float> estarts, eends, espikes;
-    for (size_t i = 0; i < nheaders; i++) {
-        const TrackHeader &h = headers[i];
-        for (size_t j = i; j < i + h.npts - 1; j++) {
-            float ta = pts[j].time, tb = pts[j + 1].time;
-            float ea = pts[j].energy, eb = pts[j + 1].energy;
+    size_t i = 0;
+    for (size_t m = 0; m < ntracks; m++) {
+        const TrackHeader &h = blocks[i].h;
+        i++;
+        for (int32_t j = 0; j < h.npts - 1; j++) {
+            const TrackPoint &ptA = blocks[i].p;
+            const TrackPoint &ptB = blocks[i + 1].p;
+            i++;
+
+            float ta = ptA.time, tb = ptB.time;
+            float ea = ptA.energy, eb = ptB.energy;
+
             float stl = std::max(0.f, (float(tr.low) - ta) /
                                           (ta == tb ? 1e38f : tb - ta));
             float sth = std::min(1.f, (float(tr.high) - ta) /
@@ -1227,25 +1234,61 @@ void TrackData::constructRangeHistograms(QVector<QPointF> &tp,
                 eends.push_back(std::max(cea, ceb) / CLHEP::eV);
             }
         }
+        i++;
     }
     constructRangeHistogram(estarts, eends, espikes, ep);
     constructRangeHistogram(tstarts, tends, tspikes, tp);
 }
 
-TrackPrivateData::TrackPrivateData(size_t itracks, size_t ipoints) {
+TrackPrivateData::TrackPrivateData(const char *filename) {
+    struct stat sb;
+    int fd = open(filename, O_RDONLY);
+    if (fd == -1) {
+        qFatal("Invalid track file, '%s'", filename);
+    }
+    fstat(fd, &sb);
+
+    mmapbytes = sb.st_size;
+    char *buf = (char *)mmap(NULL, mmapbytes, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+
+    static_assert(sizeof(TrackPoint) == sizeof(TrackHeader) &&
+                      sizeof(TrackPoint) == 32,
+                  "Need uniform chunk size");
+    nblocks = mmapbytes / sizeof(TrackPoint);
+
+    data = reinterpret_cast<TrackBlock *>(buf);
+    ntracks = 0;
+    for (size_t i = 0; i < nblocks;) {
+        i += data[i].h.npts + 1;
+        ntracks++;
+    }
+
+    meta = setupBallRadii(data, ntracks);
+}
+
+TrackPrivateData::TrackPrivateData(size_t itracks, size_t iblocks,
+                                   TrackBlock *idata) {
     ntracks = itracks;
-    npoints = ipoints;
-    headers = new TrackHeader[ntracks];
-    points = new TrackPoint[npoints];
+    nblocks = iblocks;
+    mmapbytes = 0;
+    data = idata;
+    meta = setupBallRadii(data, ntracks);
 }
 TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
-    : QSharedData(other), ntracks(other.ntracks), npoints(other.npoints),
-      headers(other.headers), points(other.points) {
+    : QSharedData(other), ntracks(other.ntracks), nblocks(other.nblocks),
+      data(other.data), meta(other.meta), mmapbytes(other.mmapbytes) {
     ref.ref();
 }
 TrackPrivateData::~TrackPrivateData() {
-    delete[] headers;
-    delete[] points;
+    if (mmapbytes > 0) {
+        munmap(data, mmapbytes);
+    } else {
+        free(data);
+    }
+    if (meta) {
+        delete[] meta;
+    }
 }
 
 static bool sortbyname(const Element &l, const Element &r) {
