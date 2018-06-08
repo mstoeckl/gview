@@ -508,9 +508,15 @@ static void recsetFlowColors(std::vector<Element> &elts, int i,
     }
 }
 
-void ColorConfig::reassignColors() {
+int ColorConfig::reassignColors() {
+    int render_change = CHANGE_COLOR;
+    if (force_opaque->isChecked() != vd.force_opaque ||
+        vd.split_by_material != div_by_class->isChecked()) {
+        render_change |= CHANGE_GEO;
+    }
     vd.force_opaque = force_opaque->isChecked();
     vd.split_by_material = div_by_class->isChecked();
+
     switch (active_mode) {
     case ColorByMaterial: {
         vd.color_table = mtl_color_table;
@@ -613,6 +619,8 @@ void ColorConfig::reassignColors() {
         delete[] deps;
     } break;
     }
+
+    return render_change;
 }
 
 void ColorConfig::changeMode() {

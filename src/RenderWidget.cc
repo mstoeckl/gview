@@ -233,6 +233,12 @@ void RenderWidget::paintEvent(QPaintEvent *) {
     qint64 im = paintTimer.nsecsElapsed();
     drawRuler(q);
 
+    if (back_request_timer.isValid()) {
+        back_request_time = back_request_timer.nsecsElapsed();
+        back_request_timer.invalidate();
+    }
+    emit frameTime(back_request_time * 1e-9);
+
 #if 0
     qDebug("img completed after %f ms; %f ms paint (%f img)",
            back_request_timer.nsecsElapsed() * 1e-6,

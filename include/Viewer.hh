@@ -54,6 +54,7 @@ public:
     virtual void mouseMoveEvent(QMouseEvent *event);
     virtual void wheelEvent(QWheelEvent *event);
 public slots:
+    void showFrameTime(qreal);
     void restClip();
     void restTree();
     void restInfo();
@@ -88,6 +89,7 @@ private:
     ViewData vd;
     TrackData trackdata;
     RenderWidget *rwidget;
+    QAction *frame_time_display;
     QDockWidget *dock_clip;
     QDockWidget *dock_tree;
     QDockWidget *dock_info;

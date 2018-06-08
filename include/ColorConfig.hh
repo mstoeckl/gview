@@ -69,7 +69,7 @@ public:
     ~ColorConfig();
     void mergeMaterials(const std::vector<const G4Material *> &mtl_list);
 public slots:
-    void reassignColors();
+    int reassignColors();
 private slots:
     void changeMode();
     void loadFlowMap();

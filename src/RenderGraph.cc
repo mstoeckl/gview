@@ -21,7 +21,6 @@ public:
         if (node->nconsumers <= 0) {
             return;
         }
-        qDebug("running %s", node->name);
         node->run(&*context);
         if (node->nconsumers <= 0) {
             return;
@@ -69,7 +68,6 @@ RenderGraph::~RenderGraph() {
 
 void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd,
                         int changed) {
-    qDebug("change: %x", changed);
     timer->start();
     bool color_changed = changed & CHANGE_COLOR;
     bool geo_changed = changed & CHANGE_GEO;
@@ -87,12 +85,14 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd,
 
     QRect fullWindow = QRect(0, 0, w + 1, h + 1);
     QVector<QRect> panes;
+    QVector<QRect> rows;
 
-    const int Ny = 2 * nthreads;
-    const int Nx = 2;
+    const int Ny = nthreads;
+    const int Nx = 5;
     for (int i = 0; i < Ny; i++) {
         int yl = (i * h / Ny);
         int yh = i == Ny - 1 ? h : ((i + 1) * h / Ny);
+        rows.append(QRect(0, yl, w + 1, yh - yl + 1));
         for (int k = 0; k < Nx; k++) {
             int xl = (k * w / Nx);
             int xh = k == Nx - 1 ? w : ((k + 1) * w / Nx);
@@ -195,16 +195,18 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd,
                 qFatal("Null color dependents");
             }
 
-            QSharedPointer<RenderGraphNode> color(
-                new RenderColorTask(fullWindow, ray_data, flat_data, im));
-            for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
-                color->addDependency(p);
+            for (int i = 0; i < rows.size(); i++) {
+                QSharedPointer<RenderGraphNode> color(
+                    new RenderColorTask(rows[i], ray_data, flat_data, im));
+                // TODO: use rectangle intersection test to find overlaps
+                for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
+                    color->addDependency(p);
+                }
+                for (const QSharedPointer<RenderGraphNode> &p : task_raybuf) {
+                    color->addDependency(p);
+                }
+                task_color.push_back(color);
             }
-            for (const QSharedPointer<RenderGraphNode> &p : task_raybuf) {
-                color->addDependency(p);
-            }
-
-            task_color.push_back(color);
         }
 
         task_final = QSharedPointer<RenderGraphNode>(new RenderDummyTask());

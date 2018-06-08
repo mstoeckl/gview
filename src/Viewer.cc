@@ -41,6 +41,7 @@
 #include <QTableWidget>
 #include <QTreeView>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 
 static int exp10(int exp) {
     int r = 1;
@@ -186,19 +187,25 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
 
     // TODO: icons for all actions, esp. screenshot actions
     // & so on. Bundle?
-    gpicker_menu = this->menuBar()->addMenu("Choose Geometry");
-    tpicker_menu = this->menuBar()->addMenu("Choose Tracks");
+    frame_time_display = new QAction("XXXXX.X ms");
+    frame_time_display->setMenuRole(QAction::NoRole);
+    frame_time_display->setEnabled(false);
+    QMenuBar *main_menu = new QMenuBar();
+    this->setMenuBar(main_menu);
+    main_menu->addAction(frame_time_display);
+    gpicker_menu = main_menu->addMenu("Choose Geometry");
+    tpicker_menu = main_menu->addMenu("Choose Tracks");
     reloadChoiceMenus();
     // TODO: checkbox by visibility
-    QMenu *sub = this->menuBar()->addMenu("View");
+    QMenu *sub = main_menu->addMenu("View");
     sub->addAction(clipAction);
     sub->addAction(treeAction);
     sub->addAction(infoAction);
     sub->addAction(rayAction);
     sub->addAction(mtlAction);
     sub->addAction(oriAction);
-    this->menuBar()->addSeparator();
-    QMenu *imgmenu = this->menuBar()->addMenu("Screenshot");
+    main_menu->addSeparator();
+    QMenu *imgmenu = main_menu->addMenu("Screenshot");
     imgmenu->addAction(screenAction);
     imgmenu->addAction(screen4Action);
     imgmenu->addAction(vectorTAction);
@@ -208,6 +215,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     rwidget = new RenderWidget(vd, trackdata);
     this->setCentralWidget(rwidget);
     rwidget->setFocusPolicy(Qt::WheelFocus);
+    connect(rwidget, SIGNAL(frameTime(qreal)), this,
+            SLOT(showFrameTime(qreal)));
 
     // Clipping plane control
     dock_clip = new QDockWidget("Clipping", this);
@@ -445,6 +454,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
 
 Viewer::~Viewer() {}
 
+void Viewer::showFrameTime(qreal t) {
+    frame_time_display->setText(
+        QString("%1 ms").arg(t * 1e3, 7, 'f', 1, QChar(0x2000)));
+}
+
 void Viewer::restClip() { dock_clip->setVisible(true); }
 void Viewer::restTree() { dock_tree->setVisible(true); }
 void Viewer::restInfo() { dock_info->setVisible(true); }
@@ -655,9 +669,9 @@ void Viewer::updateTracks(bool planes_also_changed) {
 
 void Viewer::updateColors() {
     // ColorConfig handles ViewData updates
-    color_config->reassignColors();
+    int render_change = color_config->reassignColors();
     info_model->setElement(info_model->curE(), vd);
-    rwidget->rerender(CHANGE_COLOR);
+    rwidget->rerender(render_change);
 }
 
 void Viewer::changeGeometry(QAction *act) {
@@ -678,12 +692,12 @@ void Viewer::changeGeometry(QAction *act) {
                 std::vector<const G4Material *> mtl_list =
                     constructMaterialList(geo_options);
                 color_config->mergeMaterials(mtl_list);
-                color_config->reassignColors();
+                int cr_change = color_config->reassignColors();
                 tree_model->recalculate();
                 tree_view->collapseAll();
                 tree_view->expandToDepth(1);
                 indicateElement(NULL);
-                rwidget->rerender(CHANGE_GEO);
+                rwidget->rerender(CHANGE_GEO | cr_change);
                 return;
             }
         }

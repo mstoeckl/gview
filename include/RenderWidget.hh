@@ -13,6 +13,9 @@ public:
 
     virtual void resizeEvent(QResizeEvent *evt);
     virtual void paintEvent(QPaintEvent *evt);
+signals:
+    void frameTime(qreal);
+
 public slots:
     void setFullDetail(bool);
 
@@ -37,6 +40,7 @@ private:
     QImage cached;
     QSharedPointer<QImage> back;
     int back_scale_factor;
+    qint64 back_request_time;
     QElapsedTimer back_request_timer;
     QSharedPointer<QImage> next;
     int next_scale_factor;
