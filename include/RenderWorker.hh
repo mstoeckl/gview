@@ -13,6 +13,14 @@
 
 #include <vector>
 
+enum {
+    CHANGE_ONESHOT = 1 << 1,
+    CHANGE_TRACK = 1 << 2,
+    CHANGE_GEO = 1 << 3,
+    CHANGE_COLOR = 1 << 4,
+    CHANGE_VIEWPORT = CHANGE_GEO | CHANGE_TRACK | CHANGE_COLOR
+};
+
 class LineCollection;
 class G4Material;
 class G4VSolid;
@@ -44,7 +52,7 @@ typedef struct Intersection_s {
     // Distance from ray start to intersection
     G4double dist;
     // Volume behind the intersection
-    const Element *elem;
+    int ecode;
 } Intersection;
 
 typedef struct RayPoint_s {
@@ -143,12 +151,12 @@ typedef struct Element_s {
 
     // To index element mutables and color properties
     int ecode;
-    int ccode;
 
     // Is rotation matrix nontrivial
     bool rotated;
 
-    // only three changeable fields
+    // Display control fields
+    int ccode;
     bool visible;
     double alpha;
 
@@ -157,18 +165,12 @@ typedef struct Element_s {
     // color influence falloff, but you can't have everything.
     // (the background color is white!)
 
-    // statistics, frequently updated, nolock
-    //    mutable long ngeocalls;
-    //    // Caching for acceleration
-    //    mutable int niter;
-    //    mutable double abs_dist;
-
-    std::vector<Element> children;
+    std::vector<int> children;
 } Element;
 
 typedef struct ViewData_s {
-    // What is being viewed
-    Element elements;
+    // What is being viewed. elements[0] is root
+    std::vector<Element> elements;
     TrackData tracks;
     // How it is viewed
     G4ThreeVector camera;
@@ -183,11 +185,12 @@ typedef struct ViewData_s {
     int level_of_detail;
 } ViewData;
 
-void countTree(const Element &e, int &treedepth, int &nelements);
+void countTree(const std::vector<Element> &els, int index, int &treedepth,
+               int &nelements);
 G4ThreeVector forwardDirection(const G4RotationMatrix &);
 G4ThreeVector initPoint(const QPointF &, const ViewData &);
 RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
-                  const Element &root,
+                  const std::vector<Element> &els,
                   const std::vector<Plane> &clipping_planes,
                   Intersection *intersections, int maxhits, long iteration,
                   ElemMutables mutables[], bool first_visible_hit = false);
@@ -199,12 +202,14 @@ QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
                  const ViewData &d, const QPointF &pt,
                  const G4ThreeVector &forward);
 
-void compressTraces(RayPoint *pt);
+void compressTraces(RayPoint *pt, const std::vector<Element> &elts);
 
 class G4VPhysicalVolume;
-Element convertCreation(const G4VPhysicalVolume *phys,
-                        G4RotationMatrix rot = G4RotationMatrix(),
-                        int *counter = NULL);
-long recursivelySumNCalls(const Element &r, const ElemMutables e[]);
-void recursivelyPrintNCalls(const Element &r, const ElemMutables e[],
-                            int depth = 0, long net = 0);
+int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
+                    G4RotationMatrix rot = G4RotationMatrix(),
+                    int *counter = NULL);
+long recursivelySumNCalls(const std::vector<Element> &elts,
+                          const ElemMutables e[]);
+void recursivelyPrintNCalls(const std::vector<Element> &elts,
+                            const ElemMutables e[], int depth = 0, long net = 0,
+                            int idx = 0);

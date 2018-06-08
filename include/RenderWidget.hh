@@ -19,7 +19,7 @@ public slots:
     void completed(qreal);
     void aborted();
 
-    void rerender();
+    void rerender(int changes);
 
 private:
     void rerender_priv();
@@ -32,6 +32,7 @@ private:
     int immediate_lod;
 
     RenderGraph graph;
+    int changed_inputs;
 
     QImage cached;
     QSharedPointer<QImage> back;

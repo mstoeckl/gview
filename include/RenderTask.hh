@@ -1,10 +1,38 @@
 #pragma once
 
 #include <QRect>
+#include <QRgb>
+#include <QSharedPointer>
 #include <QVector>
 
 class Context;
+typedef struct RayPoint_s RayPoint;
+typedef struct Intersection_s Intersection;
 
+class FlatData {
+public:
+    QRgb *colors;
+    double *distances;
+    bool blank;
+    int w, h;
+    FlatData(int iw, int ih) {
+        w = iw;
+        h = ih;
+        colors = (QRgb *)malloc(w * h * sizeof(QRgb));
+        distances = (double *)malloc(w * h * sizeof(double));
+    }
+    ~FlatData() {
+        free(colors);
+        free(distances);
+    }
+};
+
+/**
+ * RenderGraphNode is a single render graph node to compute
+ * some quantity once. It aborts the calculation when no nodes
+ * depend on it. Hence, when switching targets, add a new target before
+ * removing the old once.
+ */
 class RenderGraphNode {
 public:
     RenderGraphNode(const char *type);
@@ -12,57 +40,92 @@ public:
 
     typedef enum { kWaiting, kActive, kComplete } WorkStatus;
 
-    virtual void run(Context *c) const = 0;
+    virtual void run(Context *c) = 0;
+
+    // Shared pointers used to permit any-order unlinking
+    void addDependency(QSharedPointer<RenderGraphNode>);
+    void request() { nconsumers++; }
+    void unrequest() { nconsumers--; }
+    // True if waiting to run and all dependencies complete
+    bool isReady() const;
 
 public:
-    QVector<RenderGraphNode *> reqs;
     volatile WorkStatus status;
-    const char *name;
+    const char *const name;
+
+    // Links to nodes the depends on
+    QVector<QSharedPointer<RenderGraphNode>> reqs;
+    // Number of nodes for which the result matters
+protected:
+    friend class RenderGraphHelper;
+    volatile int nconsumers;
+};
+
+class RenderDummyTask : public RenderGraphNode {
+public:
+    RenderDummyTask();
+    virtual void run(Context *) {}
 };
 
 class RenderRayTask : public RenderGraphNode {
 public:
-    RenderRayTask(QRect p);
-    virtual void run(Context *) const;
+    RenderRayTask(QRect p, QSharedPointer<QImage> i,
+                  QSharedPointer<FlatData> f);
+    virtual void run(Context *);
 
 private:
-    QRect domain;
+    QSharedPointer<QImage> image;
+    QSharedPointer<FlatData> flat_data;
+    const QRect domain;
 };
 
 class RenderTrackTask : public RenderGraphNode {
 public:
-    RenderTrackTask(QRect p, int shard);
-    virtual void run(Context *) const;
+    RenderTrackTask(QRect p, int s, int ns, QSharedPointer<FlatData> f);
+    virtual void run(Context *);
+
+    QSharedPointer<FlatData> part_data;
 
 private:
-    QRect domain;
-    int shard;
+    const QRect domain;
+    const int shard, nshards;
 };
 
 class RenderMergeTask : public RenderGraphNode {
 public:
-    RenderMergeTask(QRect p);
-    virtual void run(Context *) const;
+    RenderMergeTask(QRect p, QVector<QSharedPointer<FlatData>> i,
+                    QSharedPointer<FlatData> o);
+    virtual void run(Context *);
+
+    QSharedPointer<FlatData> flat_data;
 
 private:
-    QRect domain;
+    QVector<QSharedPointer<FlatData>> part_data;
+    const QRect domain;
 };
 
 class RenderRayBufferTask : public RenderGraphNode {
 public:
-    RenderRayBufferTask(QRect p, int shard);
-    virtual void run(Context *) const;
+    RenderRayBufferTask(QRect p, QSharedPointer<QVector<RayPoint>> r);
+    virtual ~RenderRayBufferTask();
+    virtual void run(Context *);
+
+    QSharedPointer<QVector<RayPoint>> ray_data;
 
 private:
-    QRect domain;
-    int shard;
+    Intersection *intersection_store;
+    const QRect domain;
 };
 
 class RenderColorTask : public RenderGraphNode {
 public:
-    RenderColorTask(QRect p);
-    virtual void run(Context *) const;
+    RenderColorTask(QRect p, QSharedPointer<QVector<RayPoint>> r,
+                    QSharedPointer<FlatData> f, QSharedPointer<QImage> i);
+    virtual void run(Context *);
 
 private:
-    QRect domain;
+    QSharedPointer<QVector<RayPoint>> ray_data;
+    QSharedPointer<FlatData> flat_data;
+    QSharedPointer<QImage> image;
+    const QRect domain;
 };

@@ -6,26 +6,54 @@
 #include <QImage>
 #include <geomdefs.hh>
 
-RenderRayTask::RenderRayTask(QRect p) : RenderGraphNode("ray"), domain(p) {}
+RenderGraphNode::RenderGraphNode(const char *type)
+    : status(kWaiting), name(type), reqs(), nconsumers(0) {}
 
-void RenderRayTask::run(Context *ctx) const {
+RenderGraphNode::~RenderGraphNode() {
+    for (QSharedPointer<RenderGraphNode> &p : reqs) {
+        p->nconsumers--;
+    }
+}
+
+void RenderGraphNode::addDependency(QSharedPointer<RenderGraphNode> p) {
+    if (p.isNull()) {
+        qFatal("Dependencies must not be null for task %s", name);
+    }
+    p->nconsumers++;
+    reqs.push_back(p);
+}
+bool RenderGraphNode::isReady() const {
+    if (status != kWaiting)
+        return false;
+    for (const QSharedPointer<RenderGraphNode> &p : reqs) {
+        if (p->status != kComplete)
+            return false;
+    }
+    return true;
+}
+RenderDummyTask::RenderDummyTask() : RenderGraphNode("dummy") {}
+
+RenderRayTask::RenderRayTask(QRect p, QSharedPointer<QImage> i,
+                             QSharedPointer<FlatData> f)
+    : RenderGraphNode("ray"), image(i), flat_data(f), domain(p) {}
+
+void RenderRayTask::run(Context *ctx) {
     const ViewData *d = ctx->viewdata;
 
-    if (!d->elements.solid) {
+    if (!d->elements[0].solid) {
         return;
     }
-    int treedepth;
-    int nelements;
-    countTree(d->elements, treedepth, nelements);
+    int treedepth, nelements;
+    countTree(d->elements, 0, treedepth, nelements);
     // ^ TODO: allocate traceray buffers to match!
     if (treedepth > 10) {
         qFatal("Excessive tree depth, fatal!");
     }
     int w = ctx->w;
     int h = ctx->h;
-    if (ctx->image->width() != w || ctx->image->height() != h) {
-        qFatal("Image size mismatch, %d %d vs %d %d", ctx->image->width(),
-               ctx->image->height(), w, h);
+    if (image->width() != w || image->height() != h) {
+        qFatal("Image size mismatch, %d %d vs %d %d", image->width(),
+               image->height(), w, h);
     }
 #if 0
         QTime t = QTime::currentTime();
@@ -45,7 +73,8 @@ void RenderRayTask::run(Context *ctx) const {
     ElemMutables *mutables = new ElemMutables[nelements]();
     int iter = 1;
 
-    const FlatData *flatData = &ctx->flatData;
+    // reqs: of type?
+    const FlatData *flatData = &(*flat_data);
 
     const G4ThreeVector &forward = forwardDirection(d->orientation);
 
@@ -55,17 +84,25 @@ void RenderRayTask::run(Context *ctx) const {
     int ndevs[M + 1];
 
     for (int i = yl; i < yh; i++) {
-        QRgb *pts = reinterpret_cast<QRgb *>(ctx->image->scanLine(i));
+        QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
         for (int j = xl; j < xh; j++) {
-            if (ctx->abort_flag) {
+            if (nconsumers <= 0) {
                 delete[] mutables;
                 return;
             }
 
             // For merging at correct depth
             int sidx = i * w + j;
-            QRgb trackcol = flatData->colors[sidx];
-            G4double trackdist = flatData->distances[sidx];
+
+            QRgb trackcol;
+            G4double trackdist;
+            if (flatData->blank) {
+                trackdist = 4 * kInfinity;
+                trackcol = qRgba(255, 255, 255, 0);
+            } else {
+                trackcol = flatData->colors[sidx];
+                trackdist = flatData->distances[sidx];
+            }
 
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
             RayPoint r = rayAtPoint(pt, radius, forward, *d, iter, mutables,
@@ -81,16 +118,22 @@ void RenderRayTask::run(Context *ctx) const {
     delete[] mutables;
 }
 
-RenderRayBufferTask::RenderRayBufferTask(QRect p, int s)
-    : RenderGraphNode("buffer"), domain(p), shard(s) {}
-void RenderRayBufferTask::run(Context *ctx) const {
+RenderRayBufferTask::RenderRayBufferTask(QRect p,
+                                         QSharedPointer<QVector<RayPoint>> r)
+    : RenderGraphNode("buffer"), ray_data(r), intersection_store(NULL),
+      domain(p) {}
+RenderRayBufferTask::~RenderRayBufferTask() {
+    if (intersection_store)
+        free(intersection_store);
+}
+void RenderRayBufferTask::run(Context *ctx) {
     const ViewData *d = ctx->viewdata;
-    if (!d->elements.solid) {
+    if (!d->elements[0].solid) {
         return;
     }
     int treedepth;
     int nelements;
-    countTree(d->elements, treedepth, nelements);
+    countTree(d->elements, 0, treedepth, nelements);
     // ^ TODO: allocate traceray buffers to match!
     if (treedepth > 10) {
         qFatal("Excessive tree depth, fatal!");
@@ -117,14 +160,15 @@ void RenderRayBufferTask::run(Context *ctx) const {
     Intersection aints[M];
     int ndevs[M + 1];
 
-    RayPoint *image = ctx->raydata;
+    QVector<RayPoint> &rayData = *ray_data;
+
     size_t max_usage = M * sizeof(Intersection) * (yh - yl + 1) * (xh - xl + 1);
-    Intersection *const storage_start = (Intersection *)malloc(max_usage);
-    Intersection *storage = storage_start;
+    Intersection *const storage = (Intersection *)malloc(max_usage);
+    size_t istored = 0;
 
     for (int i = yl; i < yh; i++) {
         for (int j = xl; j < xh; j++) {
-            if (ctx->abort_flag) {
+            if (nconsumers <= 0) {
                 delete[] mutables;
                 return;
             }
@@ -133,28 +177,39 @@ void RenderRayBufferTask::run(Context *ctx) const {
             RayPoint r = rayAtPoint(pt, radius, forward, *d, iter, mutables,
                                     ints, aints, M, ndevs);
 
-            // Store ray, and fill its intersections in the buffer
-            image[i * w + j] = r;
-            for (int k = 0; k < r.N; k++) {
-                storage[k] = r.intersections[k];
+            // Store ray, and copy its intersections to the buffer
+            rayData[i * w + j] = r;
+            if (r.N > 0) {
+                for (int k = 0; k < r.N; k++) {
+                    storage[istored + k] = r.intersections[k];
+                }
+                rayData[i * w + j].intersections = &storage[istored];
+                istored += r.N;
+            } else {
+                rayData[i * w + j].intersections = NULL;
             }
-            image[i * w + j].intersections = storage;
-            storage = &storage[r.N];
         }
     }
     if (d->level_of_detail <= -1) {
         recursivelyPrintNCalls(d->elements, mutables);
     }
 
-    if (storage != storage_start) {
+    if (istored > 0) {
         // If any point had an intersection
         Intersection *verif = (Intersection *)realloc(
-            (void *)storage_start, (char *)storage - (char *)storage_start);
-        if (verif != storage_start) {
-            qFatal("realloc should only shrink %lu %lu",
-                   (char *)storage - (char *)storage_start, max_usage);
+            (void *)storage, istored * sizeof(Intersection));
+        if (verif != storage) {
+            // Fix up pointers if the memory is moved
+            for (int i = yl; i < yh; i++) {
+                for (int j = xl; j < xh; j++) {
+                    rayData[i * w + j].intersections += verif - storage;
+                }
+            }
         }
-        ctx->intersection_store[shard] = storage_start;
+        intersection_store = verif;
+    } else {
+        free(storage);
+        intersection_store = NULL;
     }
 
     delete[] mutables;
@@ -209,16 +264,18 @@ static void trackColors(const TrackHeader &h, const TrackPoint &pa,
     }
 }
 
-RenderTrackTask::RenderTrackTask(QRect p, int s)
-    : RenderGraphNode("track"), domain(p), shard(s) {}
+RenderTrackTask::RenderTrackTask(QRect p, int s, int ns,
+                                 QSharedPointer<FlatData> f)
+    : RenderGraphNode("track"), part_data(f), domain(p), shard(s), nshards(ns) {
+}
 
-void RenderTrackTask::run(Context *ctx) const {
-    if (ctx->abort_flag) {
+void RenderTrackTask::run(Context *ctx) {
+    if (nconsumers <= 0) {
         return;
     }
 
     // Blank unless we make a change
-    ctx->partData[shard].blank = true;
+    part_data->blank = true;
 
     int xl = domain.left();
     int xh = domain.right();
@@ -231,15 +288,19 @@ void RenderTrackTask::run(Context *ctx) const {
     const TrackData &t = d.tracks;
 
     size_t ntracks = t.getNTracks();
-    size_t tfrom = (ntracks * shard) / ctx->nthreads;
-    size_t tupto = (ntracks * (shard + 1)) / ctx->nthreads;
+    size_t tfrom = (ntracks * shard) / nshards;
+    size_t tupto = (ntracks * (shard + 1)) / nshards;
     if (tfrom == tupto) {
         return;
     }
 
     // Might have tracks, so we fill background
-    double *dists = ctx->partData[shard].distances;
-    QRgb *colors = ctx->partData[shard].colors;
+    double *dists = part_data->distances;
+    QRgb *colors = part_data->colors;
+    if (part_data->w != ctx->w || part_data->h != ctx->h) {
+        qFatal("Bad size in RenderTrackTask::run");
+    }
+
     for (int y = yl; y < yh; y++) {
         for (int x = xl; x < xh; x++) {
             // Scale up to be beyond anything traceRay produces
@@ -259,7 +320,7 @@ void RenderTrackTask::run(Context *ctx) const {
     }
 
     for (size_t z = tfrom; z < tupto; z++) {
-        if (ctx->abort_flag) {
+        if (nconsumers <= 0) {
             return;
         }
 
@@ -283,7 +344,7 @@ void RenderTrackTask::run(Context *ctx) const {
             continue;
         }
 
-        ctx->partData[shard].blank = false;
+        part_data->blank = false;
 
         for (int j = 1; j < header.npts; j++) {
             // Adopt previous late point as early point
@@ -371,48 +432,64 @@ void RenderTrackTask::run(Context *ctx) const {
     }
 }
 
-RenderMergeTask::RenderMergeTask(QRect p)
-    : RenderGraphNode("merge"), domain(p) {}
+RenderMergeTask::RenderMergeTask(QRect p, QVector<QSharedPointer<FlatData>> i,
+                                 QSharedPointer<FlatData> o)
+    : RenderGraphNode("merge"), flat_data(o), part_data(i), domain(p) {}
 
-void RenderMergeTask::run(Context *ctx) const {
+void RenderMergeTask::run(Context *ctx) {
     // Minimum merge over all partData
-    Context &c = *ctx;
-    if (c.abort_flag) {
+    if (nconsumers <= 0) {
         return;
     }
+
+    bool all_blank = true;
+    for (int k = 0; k < part_data.size(); k++) {
+        all_blank &= part_data[k]->blank;
+    }
+    if (all_blank) {
+        flat_data->blank = true;
+        return;
+    }
+    flat_data->blank = false;
 
     int xl = domain.left();
     int xh = domain.right();
     int yl = domain.top();
     int yh = domain.bottom();
     int w = ctx->w;
+    FlatData &fd = *flat_data;
     for (int y = yl; y < yh; y++) {
         for (int x = xl; x < xh; x++) {
             // Scale up to be beyond anything traceRay produces
-            c.flatData.distances[y * w + x] = 4 * kInfinity;
-            c.flatData.colors[y * w + x] = qRgba(255, 255, 255, 0.);
+            fd.distances[y * w + x] = 4 * kInfinity;
+            fd.colors[y * w + x] = qRgba(255, 255, 255, 0.);
         }
     }
 
-    for (int k = 0; k < c.nthreads; k++) {
-        if (c.partData[k].blank) {
+    for (int k = 0; k < part_data.size(); k++) {
+        FlatData &pd = *part_data[k];
+
+        if (pd.blank) {
             continue;
         }
         for (int y = yl; y < yh; y++) {
             for (int x = xl; x < xh; x++) {
                 int i = y * w + x;
-                if (c.partData[k].distances[i] < c.flatData.distances[i]) {
-                    c.flatData.distances[i] = c.partData[k].distances[i];
-                    c.flatData.colors[i] = c.partData[k].colors[i];
+                if (pd.distances[i] < fd.distances[i]) {
+                    fd.distances[i] = pd.distances[i];
+                    fd.colors[i] = pd.colors[i];
                 }
             }
         }
     }
 }
 
-RenderColorTask::RenderColorTask(QRect p)
-    : RenderGraphNode("color"), domain(p) {}
-void RenderColorTask::run(Context *ctx) const {
+RenderColorTask::RenderColorTask(QRect p, QSharedPointer<QVector<RayPoint>> r,
+                                 QSharedPointer<FlatData> f,
+                                 QSharedPointer<QImage> i)
+    : RenderGraphNode("color"), ray_data(r), flat_data(f), image(i), domain(p) {
+}
+void RenderColorTask::run(Context *ctx) {
     int xl = domain.left();
     int xh = domain.right();
     int yl = domain.top();
@@ -421,22 +498,30 @@ void RenderColorTask::run(Context *ctx) const {
     int h = ctx->h;
     int mind = std::min(w, h);
 
-    const FlatData *flatData = &ctx->flatData;
+    const FlatData &flatData = *flat_data;
     const ViewData *viewData = ctx->viewdata;
-    const RayPoint *rayData = ctx->raydata;
+    const QVector<RayPoint> &rayData = *ray_data;
     const G4ThreeVector &forward = forwardDirection(viewData->orientation);
 
     for (int i = yl; i < yh; i++) {
-        QRgb *pts = reinterpret_cast<QRgb *>(ctx->image->scanLine(i));
+        QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
         for (int j = xl; j < xh; j++) {
-            if (ctx->abort_flag) {
+            if (nconsumers <= 0) {
                 return;
             }
 
             // For merging at correct depth
             int sidx = i * w + j;
-            QRgb trackcol = flatData->colors[sidx];
-            G4double trackdist = flatData->distances[sidx];
+            QRgb trackcol;
+            G4double trackdist;
+            if (flatData.blank) {
+                trackdist = 4 * kInfinity;
+                trackcol = qRgba(255, 255, 255, 0);
+            } else {
+                trackcol = flatData.colors[sidx];
+                trackdist = flatData.distances[sidx];
+            }
+
             const RayPoint &ray = rayData[sidx];
             QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
             QRgb color =

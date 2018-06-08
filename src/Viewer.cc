@@ -88,8 +88,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     which_geo = 0;
     geo_options = options;
     track_options = trackopts;
-    vd.elements = convertCreation(geo_options[which_geo].vol);
-    vd.scene_radius = vd.elements.solid->GetExtent().GetExtentRadius();
+    vd.elements.clear();
+    convertCreation(vd.elements, geo_options[which_geo].vol);
+    vd.scene_radius = vd.elements[0].solid->GetExtent().GetExtentRadius();
     vd.scale = 2 * vd.scene_radius;
     vd.camera = G4ThreeVector(-4 * vd.scene_radius, 0, 0);
     vd.orientation = G4RotationMatrix();
@@ -254,10 +255,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         count_lower->setDisabled(true);
         count_upper->setDisabled(true);
     }
-    connect(count_lower, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
-    connect(count_upper, SIGNAL(valueChanged(int)), this, SLOT(updatePlanes()));
-    connect(times_range, SIGNAL(valueChanged()), this, SLOT(updatePlanes()));
-    connect(energy_range, SIGNAL(valueChanged()), this, SLOT(updatePlanes()));
+    connect(count_lower, SIGNAL(valueChanged(int)), this, SLOT(updateTracks()));
+    connect(count_upper, SIGNAL(valueChanged(int)), this, SLOT(updateTracks()));
+    connect(times_range, SIGNAL(valueChanged()), this, SLOT(updateTracks()));
+    connect(energy_range, SIGNAL(valueChanged()), this, SLOT(updateTracks()));
     vb->addWidget(times_range);
     vb->addWidget(energy_range);
     times_range->setMaximumWidth(plane_edit[0]->sizeHint().width());
@@ -313,7 +314,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
                                         new AlphaBoxDelegate(tree_model, this));
     connect(tree_view, SIGNAL(activated(const QModelIndex &)), tree_model,
             SLOT(respToActive(const QModelIndex &)));
-    connect(tree_model, SIGNAL(colorChange()), rwidget, SLOT(rerender()));
+    connect(tree_model, SIGNAL(colorChange()), this, SLOT(updateColors()));
 
     connect(
         tree_view->selectionModel(),
@@ -501,7 +502,7 @@ void Viewer::keyPressEvent(QKeyEvent *event) {
     G4cout << "Camera: " << vd.camera << G4endl;
     G4cout << "Ori: " << vd.orientation << G4endl;
 #endif
-    rwidget->rerender();
+    rwidget->rerender(CHANGE_VIEWPORT);
 }
 
 void Viewer::mousePressEvent(QMouseEvent *event) {
@@ -531,7 +532,7 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
     const int M = 50;
     Intersection ints[M + 1];
     int td, nelem;
-    countTree(vd.elements, td, nelem);
+    countTree(vd.elements, 0, td, nelem);
     Q_UNUSED(td);
     ElemMutables *mutables = new ElemMutables[nelem]();
     RayPoint rpt =
@@ -539,13 +540,13 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
                  vd.elements, vd.clipping_planes, ints, M, 1, mutables);
     delete[] mutables;
     rayiter++;
-    compressTraces(&rpt);
+    compressTraces(&rpt, vd.elements);
     ray_table->clear();
     ray_list.clear();
     for (int j = 0; j < rpt.N; j++) {
-        QString name(rpt.intersections[j].elem->name.data());
+        QString name(vd.elements[rpt.intersections[j].ecode].name.data());
         ray_table->addItem(name);
-        ray_list.push_back(rpt.intersections[j].elem);
+        ray_list.push_back(&vd.elements[rpt.intersections[j].ecode]);
     }
 
     if (!clicked)
@@ -577,7 +578,7 @@ void Viewer::mouseMoveEvent(QMouseEvent *event) {
         vd.orientation = rot * vd.orientation;
         lastpt = event->pos();
     }
-    rwidget->rerender();
+    rwidget->rerender(CHANGE_VIEWPORT);
 }
 
 void Viewer::wheelEvent(QWheelEvent *event) {
@@ -589,7 +590,7 @@ void Viewer::wheelEvent(QWheelEvent *event) {
     if (vd.scale < vd.scene_radius / 1048576.) {
         vd.scale = vd.scene_radius / 1048576.;
     }
-    rwidget->rerender();
+    rwidget->rerender(CHANGE_VIEWPORT);
 }
 
 void Viewer::updatePlanes() {
@@ -600,6 +601,9 @@ void Viewer::updatePlanes() {
             vd.clipping_planes.push_back(p);
         }
     }
+    updateTracks(true);
+}
+void Viewer::updateTracks(bool planes_also_changed) {
     if (which_tracks > 0) {
         double tlow, thigh;
         times_range->value(tlow, thigh);
@@ -641,14 +645,19 @@ void Viewer::updatePlanes() {
         trackdata = TrackData();
     }
     linecount_label->setText(QString("Lines: %1").arg(trackdata.getNTracks()));
-    rwidget->rerender();
+
+    if (planes_also_changed) {
+        rwidget->rerender(CHANGE_VIEWPORT);
+    } else {
+        rwidget->rerender(CHANGE_TRACK);
+    }
 }
 
 void Viewer::updateColors() {
     // ColorConfig handles ViewData updates
     color_config->reassignColors();
     info_model->setElement(info_model->curE(), vd);
-    rwidget->rerender();
+    rwidget->rerender(CHANGE_COLOR);
 }
 
 void Viewer::changeGeometry(QAction *act) {
@@ -659,9 +668,10 @@ void Viewer::changeGeometry(QAction *act) {
             if (which_geo != i) {
                 // Change geometry
                 which_geo = i;
-                vd.elements = convertCreation(geo_options[which_geo].vol);
+                vd.elements.clear();
+                convertCreation(vd.elements, geo_options[which_geo].vol);
                 vd.scene_radius =
-                    vd.elements.solid->GetExtent().GetExtentRadius();
+                    vd.elements[0].solid->GetExtent().GetExtentRadius();
                 if (4 * vd.scene_radius > vd.camera.mag()) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
@@ -673,7 +683,7 @@ void Viewer::changeGeometry(QAction *act) {
                 tree_view->collapseAll();
                 tree_view->expandToDepth(1);
                 indicateElement(NULL);
-                rwidget->rerender();
+                rwidget->rerender(CHANGE_GEO);
                 return;
             }
         }
@@ -723,7 +733,7 @@ void Viewer::changeTracks(QAction *act) {
     energy_range->setEnabled(active);
     count_lower->setEnabled(active);
     count_upper->setEnabled(active);
-    updatePlanes();
+    updateTracks(false);
 }
 
 void Viewer::indicateElement(const Element *e) {
@@ -921,5 +931,5 @@ void Viewer::setViewRotation(int sel) {
         vd.orientation = rot * vd.orientation;
     }
 
-    rwidget->rerender();
+    rwidget->rerender(CHANGE_VIEWPORT);
 }

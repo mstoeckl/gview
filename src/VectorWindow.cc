@@ -157,9 +157,10 @@ VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     /* Initialize functional stuff */
 
     ViewData view_data;
-    view_data.elements = convertCreation(vol);
+    view_data.elements.clear();
+    convertCreation(view_data.elements, vol);
     view_data.scene_radius =
-        view_data.elements.solid->GetExtent().GetExtentRadius();
+        view_data.elements[0].solid->GetExtent().GetExtentRadius();
     view_data.scale = view_data.scene_radius; // *0.05 for hxrd3
     view_data.camera = G4ThreeVector(-2 * view_data.scene_radius, 0, 0);
     //    view_data.orientation = CLHEP::HepRotationX(37.44 * CLHEP::deg);

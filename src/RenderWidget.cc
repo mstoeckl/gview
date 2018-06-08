@@ -102,6 +102,7 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     to_full_detail = false;
     last_level_of_detail = 10000;
     immediate_lod = 16;
+    changed_inputs = CHANGE_COLOR | CHANGE_GEO | CHANGE_TRACK;
 
     connect(&graph, SIGNAL(done(qreal)), this, SLOT(completed(qreal)));
     connect(&graph, SIGNAL(aborted()), this, SLOT(aborted()));
@@ -115,12 +116,18 @@ void RenderWidget::setFullDetail(bool b) {
     }
     to_full_detail = b;
     if (state == NONE) {
+        changed_inputs |= CHANGE_GEO;
         rerender_priv();
     }
 }
 
-void RenderWidget::rerender() {
-    currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
+void RenderWidget::rerender(int what_changed) {
+    if (what_changed != CHANGE_COLOR) {
+        // Pure color changes are fast; all other types are slow
+        currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
+        changed_inputs |= CHANGE_VIEWPORT;
+    }
+    changed_inputs |= what_changed;
     rerender_priv();
 }
 
@@ -151,7 +158,8 @@ void RenderWidget::rerender_priv() {
 
     TrackData d = currView.tracks;
     currView.tracks = trackdata;
-    graph.start(next, currView);
+    graph.start(next, currView, changed_inputs);
+    changed_inputs = 0;
     currView.tracks = d;
 
     last_level_of_detail = currView.level_of_detail;
@@ -159,6 +167,7 @@ void RenderWidget::rerender_priv() {
         state = ACTIVE;
     } else {
         state = ACTIVE_AND_QUEUED;
+        changed_inputs |= CHANGE_VIEWPORT;
         currView.level_of_detail--;
     }
 }
@@ -202,6 +211,7 @@ void RenderWidget::resizeEvent(QResizeEvent *evt) {
         return;
     }
     currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
+    changed_inputs |= CHANGE_VIEWPORT;
     rerender_priv();
 }
 
@@ -292,7 +302,7 @@ void RenderSaveObject::start() {
     // Q: are copy costs too high? make LOD render side effect?
     TrackData d = viewdata.tracks;
     viewdata.tracks = trackdata;
-    graph.start(target, viewdata);
+    graph.start(target, viewdata, CHANGE_ONESHOT);
     viewdata.tracks = d;
 
     viewdata.level_of_detail = lod;

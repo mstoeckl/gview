@@ -18,16 +18,17 @@ public:
     virtual ~RenderGraphHelper() {}
 
     virtual void run() {
-        if (context->abort_flag) {
+        if (node->nconsumers <= 0) {
             return;
         }
+        qDebug("running %s", node->name);
         node->run(&*context);
-        if (context->abort_flag) {
+        if (node->nconsumers <= 0) {
             return;
         }
         node->status = RenderGraphNode::kComplete;
         QMetaObject::invokeMethod(home, "queueNext", Qt::QueuedConnection,
-                                  Q_ARG(int, context->renderno));
+                                  Q_ARG(RenderGraphNode *, node.data()));
     }
 
 private:
@@ -36,43 +37,9 @@ private:
     QSharedPointer<Context> context;
 };
 
-Context::Context(const ViewData &d, QSharedPointer<QImage> im, int nt,
-                 int seqno)
-    : renderno(seqno), nthreads(nt), w(im->width()), h(im->height()) {
-    viewdata = new ViewData(d);
-    image = im;
-    abort_flag = false;
-
-    partData = new FlatData[nthreads];
-    for (int k = 0; k < nthreads; k++) {
-        partData[k].colors = new QRgb[w * h];
-        partData[k].distances = new double[w * h];
-        partData[k].blank = false;
-    }
-    flatData.colors = new QRgb[w * h];
-    flatData.distances = new double[w * h];
-    flatData.blank = false;
-    raydata = new RayPoint[w * h];
-    intersection_store = new Intersection *[nthreads * 4]();
-}
-
-Context::~Context() {
-    delete viewdata;
-    for (int k = 0; k < nthreads; k++) {
-        delete[] partData[k].colors;
-        delete[] partData[k].distances;
-    }
-    delete[] partData;
-    delete[] flatData.colors;
-    delete[] flatData.distances;
-    delete[] raydata;
-    for (int i = 0; i < nthreads * 4; i++) {
-        if (intersection_store[i]) {
-            free(intersection_store[i]);
-        }
-    }
-    delete[] intersection_store;
-}
+Context::Context(const ViewData &d, int iw, int ih)
+    : w(iw), h(ih), viewdata(new ViewData(d)) {}
+Context::~Context() { delete viewdata; }
 
 RenderGraph::RenderGraph(int nthreads) {
     pool = new QThreadPool();
@@ -80,36 +47,43 @@ RenderGraph::RenderGraph(int nthreads) {
 
     timer = new QElapsedTimer();
 
-    seqno = 0;
+    qRegisterMetaType<RenderGraphNode *>("RenderGraphNode*");
 }
 
 RenderGraph::~RenderGraph() {
-    // Destruction requires cleanup hints
-    if (!context.isNull()) {
-        context->abort_flag = true;
-    }
-    // Reset graph; nodes are reference counted
+    // Reset graph; nodes are reference counted and will self-terminate
     tasks.clear();
+    task_color.clear();
+    task_merge.clear();
+    task_ray.clear();
+    task_raybuf.clear();
+    task_track.clear();
+
     context = QSharedPointer<Context>();
-    pool->deleteLater();
+    pool->clear();
+    pool->waitForDone();
+    delete pool;
 
     delete timer;
 }
 
-void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
+void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd,
+                        int changed) {
+    qDebug("change: %x", changed);
     timer->start();
+    bool color_changed = changed & CHANGE_COLOR;
+    bool geo_changed = changed & CHANGE_GEO;
+    bool tracks_changed = changed & CHANGE_TRACK;
+    bool oneshot = changed & CHANGE_ONESHOT;
 
     int w = im->width();
     int h = im->height();
 
     int nthreads = pool->maxThreadCount();
 
-    context = QSharedPointer<Context>(new Context(vd, im, nthreads, seqno));
-    seqno++;
+    context = QSharedPointer<Context>(new Context(vd, w, h));
 
     progress = 0.f;
-
-    tasks.clear();
 
     QRect fullWindow = QRect(0, 0, w + 1, h + 1);
     QVector<QRect> panes;
@@ -126,43 +100,128 @@ void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd) {
         }
     }
 
-    if (0) {
-        // Unbuffered mode!
-        RenderMergeTask *merge = new RenderMergeTask(fullWindow);
-        for (int shard = 0; shard < nthreads; shard++) {
-            RenderTrackTask *track = new RenderTrackTask(fullWindow, shard);
-            merge->reqs.push_back(track);
-            tasks.push_back(QSharedPointer<RenderGraphNode>(track));
+    // Replace graph parts (and dependents) which need changing
+    if (oneshot) {
+        task_color.clear();
+        task_merge.clear();
+        task_ray.clear();
+        task_raybuf.clear();
+        task_track.clear();
+
+        // Create large storage buffers
+        QVector<QSharedPointer<FlatData>> part_data_list;
+        for (int i = 0; i < nthreads; i++) {
+            QSharedPointer<FlatData> part_data(new FlatData(w, h));
+            part_data_list.push_back(part_data);
         }
-        tasks.push_back(QSharedPointer<RenderGraphNode>(merge));
+        QSharedPointer<FlatData> flat_data(new FlatData(w, h));
+
+        task_merge.push_back(QSharedPointer<RenderGraphNode>(
+            new RenderMergeTask(fullWindow, part_data_list, flat_data)));
+        for (int i = 0; i < nthreads; i++) {
+            QSharedPointer<RenderGraphNode> track(new RenderTrackTask(
+                fullWindow, i, nthreads, part_data_list[i]));
+            for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
+                p->addDependency(track);
+            }
+            task_track.push_back(track);
+        }
         for (int i = 0; i < panes.size(); i++) {
-            RenderRayTask *ray = new RenderRayTask(panes[i]);
-            ray->reqs.push_back(merge);
-            tasks.push_back(QSharedPointer<RenderGraphNode>(ray));
+            QSharedPointer<RenderGraphNode> ray(
+                new RenderRayTask(panes[i], im, flat_data));
+            for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
+                ray->addDependency(p);
+            }
+            task_ray.push_back(ray);
         }
+        task_final = QSharedPointer<RenderGraphNode>(new RenderDummyTask());
+        for (const QSharedPointer<RenderGraphNode> &p : task_ray) {
+            task_final->addDependency(p);
+        }
+        task_final->request();
+
+        tasks = task_track + task_merge + task_ray;
+        tasks.push_back(task_final);
     } else {
-        // Buffered mode!
-        RenderMergeTask *merge = new RenderMergeTask(fullWindow);
-        RenderColorTask *color = new RenderColorTask(fullWindow);
-        for (int shard = 0; shard < nthreads; shard++) {
-            RenderTrackTask *track = new RenderTrackTask(fullWindow, shard);
-            merge->reqs.push_back(track);
-            tasks.push_back(QSharedPointer<RenderGraphNode>(track));
+        // Only replace a segment if predecessors were replaced
+        task_ray.clear();
+        if (tracks_changed || task_track.size() <= 0) {
+            tracks_changed = true;
+            task_track.clear();
+            task_merge.clear();
+
+            QVector<QSharedPointer<FlatData>> part_data_list;
+            for (int i = 0; i < nthreads; i++) {
+                QSharedPointer<FlatData> part_data(new FlatData(w, h));
+                part_data_list.push_back(part_data);
+            }
+            QSharedPointer<FlatData> flat_data(new FlatData(w, h));
+            task_merge.push_back(QSharedPointer<RenderGraphNode>(
+                new RenderMergeTask(fullWindow, part_data_list, flat_data)));
+            for (int i = 0; i < nthreads; i++) {
+                QSharedPointer<RenderGraphNode> track(new RenderTrackTask(
+                    fullWindow, i, nthreads, part_data_list[i]));
+                task_track.push_back(track);
+                for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
+                    p->addDependency(track);
+                }
+            }
         }
-        color->reqs.push_back(merge);
-        for (int i = 0; i < panes.size(); i++) {
-            RenderRayBufferTask *raybuf = new RenderRayBufferTask(panes[i], i);
-            color->reqs.push_back(raybuf);
-            tasks.push_back(QSharedPointer<RenderGraphNode>(raybuf));
+
+        if (geo_changed || task_raybuf.size() <= 0) {
+            geo_changed = true;
+            task_raybuf.clear();
+
+            QSharedPointer<QVector<RayPoint>> raypts(
+                new QVector<RayPoint>(w * h));
+            for (int i = 0; i < panes.size(); i++) {
+                QSharedPointer<RenderGraphNode> ray(
+                    new RenderRayBufferTask(panes[i], raypts));
+                task_raybuf.push_back(ray);
+            }
         }
-        tasks.push_back(QSharedPointer<RenderGraphNode>(merge));
-        tasks.push_back(QSharedPointer<RenderGraphNode>(color));
+
+        if (1) {
+            (void)color_changed;
+            task_color.clear();
+
+            QSharedPointer<QVector<RayPoint>> ray_data =
+                reinterpret_cast<RenderRayBufferTask *>(task_raybuf[0].data())
+                    ->ray_data;
+            QSharedPointer<FlatData> flat_data =
+                reinterpret_cast<RenderMergeTask *>(task_merge[0].data())
+                    ->flat_data;
+            if (ray_data.isNull() || flat_data.isNull()) {
+                qFatal("Null color dependents");
+            }
+
+            QSharedPointer<RenderGraphNode> color(
+                new RenderColorTask(fullWindow, ray_data, flat_data, im));
+            for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
+                color->addDependency(p);
+            }
+            for (const QSharedPointer<RenderGraphNode> &p : task_raybuf) {
+                color->addDependency(p);
+            }
+
+            task_color.push_back(color);
+        }
+
+        task_final = QSharedPointer<RenderGraphNode>(new RenderDummyTask());
+        for (const QSharedPointer<RenderGraphNode> &p : task_color) {
+            task_final->addDependency(p);
+        }
+        task_final->request();
+
+        tasks = task_track + task_merge + task_raybuf + task_color;
+        tasks.push_back(task_final);
     }
 
     for (QSharedPointer<RenderGraphNode> j : tasks) {
-        j->status = RenderGraphNode::kWaiting;
-
-        if (j->reqs.size() == 0) {
+        if (j.isNull()) {
+            qFatal("Task was null, quitting");
+        }
+        if (j->isReady()) {
             doQueue(j);
         }
     }
@@ -178,56 +237,22 @@ void RenderGraph::doQueue(QSharedPointer<RenderGraphNode> node) {
 }
 
 void RenderGraph::abort() {
-    if (context.isNull()) {
-        return;
-    }
-    // Fast terminate currently running actions
-    context->abort_flag = true;
-
-    // Reset graph; nodes are reference counted
-    tasks.clear();
-    context = QSharedPointer<Context>();
+    // Remove the previous graph head
+    task_final->unrequest();
 
     emit aborted();
 }
 
-void RenderGraph::queueNext(int renderno) {
-    if (context.isNull() || renderno != context->renderno) {
-        return;
+void RenderGraph::queueNext(RenderGraphNode *node) {
+    if (node == task_final.data()) {
+        qreal elapsed = 1e-9 * timer->nsecsElapsed();
+        emit done(elapsed);
     }
 
     QVector<QSharedPointer<RenderGraphNode>> nseeds;
-    int n_incomplete = 0;
     for (QSharedPointer<RenderGraphNode> m : tasks) {
-        if (m->status != RenderGraphNode::kComplete) {
-            n_incomplete++;
-        }
-
-        if (m->status != RenderGraphNode::kWaiting) {
-            continue;
-        }
-
-        bool reqsleft = false;
-        for (RenderGraphNode *p : m->reqs) {
-            if (p->status != RenderGraphNode::kComplete) {
-                reqsleft = true;
-                break;
-            }
-        }
-        if (!reqsleft) {
-            nseeds.append(m);
-        }
-    }
-
-    if (n_incomplete <= 0) {
-        // Reset graph
-        context = QSharedPointer<Context>();
-
-        qreal elapsed = 1e-9 * timer->nsecsElapsed();
-        emit done(elapsed);
-    } else {
-        for (QSharedPointer<RenderGraphNode> t : nseeds) {
-            doQueue(t);
+        if (m->isReady()) {
+            doQueue(m);
         }
     }
 
@@ -238,10 +263,3 @@ void RenderGraph::queueNext(int renderno) {
         emit progressed(int(100 * progress));
     }
 }
-
-RenderGraphNode::RenderGraphNode(const char *type) {
-    status = kWaiting;
-    name = type;
-}
-
-RenderGraphNode::~RenderGraphNode() {}

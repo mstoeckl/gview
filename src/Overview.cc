@@ -551,7 +551,7 @@ void OverView::recalculate() {
         QVector<int> chain;
         if (!link.size()) {
             n.parent = 0; // parent is self :-)
-            n.elem = &currView.elements;
+            n.elem = &currView.elements[0];
             chain.push_back(0);
         } else {
             chain.push_back(0);
@@ -562,7 +562,9 @@ void OverView::recalculate() {
             }
             n.parent = chain[chain.length() - 1];
             int realidx = stack[stack.length() - 1];
-            n.elem = &link[n.parent].elem->children[size_t(realidx)];
+            n.elem =
+                &currView
+                     .elements[link[n.parent].elem->children[size_t(realidx)]];
             link[n.parent].sub[link[n.parent].lexi[realidx]] = link.size();
             chain.push_back(link.size());
         }
@@ -592,14 +594,17 @@ void OverView::recalculate() {
         // Determine lexical order for kids
         QStringList names;
         for (size_t j = 0; j < nkids; j++) {
-            names << QString(n.elem->children[j].name.c_str());
+            names << QString(
+                currView.elements[n.elem->children[j]].name.c_str());
             n.sub.push_back(-1); // placeholder
         }
         names.sort(Qt::CaseInsensitive);
         // assuming no duplicate names... (todo: a true indirect sort..)
         for (int i = 0; i < int(nkids); i++) {
             for (size_t j = 0; j < nkids; j++) {
-                if (names[i] == QString(n.elem->children[j].name.c_str())) {
+                if (names[i] ==
+                    QString(
+                        currView.elements[n.elem->children[j]].name.c_str())) {
                     n.lexi.push_back(i);
                     break;
                 }

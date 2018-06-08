@@ -87,10 +87,12 @@ static QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
     QPointF spot(pt.x() * S + 0.5 * W, pt.y() * S + 0.5 * H);
     return spot;
 }
-static void recsetColorsByMaterial(Element &elem, QVector<FColor> &color_table,
+static void recsetColorsByMaterial(std::vector<Element> &elts,
+                                   QVector<FColor> &color_table,
                                    QMap<QString, FColor> &color_map,
-                                   QMap<QString, int> &idx_map) {
+                                   QMap<QString, int> &idx_map, int idx) {
     // We hard-code color associations to be more consistent
+    Element &elem = elts[idx];
     QString key(elem.material->GetName().c_str());
     if (!color_map.count(key)) {
         FColor c = randColor();
@@ -105,8 +107,8 @@ static void recsetColorsByMaterial(Element &elem, QVector<FColor> &color_table,
         color_table.push_back(color_map[key]);
     }
     elem.ccode = idx_map[key];
-    for (Element &e : elem.children) {
-        recsetColorsByMaterial(e, color_table, color_map, idx_map);
+    for (int jdx : elem.children) {
+        recsetColorsByMaterial(elts, color_table, color_map, idx_map, jdx);
     }
 }
 
@@ -179,7 +181,7 @@ void VectorTracer::recolor() {
     QMap<QString, int> idx_map;
     element_colors.clear();
     recsetColorsByMaterial(view_data.elements, element_colors, color_map,
-                           idx_map);
+                           idx_map, 0);
 }
 
 QImage VectorTracer::preview(const QSize &sz) {
@@ -252,15 +254,15 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
         const Element *first_a = NULL, *first_b = NULL;
         Intersection *first_ia = NULL, *first_ib = NULL;
         for (int i = 0; i < ra.N; i++) {
-            if (ra.intersections[i].elem->visible) {
-                first_a = ra.intersections[i].elem;
+            if (view_data.elements[ra.intersections[i].ecode].visible) {
+                first_a = &view_data.elements[ra.intersections[i].ecode];
                 first_ia = &ra.intersections[i];
                 break;
             }
         }
         for (int i = 0; i < rb.N; i++) {
-            if (rb.intersections[i].elem->visible) {
-                first_b = rb.intersections[i].elem;
+            if (view_data.elements[rb.intersections[i].ecode].visible) {
+                first_b = &view_data.elements[rb.intersections[i].ecode];
                 first_ib = &rb.intersections[i];
                 break;
             }
@@ -278,7 +280,7 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
         }
 
         for (int i = 0; i < std::min(ra.N, rb.N); i++) {
-            if (ra.intersections[i].elem != rb.intersections[i].elem) {
+            if (ra.intersections[i].ecode != rb.intersections[i].ecode) {
                 return i;
             }
         }
@@ -298,10 +300,12 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
     }
 }
 
-static Intersection *first_nontrivial_intersection(const RenderPoint &p) {
+static Intersection *first_nontrivial_intersection(const RenderPoint &p,
+                                                   const ViewData &vd) {
     for (int i = 0; i < p.ray.N; i++) {
-        if ((i > 0 && p.ray.intersections[i - 1].elem->visible) ||
-            (i < p.ray.N && p.ray.intersections[i].elem->visible)) {
+        if ((i > 0 && vd.elements[p.ray.intersections[i - 1].ecode].visible) ||
+            (i < p.ray.N &&
+             vd.elements[p.ray.intersections[i].ecode].visible)) {
             return &p.ray.intersections[i];
             break;
         }
@@ -326,7 +330,7 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
     if (!ray_mutables) {
         int treedepth;
         int nelements;
-        countTree(view_data.elements, treedepth, nelements);
+        countTree(view_data.elements, 0, treedepth, nelements);
         ray_mutables = new ElemMutables[nelements]();
         if (treedepth > 10) {
             qFatal("Excessive tree depth, fatal!");
@@ -340,7 +344,7 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
                             view_data.elements, view_data.clipping_planes, ints,
                             dlimit, ray_iteration, ray_mutables);
     ray_iteration++;
-    compressTraces(&rpt);
+    compressTraces(&rpt, view_data.elements);
 
     return RenderPoint(spot, rpt);
 }
@@ -393,11 +397,13 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
 
     // Step 2: bisect on cause of difference
     Intersection cx_inside =
-        transparent_volumes ? result_inside->ray.intersections[cd]
-                            : *first_nontrivial_intersection(*result_inside);
+        transparent_volumes
+            ? result_inside->ray.intersections[cd]
+            : *first_nontrivial_intersection(*result_inside, view_data);
     Intersection cx_outside =
-        transparent_volumes ? result_outside->ray.intersections[cd]
-                            : *first_nontrivial_intersection(*result_outside);
+        transparent_volumes
+            ? result_outside->ray.intersections[cd]
+            : *first_nontrivial_intersection(*result_outside, view_data);
     const int nsubdivisions = 20;
     for (int i = 0; i < nsubdivisions; i++) {
         RenderPoint mid =
@@ -410,7 +416,7 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
             }
             cx_mid = mid.ray.intersections[cd];
         } else {
-            Intersection *k = first_nontrivial_intersection(mid);
+            Intersection *k = first_nontrivial_intersection(mid, view_data);
             if (!k) {
                 // Lack of visible zone for midpoint; abort
                 return;
@@ -447,19 +453,21 @@ static FColor intersectionColor(const G4ThreeVector &normal,
 static FColor retractionMerge(const RenderPoint &pt, FColor seed,
                               const G4ThreeVector &normal,
                               const QVector<FColor> &color_table,
-                              int startpoint, bool transparent_volumes) {
+                              const ViewData &vd, int startpoint,
+                              bool transparent_volumes) {
     for (int k = startpoint; k >= 0; --k) {
-        if (!pt.ray.intersections[k].elem->visible) {
+        if (!vd.elements[pt.ray.intersections[k].ecode].visible) {
             continue;
         }
 
         // We use the intersection before the volume
         const FColor &base_color =
-            color_table[pt.ray.intersections[k].elem->ccode];
+            color_table[vd.elements[pt.ray.intersections[k].ecode].ccode];
         FColor alt_color = intersectionColor(pt.ray.intersections[k].normal,
                                              normal, base_color);
-        double e =
-            transparent_volumes ? pt.ray.intersections[k].elem->alpha : 1.0;
+        double e = transparent_volumes
+                       ? vd.elements[pt.ray.intersections[k].ecode].alpha
+                       : 1.0;
 
         seed = FColor::blend(seed, alt_color, e);
     }
@@ -469,7 +477,8 @@ FColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
 
     FColor color(0.9, 0.9, 0.9, 0.1);
     return retractionMerge(pt, color, view_data.orientation.rowX(),
-                           element_colors, pt.ray.N - 2, transparent_volumes);
+                           element_colors, view_data, pt.ray.N - 2,
+                           transparent_volumes);
 }
 FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
                                             const RenderPoint &outside) {
@@ -480,7 +489,7 @@ FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
         return color;
     // It is possible that lim=inside.nhits if outside has an extra solid
     return retractionMerge(inside, color, view_data.orientation.rowX(),
-                           element_colors, lim - 1, true);
+                           element_colors, view_data, lim - 1, true);
 }
 
 void VectorTracer::computeGrid() {
@@ -1057,7 +1066,9 @@ void VectorTracer::computeEdges() {
             region.is_clipped_patch = class_representative.ray.front_clipped;
         }
         if (class_representative.ray.N > 0) {
-            if (!class_representative.ray.intersections[0].elem->visible)
+            if (!view_data
+                     .elements[class_representative.ray.intersections[0].ecode]
+                     .visible)
                 region.is_clipped_patch = false;
         }
 
@@ -1209,8 +1220,8 @@ int VectorTracer::crease_depth(const RenderPoint &q0, const RenderPoint &q1,
             }
         }
     } else {
-        Intersection *first0 = first_nontrivial_intersection(q0);
-        Intersection *first1 = first_nontrivial_intersection(q1);
+        Intersection *first0 = first_nontrivial_intersection(q0, view_data);
+        Intersection *first1 = first_nontrivial_intersection(q1, view_data);
         if (!first0 || !first1)
             return -1;
 

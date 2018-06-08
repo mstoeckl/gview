@@ -61,6 +61,7 @@ public slots:
     void restColor();
     void restOrient();
     void updatePlanes();
+    void updateTracks(bool plane_change = false);
     void updateColors();
     void updateShowLines();
     void screenshot(int sx = 1);

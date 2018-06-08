@@ -18,18 +18,20 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-long recursivelySumNCalls(const Element &r, const ElemMutables e[]) {
-    long s = e[r.ecode].ngeocalls;
-    for (size_t k = 0; k < r.children.size(); k++) {
-        s += recursivelySumNCalls(r.children[k], e);
+long recursivelySumNCalls(const std::vector<Element> &elts,
+                          const ElemMutables e[], int idx) {
+    long s = e[elts[idx].ecode].ngeocalls;
+    for (size_t k = 0; k < elts[idx].children.size(); k++) {
+        s += recursivelySumNCalls(elts, e, elts[idx].children[k]);
     }
     return s;
 }
 
-void recursivelyPrintNCalls(const Element &r, const ElemMutables e[], int depth,
-                            long net) {
+void recursivelyPrintNCalls(const std::vector<Element> &elts,
+                            const ElemMutables e[], int depth, long net,
+                            int idx) {
     if (net == 0) {
-        net = recursivelySumNCalls(r, e);
+        net = recursivelySumNCalls(elts, e, idx);
     }
     char ws[256];
     int i = 0;
@@ -37,10 +39,11 @@ void recursivelyPrintNCalls(const Element &r, const ElemMutables e[], int depth,
         ws[i] = ' ';
     }
     ws[i] = '\0';
-    qDebug("%s%s %.5f %ld", ws, r.name.data(),
-           e[r.ecode].ngeocalls / double(net), e[r.ecode].ngeocalls);
-    for (size_t k = 0; k < r.children.size(); k++) {
-        recursivelyPrintNCalls(r.children[k], e, depth + 1, net);
+    qDebug("%s%s %.5f %ld", ws, elts[idx].name.data(),
+           e[elts[idx].ecode].ngeocalls / double(net),
+           e[elts[idx].ecode].ngeocalls);
+    for (size_t k = 0; k < elts[idx].children.size(); k++) {
+        recursivelyPrintNCalls(elts, e, depth + 1, net, elts[idx].children[k]);
     }
 }
 
@@ -107,7 +110,7 @@ G4ThreeVector initPoint(const QPointF &scpt, const ViewData &d) {
 }
 
 RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
-                  const Element &root,
+                  const std::vector<Element> &els,
                   const std::vector<Plane> &clipping_planes, Intersection *ints,
                   int maxhits, long iteration, ElemMutables mutables[],
                   bool first_visible_hit) {
@@ -133,6 +136,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
     }
 
     G4ThreeVector start = init + forward * sdist;
+    const Element &root = els[0];
     ++mutables[root.ecode].ngeocalls;
     // Ensure ray starts in the root.
     bool clippable = false;
@@ -170,7 +174,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
         for (size_t walk = 0; walk < last.children.size(); walk++) {
             // rotate/offset start point...
             const Element &elem =
-                last.children[(walk + rotfact) % last.children.size()];
+                els[last.children[(walk + rotfact) % last.children.size()]];
             ++mutables[elem.ecode].ngeocalls;
             if (elem.solid->Inside(condrot(elem, (local + elem.offset)))) {
                 stack[n] = &elem;
@@ -201,7 +205,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
         if (store) {
             ints[0].dist = sdist;
             ints[0].normal = entrynormal;
-            ints[0].elem = stack[n - 1];
+            ints[0].ecode = stack[n - 1]->ecode;
             ret.front_clipped = true;
             ret.N++;
             if (first_visible_hit) {
@@ -216,7 +220,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
             G4ThreeVector lnormal = root.solid->SurfaceNormal(local);
             ints[0].dist = sdist;
             ints[0].normal = lnormal;
-            ints[0].elem = &root;
+            ints[0].ecode = root.ecode;
             ret.front_clipped = false;
             ret.N++;
             if (first_visible_hit) {
@@ -244,7 +248,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
         G4ThreeVector closestPos;
         for (size_t walk = 0; walk < curr.children.size(); walk++) {
             const Element &elem =
-                curr.children[(walk + rotfact) % curr.children.size()];
+                els[curr.children[(walk + rotfact) % curr.children.size()]];
             G4ThreeVector sub = pos + elem.offset;
 
             ElemMutables &emu = mutables[elem.ecode];
@@ -281,7 +285,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
             // End clip (counts as a hit!; always relevant)
             ints[ret.N].dist = edist;
             ints[ret.N].normal = exitnormal;
-            ints[ret.N].elem = NULL;
+            ints[ret.N].ecode = -2;
             ret.back_clipped = true;
             ret.N++;
             return ret;
@@ -300,7 +304,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
                     curr.solid->SurfaceNormal(condrot(curr, lpos));
                 ints[ret.N].dist = sdist;
                 ints[ret.N].normal = condirot(curr, lnormal);
-                ints[ret.N].elem = n > 0 ? stack[n - 1] : NULL;
+                ints[ret.N].ecode = n > 0 ? stack[n - 1]->ecode : -2;
                 ret.N++;
                 if (n == 0 || ret.N >= maxhits || first_visible_hit) {
                     if (first_visible_hit) {
@@ -327,7 +331,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
                     closest->solid->SurfaceNormal(condrot(*closest, lpos));
                 ints[ret.N].dist = sdist;
                 ints[ret.N].normal = condirot(*closest, lnormal);
-                ints[ret.N].elem = (ret.N >= maxhits) ? NULL : closest;
+                ints[ret.N].ecode = (ret.N >= maxhits) ? -2 : closest->ecode;
                 ret.N++;
                 if (ret.N >= maxhits || first_visible_hit) {
                     return ret;
@@ -338,7 +342,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
     return ret;
 }
 
-void compressTraces(RayPoint *ray) {
+void compressTraces(RayPoint *ray, const std::vector<Element> &elts) {
     if (ray->N <= 1) {
         return;
     }
@@ -362,8 +366,9 @@ void compressTraces(RayPoint *ray) {
     // 001122334  =>  0022334
     // |x|x|y|x|  =>  |x|y|x|
     for (int i = 0; i < n; i++) {
-        if (i == 0 || ints[i].elem->ccode != ints[i - 1].elem->ccode ||
-            ints[i].elem->visible != ints[i - 1].elem->visible) {
+        if (i == 0 ||
+            elts[ints[i].ecode].ccode != elts[ints[i - 1].ecode].ccode ||
+            elts[ints[i].ecode].visible != elts[ints[i - 1].ecode].visible) {
             ints[p] = ints[i];
             p++;
         }
@@ -402,13 +407,14 @@ static FColor colorMap(const Intersection &intersection,
     return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF());
 }
 
-void countTree(const Element &e, int &treedepth, int &nelements) {
+void countTree(const std::vector<Element> &els, int index, int &treedepth,
+               int &nelements) {
     // Count nelements & depth
     int t = 0;
     int n = 0;
-    for (const Element &s : e.children) {
+    for (int s : els[index].children) {
         int at, an;
-        countTree(s, at, an);
+        countTree(els, s, at, an);
         t = std::max(at, t);
         n += an;
     }
@@ -425,12 +431,10 @@ RayPoint rayAtPoint(const QPointF &pt, qreal radius,
                  M, iter, mutables, d.force_opaque);
 
     iter++;
-    compressTraces(&ray);
+    compressTraces(&ray, d.elements);
 
-    int p = ray.N - 1;
-    bool line = false;
     if (d.level_of_detail <= -1) {
-        for (int k = 0; k < M + 1; k++) {
+        for (int k = 0; k < ray.N; k++) {
             ndevs[k] = 0;
         }
         G4double seed = CLHEP::pi / 5 * (qrand() >> 16) / 16384.0;
@@ -441,12 +445,11 @@ RayPoint rayAtPoint(const QPointF &pt, qreal radius,
                                      d.elements, d.clipping_planes, altints, M,
                                      iter, mutables, d.force_opaque);
             iter++;
-            compressTraces(&aray);
+            compressTraces(&aray, d.elements);
             // At which intersection have we disagreements?
-            int cm = std::min(aray.N, ray.N);
-            if (cm > 0) {
-                int ni = d.force_opaque ? 1 : cm + 1;
-                for (int l = 0; l < ni; l++) {
+            int minN = std::min(aray.N, ray.N);
+            if (minN > 0) {
+                for (int l = 0; l < minN; l++) {
                     Intersection intr = ray.intersections[l],
                                  aintr = aray.intersections[l];
 
@@ -455,11 +458,11 @@ RayPoint rayAtPoint(const QPointF &pt, qreal radius,
                         std::abs(-G4ThreeVector(aintr.normal) *
                                  d.orientation.rowX());
                     bool diffmatbehind = false;
-                    if (l < cm) {
-                        diffmatbehind =
-                            d.split_by_material
-                                ? aintr.elem->ccode != intr.elem->ccode
-                                : aintr.elem->ecode != intr.elem->ecode;
+                    if (l < minN - 1) {
+                        diffmatbehind = d.split_by_material
+                                            ? d.elements[aintr.ecode].ccode !=
+                                                  d.elements[intr.ecode].ccode
+                                            : aintr.ecode != intr.ecode;
                     }
                     bool edgediff = (std::abs(G4ThreeVector(aintr.normal) *
                                               G4ThreeVector(intr.normal)) <
@@ -470,29 +473,23 @@ RayPoint rayAtPoint(const QPointF &pt, qreal radius,
                     }
                 }
             }
-            // Differing intersection count
-            for (int l = ray.N; l < aray.N; l++) {
-                ++ndevs[l];
-            }
-            for (int l = ray.N; l < aray.N; l++) {
+            // Count where ray has intersections but aray doesn't
+            for (int l = aray.N; l < ray.N; l++) {
                 ++ndevs[l];
             }
         }
         const int devthresh = 2;
-        for (int k = 0; k < ray.N + 1; ++k) {
+        for (int k = 0; k < ray.N; ++k) {
             if (ndevs[k] >= devthresh) {
-                p = k - 1;
-                line = true;
+                ray.N = k;
+                if (k > 0) {
+                    ray.intersections[k - 1].ecode = (-1);
+                }
                 break;
             }
         }
-        ray.N = p + 1;
     }
 
-    if (line) {
-        ray.N = p + 1;
-        ray.intersections[p].elem = (Element *)(-1);
-    }
     return ray;
 }
 
@@ -510,7 +507,7 @@ QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
             break;
         }
     }
-    bool line = ray.intersections[ray.N - 1].elem == (Element *)(-1);
+    bool line = ray.N > 0 && (ray.intersections[ray.N - 1].ecode == (-1));
     if (line && p == ray.N - 1) {
         p = ray.N - 2;
     }
@@ -520,15 +517,15 @@ QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
     // (p<0 indicates the line dominates)
     for (int k = p; k >= 0; --k) {
         // We use the intersection before the volume
-        const VColor &base_color =
-            d.color_table[ray.intersections[k].elem->ccode];
+        const Element &eback = d.elements[ray.intersections[k].ecode];
+        const VColor &base_color = d.color_table[eback.ccode];
         const G4ThreeVector &intpos =
             initPoint(pt, d) + ray.intersections[k].dist * forward;
-        FColor altcol =
+        const FColor altcol =
             colorMap(ray.intersections[k], forward, base_color, intpos,
                      1. / d.scale, (k == 0 && ray.front_clipped));
-        double e = (d.force_opaque ? 1. : ray.intersections[k].elem->alpha);
-        if (!ray.intersections[k].elem->visible) {
+        double e = (d.force_opaque ? 1. : eback.alpha);
+        if (!eback.visible) {
             continue;
         }
         col = FColor::blend(altcol, col, 1 - e);
@@ -984,23 +981,29 @@ TrackPrivateData::~TrackPrivateData() {
     }
 }
 
-static bool sortbyname(const Element &l, const Element &r) {
-    static QCollator coll;
-    coll.setNumericMode(true);
+class ElemSort {
+public:
+    ElemSort(const std::vector<Element> &e) : elts(e) {}
+    bool operator()(int i, int j) {
+        const Element &l = elts[i];
+        const Element &r = elts[j];
+        static QCollator coll;
+        coll.setNumericMode(true);
 
-    const char *lname = l.name ? l.name.data() : "";
-    const char *rname = r.name ? r.name.data() : "";
-    return coll.compare(lname, rname) < 0;
-}
+        const char *lname = l.name ? l.name.data() : "";
+        const char *rname = r.name ? r.name.data() : "";
+        return coll.compare(lname, rname) < 0;
+    }
 
-Element convertCreation(const G4VPhysicalVolume *phys, G4RotationMatrix rot,
-                        int *counter) {
+    const std::vector<Element> &elts;
+};
+
+int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
+                    G4RotationMatrix rot, int *counter) {
     int cc = 0;
     if (!counter) {
         counter = &cc;
     }
-    Element m;
-    m.name = phys->GetName();
 
     G4ThreeVector offset = phys->GetFrameTranslation();
     offset = rot.inverse() * offset;
@@ -1008,31 +1011,41 @@ Element convertCreation(const G4VPhysicalVolume *phys, G4RotationMatrix rot,
                                     ? *phys->GetFrameRotation()
                                     : G4RotationMatrix();
     rot = r * rot;
-
-    // Only identity has a trace of +3 => norm2 of 0
-    m.rotated = rot.norm2() > 1e-10;
-    m.offset = offset;
-    m.rot = rot;
-
     const G4LogicalVolume *log = phys->GetLogicalVolume();
     const G4Material *mat = log->GetMaterial();
-    m.ccode = 0;
-    m.material = mat;
-    m.solid = log->GetSolid();
-    if (0) {
-        m.solid = BooleanTree::compile(m.solid);
+
+    int k = elts.size();
+    elts.push_back(Element());
+    {
+        // Reference only valid where elts is unmodified
+        Element &m = elts[k];
+        m.name = phys->GetName();
+
+        // Only identity has a trace of +3 => norm2 of 0
+        m.rotated = rot.norm2() > 1e-10;
+        m.offset = offset;
+        m.rot = rot;
+
+        m.ccode = 0;
+        m.material = mat;
+        m.solid = log->GetSolid();
+        if (0) {
+            m.solid = BooleanTree::compile(m.solid);
+        }
+        m.visible = mat->GetDensity() > 0.01 * CLHEP::g / CLHEP::cm3;
+        m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
+        m.ecode = *counter;
+        (*counter)++;
     }
 
-    m.visible = mat->GetDensity() > 0.01 * CLHEP::g / CLHEP::cm3;
-    m.alpha = 0.8; // 1.0;// todo make basic alpha controllable
-    m.ecode = *counter;
-    (*counter)++;
-
-    m.children = std::vector<Element>();
+    std::vector<int> svi;
     for (int i = 0; i < log->GetNoDaughters(); i++) {
-        m.children.push_back(
-            convertCreation(log->GetDaughter(i), m.rot, counter));
+        svi.push_back(convertCreation(elts, log->GetDaughter(i), rot, counter));
     }
-    std::sort(m.children.begin(), m.children.end(), sortbyname);
-    return m;
+    ElemSort esort(elts);
+    std::sort(svi.begin(), svi.end(), esort);
+
+    elts[k].children = svi;
+
+    return k;
 }

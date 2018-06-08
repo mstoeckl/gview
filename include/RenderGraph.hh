@@ -11,36 +11,23 @@
 class QElapsedTimer;
 class QThreadPool;
 class Context;
-struct ViewData_s;
 typedef struct ViewData_s ViewData;
-typedef struct RayPoint_s RayPoint;
-typedef struct Intersection_s Intersection;
-
-typedef struct {
-    QRgb *colors;
-    double *distances;
-    bool blank;
-} FlatData;
 
 class RenderGraphNode;
+class RenderMergeTask;
+class RenderRayTask;
+class RenderTrackTask;
+class RenderRayBufferTask;
+class RenderColorTask;
+class RenderDummyTask;
 
 class Context {
 public:
-    Context(const ViewData &d, QSharedPointer<QImage> i, int nt, int seqno);
+    Context(const ViewData &d, int iw, int ih);
     ~Context();
 
-    const int renderno;
-    const int nthreads;
     const int w, h;
-
     const ViewData *viewdata;
-    FlatData *partData;
-    FlatData flatData;
-    QSharedPointer<QImage> image;
-    RayPoint *raydata;
-    Intersection **intersection_store;
-
-    volatile int abort_flag;
 
 private:
     Context(const Context &) = delete;
@@ -54,7 +41,7 @@ public:
 
 public slots:
 
-    void start(QSharedPointer<QImage> i, const ViewData &vd);
+    void start(QSharedPointer<QImage> i, const ViewData &vd, int changed);
     void abort();
 
 signals:
@@ -64,7 +51,7 @@ signals:
     void progressed(int);
 
 protected slots:
-    void queueNext(int);
+    void queueNext(RenderGraphNode *);
 
     friend class RenderGraphTask;
 
@@ -75,7 +62,13 @@ private:
     QElapsedTimer *timer;
     QThreadPool *pool;
     float progress;
-    int seqno;
+
+    QVector<QSharedPointer<RenderGraphNode>> task_track;
+    QVector<QSharedPointer<RenderGraphNode>> task_ray;
+    QVector<QSharedPointer<RenderGraphNode>> task_merge;
+    QVector<QSharedPointer<RenderGraphNode>> task_color;
+    QVector<QSharedPointer<RenderGraphNode>> task_raybuf;
+    QSharedPointer<RenderGraphNode> task_final;
 
     QVector<QSharedPointer<RenderGraphNode>> tasks;
 };

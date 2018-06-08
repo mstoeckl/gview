@@ -301,10 +301,12 @@ void ColorConfig::updatePropTargetColor() {
     }
 }
 
-void recsetMtlColors(Element &e, const std::map<const G4Material *, int> &m) {
+static void recsetMtlColors(std::vector<Element> &elts,
+                            const std::map<const G4Material *, int> &m, int i) {
+    Element &e = elts[i];
     e.ccode = m.at(e.material);
-    for (Element &d : e.children) {
-        recsetMtlColors(d, m);
+    for (int j : e.children) {
+        recsetMtlColors(elts, m, j);
     }
 }
 inline qreal mix(qreal a, qreal b, qreal i) {
@@ -312,22 +314,24 @@ inline qreal mix(qreal a, qreal b, qreal i) {
     return (1. - i) * a + i * b;
 }
 
-void recgetProp(Element &e, const Element &p, int m, double *v) {
+static void recgetProp(std::vector<Element> &elts, int e, int p, int m,
+                       double *v) {
     double amp = 0;
     switch (m) {
     default:
     case 0:
         /* Tungsten has density 19.25 g/cm3, and Osmium wins at 22.59 g/cm3 */
-        amp = e.material->GetDensity() / CLHEP::g * CLHEP::cm3;
+        amp = elts[e].material->GetDensity() / CLHEP::g * CLHEP::cm3;
         break;
     case 1:
-        amp = std::log10(const_cast<G4VSolid *>(e.solid)->GetCubicVolume() /
-                         CLHEP::cm3);
+        amp =
+            std::log10(const_cast<G4VSolid *>(elts[e].solid)->GetCubicVolume() /
+                       CLHEP::cm3);
         break;
     case 2: {
         QSet<const G4VSolid *> roots;
         int td = 0, nb = 0;
-        calculateBooleanProperties(e.solid, roots, td, nb);
+        calculateBooleanProperties(elts[e].solid, roots, td, nb);
         amp = nb;
         break;
     }
@@ -335,10 +339,10 @@ void recgetProp(Element &e, const Element &p, int m, double *v) {
         /* Z is important w.r.t shielding */
         double net = 0;
         double nz = 0;
-        for (size_t i = 0; i < e.material->GetNumberOfElements(); i++) {
-            G4Element *h = e.material->GetElementVector()->at(i);
-            double w =
-                e.material->GetFractionVector()[i] / h->GetAtomicMassAmu();
+        for (size_t i = 0; i < elts[e].material->GetNumberOfElements(); i++) {
+            G4Element *h = elts[e].material->GetElementVector()->at(i);
+            double w = elts[e].material->GetFractionVector()[i] /
+                       h->GetAtomicMassAmu();
             net += w;
             nz += h->GetZ() * w;
         }
@@ -347,35 +351,36 @@ void recgetProp(Element &e, const Element &p, int m, double *v) {
     }
     case 4: {
         /* SA3/V2 ratio as (horrible) roundness measure */
-        double vol = const_cast<G4VSolid *>(e.solid)->GetCubicVolume();
-        double sa = const_cast<G4VSolid *>(e.solid)->GetSurfaceArea();
+        double vol = const_cast<G4VSolid *>(elts[e].solid)->GetCubicVolume();
+        double sa = const_cast<G4VSolid *>(elts[e].solid)->GetSurfaceArea();
         double sav = sa * sa * sa / vol / vol;
         amp = std::log10(sav);
         break;
     }
     case 5: {
         /* Neighbors */
-        amp = (e.children.size() + p.children.size());
+        amp = (elts[e].children.size() + elts[p].children.size());
         break;
     }
     }
-    v[e.ecode] = amp;
-    for (Element &d : e.children) {
-        recgetProp(d, e, m, v);
+    v[elts[e].ecode] = amp;
+    for (int d : elts[e].children) {
+        recgetProp(elts, d, e, m, v);
     }
 }
 
-void recsetProp(Element &e, const int *m) {
-    e.ccode = m[e.ecode];
-    for (Element &d : e.children) {
-        recsetProp(d, m);
+static void recsetProp(std::vector<Element> &elts, int i, const int *m) {
+    elts[i].ccode = m[elts[i].ecode];
+    for (int j : elts[i].children) {
+        recsetProp(elts, j, m);
     }
 }
 
-void recsetMatchColors(Element &e, const QMap<QString, short> &n) {
-    e.ccode = n.contains(e.name.data()) ? 1 : 0;
-    for (Element &d : e.children) {
-        recsetMatchColors(d, n);
+static void recsetMatchColors(std::vector<Element> &elts, int i,
+                              const QMap<QString, short> &n) {
+    elts[i].ccode = n.contains(elts[i].name.data()) ? 1 : 0;
+    for (int j : elts[i].children) {
+        recsetMatchColors(elts, j, n);
     }
 }
 
@@ -464,11 +469,14 @@ private:
     int cnt;
 };
 
-void recsetFlowColors(Element &e, const QMap<QString, short> &names,
-                      const double *deps, const SortedStaticArraySet &targets,
-                      const SortedStaticArraySet &skip,
-                      const SortedStaticArraySet &reqd, double total,
-                      std::vector<VColor> &colors) {
+static void recsetFlowColors(std::vector<Element> &elts, int i,
+                             const QMap<QString, short> &names,
+                             const double *deps,
+                             const SortedStaticArraySet &targets,
+                             const SortedStaticArraySet &skip,
+                             const SortedStaticArraySet &reqd, double total,
+                             std::vector<VColor> &colors) {
+    Element &e = elts[i];
     QString lstr(e.name.data());
     short label = -1;
     if (names.count(lstr)) {
@@ -494,8 +502,9 @@ void recsetFlowColors(Element &e, const QMap<QString, short> &names,
     } else {
         e.ccode = 0;
     }
-    for (Element &d : e.children) {
-        recsetFlowColors(d, names, deps, targets, skip, reqd, total, colors);
+    for (int j : e.children) {
+        recsetFlowColors(elts, j, names, deps, targets, skip, reqd, total,
+                         colors);
     }
 }
 
@@ -509,14 +518,14 @@ void ColorConfig::reassignColors() {
         for (int i = 0; i < int(material_list.size()); i++) {
             idxs[material_list[i]] = i;
         }
-        recsetMtlColors(vd.elements, idxs);
+        recsetMtlColors(vd.elements, idxs, 0);
     } break;
     case ColorByProperty: {
         int td = 0, ne = 0;
-        countTree(vd.elements, td, ne);
+        countTree(vd.elements, 0, td, ne);
         double *vals = new double[ne]();
         int ci = prop_select->currentIndex();
-        recgetProp(vd.elements, vd.elements, ci, vals);
+        recgetProp(vd.elements, 0, 0, ci, vals);
         double mn = kInfinity, mx = -kInfinity;
         for (int i = 0; i < ne; i++) {
             mn = std::min(vals[i], mn);
@@ -550,7 +559,7 @@ void ColorConfig::reassignColors() {
                 mix(prop_base.greenF(), prop_target.greenF(), v),
                 mix(prop_base.blueF(), prop_target.blueF(), v)));
         }
-        recsetProp(vd.elements, refs);
+        recsetProp(vd.elements, 0, refs);
         delete[] vals;
         delete[] refs;
     } break;
@@ -592,14 +601,14 @@ void ColorConfig::reassignColors() {
             vd.color_table.clear();
             vd.color_table.push_back(VColor::fromRgbF(0.4, 0.4, 0.4));
             vd.color_table.push_back(VColor::fromRgbF(0.5, 0.5, 1.));
-            recsetMatchColors(vd.elements, flow_names);
+            recsetMatchColors(vd.elements, 0, flow_names);
         } else {
             /* begin with unidentified color, then skip color */
             vd.color_table.clear();
             vd.color_table.push_back(VColor::fromRgbF(0.4, 0.4, 0.4));
             vd.color_table.push_back(VColor::fromRgbF(1.0, 0., 0.));
-            recsetFlowColors(vd.elements, flow_names, deps, targets, skip, reqd,
-                             total, vd.color_table);
+            recsetFlowColors(vd.elements, 0, flow_names, deps, targets, skip,
+                             reqd, total, vd.color_table);
         }
         delete[] deps;
     } break;
