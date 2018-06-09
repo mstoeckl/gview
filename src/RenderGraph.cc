@@ -36,8 +36,8 @@ private:
     QSharedPointer<Context> context;
 };
 
-Context::Context(const ViewData &d, int iw, int ih)
-    : w(iw), h(ih), viewdata(new ViewData(d)) {}
+Context::Context(const ViewData &d, const GridSpec &g)
+    : grid(g), viewdata(new ViewData(d)) {}
 Context::~Context() { delete viewdata; }
 
 RenderGraph::RenderGraph(int nthreads) {
@@ -66,23 +66,21 @@ RenderGraph::~RenderGraph() {
     delete timer;
 }
 
-void RenderGraph::start(QSharedPointer<QImage> im, const ViewData &vd,
-                        int changed) {
+void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
+                        const ViewData &vd, int changed) {
     timer->start();
     bool color_changed = changed & CHANGE_COLOR;
     bool geo_changed = changed & CHANGE_GEO;
     bool tracks_changed = changed & CHANGE_TRACK;
     bool oneshot = changed & CHANGE_ONESHOT;
 
-    int w = im->width();
-    int h = im->height();
-
     int nthreads = pool->maxThreadCount();
 
-    context = QSharedPointer<Context>(new Context(vd, w, h));
+    context = QSharedPointer<Context>(new Context(vd, grid));
 
     progress = 0.f;
 
+    const int w = grid.sampleWidth(), h = grid.sampleHeight();
     QRect fullWindow = QRect(0, 0, w + 1, h + 1);
     QVector<QRect> panes;
     QVector<QRect> rows;

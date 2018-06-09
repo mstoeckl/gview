@@ -49,8 +49,7 @@ void RenderRayTask::run(Context *ctx) {
     if (treedepth > 10) {
         qFatal("Excessive tree depth, fatal!");
     }
-    int w = ctx->w;
-    int h = ctx->h;
+    const int w = ctx->grid.sampleWidth(), h = ctx->grid.sampleHeight();
     if (image->width() != w || image->height() != h) {
         qFatal("Image size mismatch, %d %d vs %d %d", image->width(),
                image->height(), w, h);
@@ -104,10 +103,12 @@ void RenderRayTask::run(Context *ctx) {
                 trackdist = flatData->distances[sidx];
             }
 
-            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
-            RayPoint r = rayAtPoint(pt, radius, forward, *d, iter, mutables,
+            QPointF pt(ctx->grid.toViewCoord(j, i));
+            // TODO: fix factor 4
+            RayPoint r = rayAtPoint(pt / 4, radius, forward, *d, iter, mutables,
                                     ints, aints, M, ndevs);
-            QRgb color = colorForRay(r, trackcol, trackdist, *d, pt, forward);
+            QRgb color =
+                colorForRay(r, trackcol, trackdist, *d, pt / 4, forward);
             pts[j] = color;
         }
     }
@@ -138,8 +139,7 @@ void RenderRayBufferTask::run(Context *ctx) {
     if (treedepth > 10) {
         qFatal("Excessive tree depth, fatal!");
     }
-    int w = ctx->w;
-    int h = ctx->h;
+    const int w = ctx->grid.sampleWidth(), h = ctx->grid.sampleHeight();
 
     int mind = std::min(w, h);
 
@@ -173,9 +173,10 @@ void RenderRayBufferTask::run(Context *ctx) {
                 return;
             }
 
-            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
-            RayPoint r = rayAtPoint(pt, radius, forward, *d, iter, mutables,
-                                    ints, aints, M, ndevs);
+            QPointF pt(ctx->grid.toViewCoord(j, i));
+            // TODO: fix the factor 4
+            RayPoint r = rayAtPoint(pt / 4., radius, forward, *d, iter,
+                                    mutables, ints, aints, M, ndevs);
 
             // Store ray, and copy its intersections to the buffer
             rayData[i * w + j] = r;
@@ -215,20 +216,19 @@ void RenderRayBufferTask::run(Context *ctx) {
     delete[] mutables;
 }
 
-static inline double iproject(const G4ThreeVector &point,
+static inline QPoint iproject(const G4ThreeVector &point,
                               const G4ThreeVector &dcamera,
                               const G4double &dscale,
-                              const G4RotationMatrix &ori, int w, int h,
-                              int *dx, int *dy) {
+                              const G4RotationMatrix &ori, const GridSpec &grid,
+                              double &off) {
+    // Map to F in smallest viewport box containing [-1,1]x[-1,1]
     G4ThreeVector local = ori * (point - dcamera);
     G4double idscale = 1 / dscale;
-    double fy = local.y() * idscale;
-    double fx = local.z() * idscale;
-    double off = local.x();
-    int dmind = 2 * std::min(w, h);
-    *dx = int(0.5 * w + fx * dmind);
-    *dy = int(0.5 * h + fy * dmind);
-    return off;
+    QPointF F(local.z() * idscale, local.y() * idscale);
+    off = local.x();
+    // TODO: drop factor of 4
+    QPointF sample_coord = grid.toSampleCoord(F * 4);
+    return QPoint(std::lrint(sample_coord.x()), std::lrint(sample_coord.y()));
 }
 
 static void trackColors(const TrackHeader &h, const TrackPoint &pa,
@@ -282,8 +282,7 @@ void RenderTrackTask::run(Context *ctx) {
     int yl = domain.top();
     int yh = domain.bottom();
 
-    int w = ctx->w;
-    int h = ctx->h;
+    const int w = ctx->grid.sampleWidth(), h = ctx->grid.sampleHeight();
     const ViewData &d = *ctx->viewdata;
     const TrackData &t = d.tracks;
 
@@ -297,7 +296,7 @@ void RenderTrackTask::run(Context *ctx) {
     // Might have tracks, so we fill background
     double *dists = part_data->distances;
     QRgb *colors = part_data->colors;
-    if (part_data->w != ctx->w || part_data->h != ctx->h) {
+    if (part_data->w != w || part_data->h != h) {
         qFatal("Bad size in RenderTrackTask::run");
     }
 
@@ -332,15 +331,14 @@ void RenderTrackTask::run(Context *ctx) {
         // Project calculations 1 point ahead
         TrackPoint sp = tp[0];
         G4ThreeVector spos(sp.x, sp.y, sp.z);
-        int sdx, sdy;
         double soff;
-        soff =
-            iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx, &sdy);
+        QPoint sd(
+            iproject(spos, d.camera, d.scale, d.orientation, ctx->grid, soff));
 
         // Fast entire track clipping heuristic
         int rr = int(2 * mind * metadata[z].ballRadius / d.scale);
-        if (sdx + rr <= xl || sdx - rr > xh || sdy + rr <= yl ||
-            sdy - rr > yh) {
+        if (sd.x() + rr <= xl || sd.x() - rr > xh || sd.y() + rr <= yl ||
+            sd.y() - rr > yh) {
             continue;
         }
 
@@ -349,39 +347,41 @@ void RenderTrackTask::run(Context *ctx) {
         for (int j = 1; j < header.npts; j++) {
             // Adopt previous late point as early point
             TrackPoint ep = sp;
-            int edx = sdx, edy = sdy;
+            QPoint ed(sd);
             double eoff = soff;
             G4ThreeVector epos = spos;
             // Calculate new late point
             sp = tp[j];
             spos = G4ThreeVector(sp.x, sp.y, sp.z);
-            soff = iproject(spos, d.camera, d.scale, d.orientation, w, h, &sdx,
-                            &sdy);
+            sd = iproject(spos, d.camera, d.scale, d.orientation, ctx->grid,
+                          soff);
 
-            if ((edx < xl && sdx < xl) || (edy < yl && sdy < yl) ||
-                (edx >= xh && sdx >= xh) || (edy >= yh && sdy >= yh)) {
+            if ((ed.x() < xl && sd.x() < xl) || (ed.y() < yl && sd.y() < yl) ||
+                (ed.x() >= xh && sd.x() >= xh) ||
+                (ed.y() >= yh && sd.y() >= yh)) {
                 continue;
             }
 
             // NOTE: single point lines are acceptable
             float dy, dx;
             int n;
-            if (std::abs(sdx - edx) > std::abs(sdy - edy)) {
-                n = std::abs(sdx - edx) + 1;
-                dx = sdx - edx > 0 ? 1.0 : -1.0;
-                dy = float(sdy - edy) / float(n);
+            QPoint smd = sd - ed;
+            if (std::abs(smd.x()) > std::abs(smd.y())) {
+                n = std::abs(smd.x()) + 1;
+                dx = smd.x() > 0 ? 1.0 : -1.0;
+                dy = float(smd.y()) / float(n);
             } else {
-                n = std::abs(sdy - edy) + 1;
-                dy = sdy - edy > 0 ? 1.0 : -1.0;
-                dx = float(sdx - edx) / float(n);
+                n = std::abs(smd.y()) + 1;
+                dy = smd.y() > 0 ? 1.0 : -1.0;
+                dx = float(smd.x()) / float(n);
             }
-            float ix = edx;
-            float iy = edy;
+            float ix = ed.x();
+            float iy = ed.y();
 
-            int uxl = dx == 0.0f ? 0 : int((xl - edx) / dx);
-            int uyl = dy == 0.0f ? 0 : int((yl - edy) / dy);
-            int uxh = dx == 0.0f ? INT_MAX : int((xh - edx) / dx);
-            int uyh = dy == 0.0f ? INT_MAX : int((yh - edy) / dy);
+            int uxl = dx == 0.0f ? 0 : int((xl - ed.x()) / dx);
+            int uyl = dy == 0.0f ? 0 : int((yl - ed.y()) / dy);
+            int uxh = dx == 0.0f ? INT_MAX : int((xh - ed.x()) / dx);
+            int uyh = dy == 0.0f ? INT_MAX : int((yh - ed.y()) / dy);
 
             // Extra buffers are just in case
             int near = std::max(std::min(uxl, uxh), std::min(uyl, uyh)) - 1;
@@ -456,7 +456,7 @@ void RenderMergeTask::run(Context *ctx) {
     int xh = domain.right();
     int yl = domain.top();
     int yh = domain.bottom();
-    int w = ctx->w;
+    const int w = ctx->grid.sampleWidth();
     FlatData &fd = *flat_data;
     for (int y = yl; y < yh; y++) {
         for (int x = xl; x < xh; x++) {
@@ -494,9 +494,7 @@ void RenderColorTask::run(Context *ctx) {
     int xh = domain.right();
     int yl = domain.top();
     int yh = domain.bottom();
-    int w = ctx->w;
-    int h = ctx->h;
-    int mind = std::min(w, h);
+    const int w = ctx->grid.sampleWidth();
 
     const FlatData &flatData = *flat_data;
     const ViewData *viewData = ctx->viewdata;
@@ -523,9 +521,10 @@ void RenderColorTask::run(Context *ctx) {
             }
 
             const RayPoint &ray = rayData[sidx];
-            QPointF pt((j - w / 2.) / (2. * mind), (i - h / 2.) / (2. * mind));
-            QRgb color =
-                colorForRay(ray, trackcol, trackdist, *viewData, pt, forward);
+            QPointF pt(ctx->grid.toViewCoord(j, i));
+            // TODO: fix factor 4
+            QRgb color = colorForRay(ray, trackcol, trackdist, *viewData,
+                                     pt / 4, forward);
             pts[j] = color;
         }
     }

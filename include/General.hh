@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPointF>
 #include <QRgb>
 
 inline uint32_t randint(uint32_t excl_upper) {
@@ -64,4 +65,50 @@ public:
 
 private:
     float v[4];
+};
+
+inline int ceil_div(int v, int s) { return v / s + ((v % s) > 0 ? 1 : 0); }
+
+/**
+ * Grid point specification. If we map the screen pixel array to the viewport,
+ * provides center points for subsampled pixels. Supersample pixels are square
+ * and are aligned to the (0,0) corner.
+ */
+class GridSpec {
+public:
+    GridSpec(int iw, int ih, int pixel_size)
+        : w(iw), h(ih), s(pixel_size), imind_t_s_t_2(s * 2. / std::min(w, h)),
+          mind_t_is_d_2(1. / imind_t_s_t_2),
+          off_ts_x(-(0.5 - 0.5 * ceil_div(w, s))),
+          off_ts_y(-(0.5 - 0.5 * ceil_div(h, s))),
+          off_tv_x(-imind_t_s_t_2 * off_ts_x),
+          off_tv_y(-imind_t_s_t_2 * off_ts_y) {}
+
+    // ceil[w/s], ceil[h/s]
+    inline int sampleWidth() const { return ceil_div(w, s); }
+    inline int sampleHeight() const { return ceil_div(h, s); }
+    inline int imageWidth() const { return w; }
+    inline int imageHeight() const { return h; }
+    inline int pixelSize() const { return s; }
+
+    // the coordinates for a sample point
+    // includes barely the [-1,1]x[-1,1] box
+    inline QPointF toViewCoord(int x, int y) const {
+        // sample point center in image coordinates
+        qreal sx = imind_t_s_t_2 * x + off_tv_x;
+        qreal sy = imind_t_s_t_2 * y + off_tv_y;
+        return QPointF(sx, sy);
+    }
+
+    // Map from box incl. [-1,1]x[-1,1] to sample coordinates
+    inline QPointF toSampleCoord(QPointF viewCoord) const {
+        qreal x = mind_t_is_d_2 * viewCoord.x() + off_ts_x;
+        qreal y = mind_t_is_d_2 * viewCoord.y() + off_ts_y;
+        return QPointF(x, y);
+    }
+
+private:
+    const int w, h, s;
+    const qreal imind_t_s_t_2, mind_t_is_d_2;
+    const qreal off_ts_x, off_ts_y, off_tv_x, off_tv_y;
 };

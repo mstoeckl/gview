@@ -150,15 +150,17 @@ void RenderWidget::rerender_priv() {
     if (currView.level_of_detail == (to_full_detail ? -1 : 0)) {
         arrived = aReqd;
     }
+
+    GridSpec grid(this->width(), this->height(), scl);
     next = QSharedPointer<QImage>(new QImage(
-        this->width() / scl, this->height() / scl, QImage::Format_RGB32));
+        grid.sampleWidth(), grid.sampleHeight(), QImage::Format_RGB32));
     next_scale_factor = scl;
     next_request_timer = QElapsedTimer();
     next_request_timer.start();
 
     TrackData d = currView.tracks;
     currView.tracks = trackdata;
-    graph.start(next, currView, changed_inputs);
+    graph.start(next, grid, currView, changed_inputs);
     changed_inputs = 0;
     currView.tracks = d;
 
@@ -224,9 +226,7 @@ void RenderWidget::paintEvent(QPaintEvent *) {
     paintTimer.start();
 
     QPainter q(this);
-    QPoint corner =
-        this->rect().center() - QPoint(cached.width() / 2, cached.height() / 2);
-    q.drawImage(corner, cached);
+    q.drawImage(QPoint(0, 0), cached);
     if (arrived == aCompl) {
         arrived = aThere;
     }
@@ -308,7 +308,8 @@ void RenderSaveObject::start() {
     // Q: are copy costs too high? make LOD render side effect?
     TrackData d = viewdata.tracks;
     viewdata.tracks = trackdata;
-    graph.start(target, viewdata, CHANGE_ONESHOT);
+    GridSpec grid(target->width(), target->height(), 1);
+    graph.start(target, grid, viewdata, CHANGE_ONESHOT);
     viewdata.tracks = d;
 
     viewdata.level_of_detail = lod;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "General.hh"
+
 #include <QMap>
 #include <QObject>
 #include <QRect>
@@ -11,6 +13,7 @@
 class QElapsedTimer;
 class QThreadPool;
 class Context;
+class GridSpec;
 typedef struct ViewData_s ViewData;
 
 class RenderGraphNode;
@@ -23,10 +26,10 @@ class RenderDummyTask;
 
 class Context {
 public:
-    Context(const ViewData &d, int iw, int ih);
+    Context(const ViewData &d, const GridSpec &g);
     ~Context();
 
-    const int w, h;
+    const GridSpec grid;
     const ViewData *viewdata;
 
 private:
@@ -41,7 +44,8 @@ public:
 
 public slots:
 
-    void start(QSharedPointer<QImage> i, const ViewData &vd, int changed);
+    void start(QSharedPointer<QImage> i, const GridSpec &grid,
+               const ViewData &vd, int changed);
     void abort();
 
 signals:
