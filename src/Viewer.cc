@@ -456,7 +456,7 @@ Viewer::~Viewer() {}
 
 void Viewer::showFrameTime(qreal t) {
     frame_time_display->setText(
-        QString("%1 ms").arg(t * 1e3, 7, 'f', 1, QChar(0x2000)));
+        QString("%1 ms").arg(t * 1e3, 7, 'f', 1, QChar(0x2007)));
 }
 
 void Viewer::restClip() { dock_clip->setVisible(true); }

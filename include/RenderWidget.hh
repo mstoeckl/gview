@@ -39,11 +39,11 @@ private:
 
     QImage cached;
     QSharedPointer<QImage> back;
-    int back_scale_factor;
+    GridSpec back_grid;
     qint64 back_request_time;
     QElapsedTimer back_request_timer;
     QSharedPointer<QImage> next;
-    int next_scale_factor;
+    GridSpec next_grid;
     QElapsedTimer next_request_timer;
 
     enum { aReqd, aCompl, aThere } arrived;

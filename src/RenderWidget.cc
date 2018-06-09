@@ -40,7 +40,8 @@ static int ilog(int b, int x) {
 
 static int isqrt(int x) { return std::sqrt(x); }
 
-static QImage fastIntegerScale(const QImage &base, size_t S) {
+static QImage fastIntegerScale(const QImage &base, const GridSpec &grid) {
+    size_t S = grid.pixelSize();
     if (S <= 1) {
         return base;
     }
@@ -53,7 +54,8 @@ static QImage fastIntegerScale(const QImage &base, size_t S) {
     timer.start();
 
     const size_t W = base.width(), H = base.height();
-    QImage scaled(W * S, H * S, base.format());
+    const size_t iW = grid.imageWidth(), iH = grid.imageHeight();
+    QImage scaled(iW, iH, base.format());
     size_t slinelength = scaled.bytesPerLine();
     size_t blinelength = base.bytesPerLine();
 
@@ -75,13 +77,12 @@ static QImage fastIntegerScale(const QImage &base, size_t S) {
             (const uint32_t *)&baseData[k * blinelength];
         uint32_t *__restrict__ fill_line =
             (uint32_t * __restrict__) & scaledData[S * k * slinelength];
-        for (size_t j = 0; j < W * S; j++) {
+        for (size_t j = 0; j < iW; j++) {
             fill_line[j] = source_line[remap[j]];
         }
-        for (size_t i = 1; i < S; i++) {
+        for (size_t i = k * S + 1; i < std::min(k * S + S, iH); i++) {
             uint32_t *__restrict__ copy_line =
-                (uint32_t * __restrict__) &
-                scaledData[(S * k + i) * slinelength];
+                (uint32_t * __restrict__) & scaledData[i * slinelength];
             memcpy(copy_line, fill_line, slinelength);
         }
     }
@@ -90,12 +91,12 @@ static QImage fastIntegerScale(const QImage &base, size_t S) {
 }
 
 RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
-    : QWidget(), currView(v), trackdata(tdr), graph(threadCount()) {
+    : QWidget(), currView(v), trackdata(tdr), graph(threadCount()),
+      back_grid(GridSpec(50, 50, 1)), next_grid(GridSpec(50, 50, 1)) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
 
     cached = QImage(50, 50, QImage::Format_RGB32);
     cached.fill(QColor::fromHslF(0.3, 0.5, 0.7));
-    back_scale_factor = 1;
     back_request_timer = QElapsedTimer();
 
     state = NONE;
@@ -154,7 +155,7 @@ void RenderWidget::rerender_priv() {
     GridSpec grid(this->width(), this->height(), scl);
     next = QSharedPointer<QImage>(new QImage(
         grid.sampleWidth(), grid.sampleHeight(), QImage::Format_RGB32));
-    next_scale_factor = scl;
+    next_grid = grid;
     next_request_timer = QElapsedTimer();
     next_request_timer.start();
 
@@ -176,7 +177,7 @@ void RenderWidget::rerender_priv() {
 
 void RenderWidget::completed(qreal time_secs) {
     back = next;
-    back_scale_factor = next_scale_factor;
+    back_grid = next_grid;
     back_request_timer = next_request_timer;
 
     if (state == ACTIVE) {
@@ -189,10 +190,10 @@ void RenderWidget::completed(qreal time_secs) {
         arrived = aCompl;
     }
 
-    cached = fastIntegerScale(*back, back_scale_factor);
+    cached = fastIntegerScale(*back, back_grid);
     this->repaint();
 
-    if (back_scale_factor == immediate_lod) {
+    if (back_grid.pixelSize() == immediate_lod) {
         /* Only change immediate_lod via its result */
         qreal time_per_pixel = time_secs / (back->width() * back->height());
         qreal target_pixels = GOAL_FRAME_TIME / time_per_pixel;

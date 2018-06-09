@@ -108,7 +108,7 @@ public:
     }
 
 private:
-    const int w, h, s;
-    const qreal imind_t_s_t_2, mind_t_is_d_2;
-    const qreal off_ts_x, off_ts_y, off_tv_x, off_tv_y;
+    int w, h, s;
+    qreal imind_t_s_t_2, mind_t_is_d_2;
+    qreal off_ts_x, off_ts_y, off_tv_x, off_tv_y;
 };
