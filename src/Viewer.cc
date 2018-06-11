@@ -217,6 +217,12 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     rwidget->setFocusPolicy(Qt::WheelFocus);
     connect(rwidget, SIGNAL(frameTime(qreal)), this,
             SLOT(showFrameTime(qreal)));
+    connect(rwidget, SIGNAL(forwardKey(QKeyEvent *)), this,
+            SLOT(processKey(QKeyEvent *)));
+    connect(rwidget, SIGNAL(forwardMouse(QMouseEvent *)), this,
+            SLOT(processMouse(QMouseEvent *)));
+    connect(rwidget, SIGNAL(forwardWheel(QWheelEvent *)), this,
+            SLOT(processWheel(QWheelEvent *)));
 
     // Clipping plane control
     dock_clip = new QDockWidget("Clipping", this);
@@ -240,6 +246,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     energy_range->setSuffix("eV");
     count_lower = new QSpinBox();
     count_upper = new QSpinBox();
+    nanc_lower = new QSpinBox();
+    nanc_upper = new QSpinBox();
     if (which_tracks > 0) {
         const TrackRestriction &res = track_res_actual[which_tracks - 1];
         times_range->setRange(res.time.low / CLHEP::ns,
@@ -263,9 +271,13 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         energy_range->setDisabled(true);
         count_lower->setDisabled(true);
         count_upper->setDisabled(true);
+        nanc_lower->setDisabled(true);
+        nanc_upper->setDisabled(true);
     }
     connect(count_lower, SIGNAL(valueChanged(int)), this, SLOT(updateTracks()));
     connect(count_upper, SIGNAL(valueChanged(int)), this, SLOT(updateTracks()));
+    connect(nanc_lower, SIGNAL(valueChanged(int)), this, SLOT(updateTracks()));
+    connect(nanc_upper, SIGNAL(valueChanged(int)), this, SLOT(updateTracks()));
     connect(times_range, SIGNAL(valueChanged()), this, SLOT(updateTracks()));
     connect(energy_range, SIGNAL(valueChanged()), this, SLOT(updateTracks()));
     vb->addWidget(times_range);
@@ -291,6 +303,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     connect(line_type_selection, SIGNAL(itemChanged(QListWidgetItem *)), this,
             SLOT(updatePlanes()));
     vb->addWidget(line_type_selection);
+    QHBoxLayout *nrrb = new QHBoxLayout();
+    nrrb->addWidget(new QLabel("Gen.:"));
+    nrrb->addWidget(nanc_lower);
+    nrrb->addWidget(nanc_upper);
+    vb->addLayout(nrrb, 0);
     vb->addStretch(1);
     cont->setLayout(vb);
     QScrollArea *asf = new QScrollArea();
@@ -446,8 +463,6 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     dock_orient->setFeatures(feat);
     dock_orient->setVisible(false);
 
-    setMouseTracking(true);
-
     this->setMinimumSize(QSize(400, 400));
     this->show();
 }
@@ -466,7 +481,11 @@ void Viewer::restRay() { dock_ray->setVisible(true); }
 void Viewer::restColor() { dock_color->setVisible(true); }
 void Viewer::restOrient() { dock_orient->setVisible(true); }
 
-void Viewer::keyPressEvent(QKeyEvent *event) {
+void Viewer::processKey(QKeyEvent *event) {
+    if (event->type() != QEvent::KeyPress) {
+        return;
+    }
+
     G4double mvd = 0.1;
 
     G4ThreeVector trans;
@@ -519,83 +538,81 @@ void Viewer::keyPressEvent(QKeyEvent *event) {
     rwidget->rerender(CHANGE_VIEWPORT);
 }
 
-void Viewer::mousePressEvent(QMouseEvent *event) {
-    if (event->modifiers() & Qt::ShiftModifier) {
-        shift = true;
-    } else {
-        shift = false;
+void Viewer::processMouse(QMouseEvent *event) {
+    if (event->type() == QEvent::MouseButtonPress) {
+        if (event->modifiers() & Qt::ShiftModifier) {
+            shift = true;
+        } else {
+            shift = false;
+        }
+        clicked = true;
+        clickpt = event->pos();
+        lastpt = clickpt;
+    } else if (event->type() == QEvent::MouseButtonRelease) {
+        // or mouse exit?
+        clicked = false;
+    } else if (event->type() == QEvent::MouseMove) {
+        // Ray tracking
+        int h = rwidget->geometry().height();
+        int w = rwidget->geometry().width();
+        int mind = std::min(w, h);
+        QPoint coord = rwidget->mapFromGlobal(event->globalPos());
+        QPointF pt((coord.x() - w / 2.) / (2. * mind),
+                   (coord.y() - h / 2.) / (2. * mind));
+        const int M = 50;
+        Intersection ints[M + 1];
+        int td, nelem;
+        countTree(vd.elements, 0, td, nelem);
+        Q_UNUSED(td);
+        ElemMutables *mutables = new ElemMutables[nelem]();
+        RayPoint rpt =
+            traceRay(initPoint(pt, vd), forwardDirection(vd.orientation),
+                     vd.elements, vd.clipping_planes, ints, M, 1, mutables);
+        delete[] mutables;
+        rayiter++;
+        compressTraces(&rpt, vd.elements);
+        ray_table->clear();
+        ray_list.clear();
+        for (int j = 0; j < rpt.N; j++) {
+            QString name(vd.elements[rpt.intersections[j].ecode].name.data());
+            ray_table->addItem(name);
+            ray_list.push_back(&vd.elements[rpt.intersections[j].ecode]);
+        }
+
+        if (!clicked)
+            return;
+        int dmm = std::min(this->width(), this->height());
+        if (shift) {
+            // Translate with mouse
+            QPoint delta = event->pos() - lastpt;
+            QPointF dp = vd.scale * QPointF(delta) / dmm * 0.5;
+            vd.camera -=
+                vd.orientation.rowZ() * dp.x() + vd.orientation.rowY() * dp.y();
+            lastpt = event->pos();
+        } else {
+            // All rotations in progress are relative to start point
+            G4double step = atan2(vd.scale, vd.scene_radius) * 4.0;
+            QPointF nalph = QPointF(event->pos() - clickpt) / dmm * step;
+            QPointF palph = QPointF(lastpt - clickpt) / dmm * step;
+
+            G4RotationMatrix next = CLHEP::HepRotationY(nalph.x()) *
+                                    CLHEP::HepRotationZ(-nalph.y());
+            G4RotationMatrix prev = CLHEP::HepRotationY(palph.x()) *
+                                    CLHEP::HepRotationZ(-palph.y());
+
+            G4RotationMatrix rot = prev.inverse() * next;
+            // rotate
+            vd.camera =
+                (vd.orientation.inverse() * rot.inverse() * vd.orientation) *
+                vd.camera;
+            vd.orientation = rot * vd.orientation;
+            lastpt = event->pos();
+        }
+        rwidget->rerender(CHANGE_VIEWPORT);
     }
-    clicked = true;
-    clickpt = event->pos();
-    lastpt = clickpt;
 }
 
-void Viewer::mouseReleaseEvent(QMouseEvent *) {
-    // or mouse exit?
-    clicked = false;
-}
-
-void Viewer::mouseMoveEvent(QMouseEvent *event) {
-    // Ray tracking
-    int h = rwidget->geometry().height();
-    int w = rwidget->geometry().width();
-    int mind = std::min(w, h);
-    QPoint coord = rwidget->mapFromGlobal(event->globalPos());
-    QPointF pt((coord.x() - w / 2.) / (2. * mind),
-               (coord.y() - h / 2.) / (2. * mind));
-    const int M = 50;
-    Intersection ints[M + 1];
-    int td, nelem;
-    countTree(vd.elements, 0, td, nelem);
-    Q_UNUSED(td);
-    ElemMutables *mutables = new ElemMutables[nelem]();
-    RayPoint rpt =
-        traceRay(initPoint(pt, vd), forwardDirection(vd.orientation),
-                 vd.elements, vd.clipping_planes, ints, M, 1, mutables);
-    delete[] mutables;
-    rayiter++;
-    compressTraces(&rpt, vd.elements);
-    ray_table->clear();
-    ray_list.clear();
-    for (int j = 0; j < rpt.N; j++) {
-        QString name(vd.elements[rpt.intersections[j].ecode].name.data());
-        ray_table->addItem(name);
-        ray_list.push_back(&vd.elements[rpt.intersections[j].ecode]);
-    }
-
-    if (!clicked)
-        return;
-    int dmm = std::min(this->width(), this->height());
-    if (shift) {
-        // Translate with mouse
-        QPoint delta = event->pos() - lastpt;
-        QPointF dp = vd.scale * QPointF(delta) / dmm * 0.5;
-        vd.camera -=
-            vd.orientation.rowZ() * dp.x() + vd.orientation.rowY() * dp.y();
-        lastpt = event->pos();
-    } else {
-        // All rotations in progress are relative to start point
-        G4double step = atan2(vd.scale, vd.scene_radius) * 4.0;
-        QPointF nalph = QPointF(event->pos() - clickpt) / dmm * step;
-        QPointF palph = QPointF(lastpt - clickpt) / dmm * step;
-
-        G4RotationMatrix next =
-            CLHEP::HepRotationY(nalph.x()) * CLHEP::HepRotationZ(-nalph.y());
-        G4RotationMatrix prev =
-            CLHEP::HepRotationY(palph.x()) * CLHEP::HepRotationZ(-palph.y());
-
-        G4RotationMatrix rot = prev.inverse() * next;
-        // rotate
-        vd.camera =
-            (vd.orientation.inverse() * rot.inverse() * vd.orientation) *
-            vd.camera;
-        vd.orientation = rot * vd.orientation;
-        lastpt = event->pos();
-    }
-    rwidget->rerender(CHANGE_VIEWPORT);
-}
-
-void Viewer::wheelEvent(QWheelEvent *event) {
+void Viewer::processWheel(QWheelEvent *event) {
     // Argh, still not good....
     vd.scale *= std::pow(2, event->delta() / 4800.);
     if (vd.scale > 8 * vd.scene_radius) {

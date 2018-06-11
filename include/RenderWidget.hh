@@ -15,6 +15,9 @@ public:
     virtual void paintEvent(QPaintEvent *evt);
 signals:
     void frameTime(qreal);
+    void forwardKey(QKeyEvent *e);
+    void forwardMouse(QMouseEvent *);
+    void forwardWheel(QWheelEvent *);
 
 public slots:
     void setFullDetail(bool);
@@ -23,6 +26,14 @@ public slots:
     void aborted();
 
     void rerender(int changes);
+
+protected:
+    virtual void keyPressEvent(QKeyEvent *);
+    virtual void keyReleaseEvent(QKeyEvent *);
+    virtual void mousePressEvent(QMouseEvent *);
+    virtual void mouseReleaseEvent(QMouseEvent *);
+    virtual void mouseMoveEvent(QMouseEvent *);
+    virtual void wheelEvent(QWheelEvent *);
 
 private:
     void rerender_priv();

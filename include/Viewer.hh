@@ -48,12 +48,11 @@ public:
            const std::vector<TrackData> &trackopts);
     virtual ~Viewer();
 
-    virtual void keyPressEvent(QKeyEvent *event);
-    virtual void mousePressEvent(QMouseEvent *event);
-    virtual void mouseReleaseEvent(QMouseEvent *event);
-    virtual void mouseMoveEvent(QMouseEvent *event);
-    virtual void wheelEvent(QWheelEvent *event);
 public slots:
+    void processKey(QKeyEvent *e);
+    void processMouse(QMouseEvent *);
+    void processWheel(QWheelEvent *);
+
     void showFrameTime(qreal);
     void restClip();
     void restTree();
@@ -101,6 +100,8 @@ private:
     HistogrammicRangeSlider *energy_range;
     QSpinBox *count_lower;
     QSpinBox *count_upper;
+    QSpinBox *nanc_lower;
+    QSpinBox *nanc_upper;
     QTreeView *tree_view;
     OverView *tree_model;
     QTableView *info_table;

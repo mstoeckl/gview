@@ -94,10 +94,12 @@ RenderWidget::RenderWidget(ViewData &v, const TrackData &tdr)
     : QWidget(), currView(v), trackdata(tdr), graph(threadCount()),
       back_grid(GridSpec(50, 50, 1)), next_grid(GridSpec(50, 50, 1)) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
+    setAttribute(Qt::WA_MouseTracking, true);
 
     cached = QImage(50, 50, QImage::Format_RGB32);
     cached.fill(QColor::fromHslF(0.3, 0.5, 0.7));
     back_request_timer = QElapsedTimer();
+    back_request_time = 0;
 
     state = NONE;
     to_full_detail = false;
@@ -285,6 +287,13 @@ void RenderWidget::drawRuler(QPainter &q) {
         QRect(ranchor - QPoint(dh, 0), ranchor + QPoint(max_ruler_length, dh)),
         QString("%1 ").arg(ipow(10, s - 3 * (s / 3))) + labels[unit], ropt);
 }
+
+void RenderWidget::keyPressEvent(QKeyEvent *e) { emit forwardKey(e); }
+void RenderWidget::keyReleaseEvent(QKeyEvent *e) { emit forwardKey(e); }
+void RenderWidget::mousePressEvent(QMouseEvent *e) { emit forwardMouse(e); }
+void RenderWidget::mouseReleaseEvent(QMouseEvent *e) { emit forwardMouse(e); }
+void RenderWidget::mouseMoveEvent(QMouseEvent *e) { emit forwardMouse(e); }
+void RenderWidget::wheelEvent(QWheelEvent *event) { emit forwardWheel(event); }
 
 RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
                                    int h)
