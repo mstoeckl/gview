@@ -39,6 +39,7 @@ typedef struct {
     Range energy;
     Range time;
     IRange seqno;
+    IRange ngen;
 } TrackRestriction;
 
 class Viewer : public QMainWindow {

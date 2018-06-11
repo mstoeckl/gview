@@ -113,6 +113,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         rests.energy.low = std::max(1.0 * CLHEP::eV, rests.energy.low);
         rests.seqno.low = 1;
         rests.seqno.high = track_options[i].getNTracks();
+        rests.ngen.low = 1;
+        rests.ngen.high = track_options[i].calcMaxGenerations();
         track_res_actual.push_back(rests);
         track_res_bounds.push_back(rests);
     }
@@ -126,7 +128,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         lineprops[G4OpticalPhoton::Definition()->GetPDGEncoding()] = true;
         lineprops[0] = true;
         trackdata = TrackData(td, vd, current.time, current.energy,
-                              current.seqno, lineprops);
+                              current.seqno, current.ngen, lineprops);
     }
     rayiter = 0;
 
@@ -266,6 +268,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
             std::max(0, int(std::floor(std::log10(res.seqno.high / 15.)))));
         count_lower->setSingleStep(step);
         count_upper->setSingleStep(step);
+        nanc_lower->setRange(res.ngen.low, res.ngen.high);
+        nanc_upper->setRange(res.ngen.low, res.ngen.high);
+        nanc_lower->setValue(res.ngen.low);
+        nanc_upper->setValue(res.ngen.high);
     } else {
         times_range->setDisabled(true);
         energy_range->setDisabled(true);
@@ -646,11 +652,14 @@ void Viewer::updateTracks(bool planes_also_changed) {
         ehigh *= CLHEP::eV;
         size_t nlow = size_t(count_lower->value());
         size_t nhigh = size_t(count_upper->value());
+        size_t glow = size_t(nanc_lower->value());
+        size_t ghigh = size_t(nanc_upper->value());
 
         TrackRestriction &res = track_res_actual[which_tracks - 1];
         res.energy = {std::min(elow, ehigh), std::max(elow, ehigh)};
         res.time = {std::min(tlow, thigh), std::max(tlow, thigh)};
         res.seqno = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
+        res.ngen = {std::min(glow, ghigh), std::max(glow, ghigh)};
         QMap<int, bool> lineprops;
         lineprops[G4Gamma::Definition()->GetPDGEncoding()] =
             (line_type_selection->item(0)->checkState() == Qt::Checked);
@@ -662,7 +671,7 @@ void Viewer::updateTracks(bool planes_also_changed) {
             (line_type_selection->item(3)->checkState() == Qt::Checked);
 
         trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
-                              res.energy, res.seqno, lineprops);
+                              res.energy, res.seqno, res.ngen, lineprops);
         if (0) {
             // Temp disabled on grounds of lag
             QVector<QPointF> ep, tp;
@@ -737,6 +746,9 @@ void Viewer::changeTracks(QAction *act) {
         energy_range->blockSignals(true);
         count_lower->blockSignals(true);
         count_upper->blockSignals(true);
+        nanc_lower->blockSignals(true);
+        nanc_upper->blockSignals(true);
+
         const TrackRestriction &res = track_res_bounds[which_tracks - 1];
         const TrackRestriction &cur = track_res_actual[which_tracks - 1];
         times_range->setRange(res.time.low / CLHEP::ns,
@@ -755,15 +767,25 @@ void Viewer::changeTracks(QAction *act) {
             std::max(0, int(std::floor(std::log10(res.seqno.high / 15.)))));
         count_lower->setSingleStep(step);
         count_upper->setSingleStep(step);
+
+        nanc_lower->setRange(res.ngen.low, res.ngen.high);
+        nanc_upper->setRange(res.ngen.low, res.ngen.high);
+        nanc_lower->setValue(cur.ngen.low);
+        nanc_upper->setValue(cur.ngen.high);
+
         times_range->blockSignals(false);
         energy_range->blockSignals(false);
         count_lower->blockSignals(false);
         count_upper->blockSignals(false);
+        nanc_lower->blockSignals(false);
+        nanc_upper->blockSignals(false);
     }
     times_range->setEnabled(active);
     energy_range->setEnabled(active);
     count_lower->setEnabled(active);
     count_upper->setEnabled(active);
+    nanc_lower->setDisabled(active);
+    nanc_upper->setDisabled(active);
     updateTracks(false);
 }
 

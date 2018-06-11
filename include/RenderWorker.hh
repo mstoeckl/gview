@@ -94,6 +94,7 @@ typedef union {
 
 typedef struct {
     double ballRadius;
+    ushort generation;
 } TrackMetaData;
 
 class TrackPrivateData : public QSharedData {
@@ -117,8 +118,9 @@ public:
     TrackData();
     TrackData(const char *filename);
     TrackData(const TrackData &other);
-    TrackData(const TrackData &other, ViewData &viewrestr, Range seltimes,
-              Range selenergies, IRange selidxs,
+    TrackData(const TrackData &other, const ViewData &viewrestr,
+              const Range &seltimes, const Range &selenergies,
+              const IRange &selidxs, const IRange &genrange,
               const QMap<int, bool> &type_active);
     ~TrackData();
     size_t getNBlocks() const;
@@ -129,6 +131,7 @@ public:
     void calcEnergyBounds(double &lower, double &upper) const;
     void constructRangeHistograms(QVector<QPointF> &tp, QVector<QPointF> &ep,
                                   const Range &tr, const Range &er) const;
+    int calcMaxGenerations() const;
 
 private:
     QSharedDataPointer<TrackPrivateData> data;

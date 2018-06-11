@@ -612,11 +612,13 @@ static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
     return c;
 }
 
-TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
-                     Range erange, IRange selidxs,
+TrackData::TrackData(const TrackData &other, const ViewData &vd,
+                     const Range &trange, const Range &erange,
+                     const IRange &selidxs, const IRange &genrange,
                      const QMap<int, bool> &type_active) {
     size_t otracks = other.getNTracks();
     const TrackBlock *oblocks = other.getBlocks();
+    const TrackMetaData *ometa = other.getMeta();
 
     // Worst case allocation is one track (header+2 pts) per line segment
     TrackBlock *buf =
@@ -642,7 +644,8 @@ TrackData::TrackData(const TrackData &other, ViewData &vd, Range trange,
         size_t qheader = -1;
 
         bool typekeep = type_active.value(oheader.ptype, type_active[0]);
-        if (!typekeep) {
+        if (!typekeep || (genrange.low > ometa[z].generation ||
+                          genrange.high < ometa[z].generation)) {
             continue;
         }
 
@@ -816,6 +819,46 @@ void TrackData::calcEnergyBounds(double &lower, double &upper) const {
             i++;
         }
     }
+}
+int TrackData::calcMaxGenerations() const {
+    const TrackPrivateData *tpd = data.constData();
+    size_t ntracks = tpd->ntracks;
+    TrackMetaData *meta = tpd->meta;
+    TrackBlock *blocks = tpd->data;
+    int maxgen = 0;
+    size_t *index = new size_t[ntracks];
+    size_t i = 0;
+    for (size_t z = 0; z < ntracks; z++) {
+        index[z] = i;
+        i += blocks[i].h.npts + 1;
+    }
+
+    for (size_t z = 0; z < ntracks; z++) {
+        size_t current = z;
+        int ng = 1;
+        while (current > 0 && blocks[index[current]].h.parent_id > 0) {
+            size_t ncurrent = (size_t)-1;
+            for (size_t y = current; y > 0; y--) {
+                int hi = index[y - 1];
+                if (blocks[hi].h.track_id ==
+                    blocks[index[current]].h.parent_id) {
+                    ncurrent = y - 1;
+                    break;
+                }
+            }
+
+            if (ncurrent == (size_t)-1) {
+                break;
+            }
+            current = ncurrent;
+
+            ng++;
+        }
+        meta[z].generation = (ushort)std::min(ng, 65535);
+        maxgen = std::max(ng, maxgen);
+    }
+    delete[] index;
+    return maxgen;
 }
 
 static std::map<float, int> mapdedup(const std::vector<float> &a) {
