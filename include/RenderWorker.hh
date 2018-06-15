@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
 
 #include "General.hh"
@@ -151,6 +152,8 @@ typedef struct Element_s {
 
     const G4VSolid *solid;
     const G4Material *material;
+    double cubicVolume;
+    double surfaceArea;
 
     // To index element mutables and color properties
     int ecode;

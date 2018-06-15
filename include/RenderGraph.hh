@@ -1,6 +1,8 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
 
 #include "General.hh"
+#include "Nursery.hh"
 
 #include <QMap>
 #include <QObject>
@@ -11,7 +13,6 @@
 #include <QVector>
 
 class QElapsedTimer;
-class QThreadPool;
 class Context;
 class GridSpec;
 typedef struct ViewData_s ViewData;
@@ -62,9 +63,10 @@ protected slots:
 private:
     void doQueue(QSharedPointer<RenderGraphNode> node);
 
+    Nursery nursery;
+
     QSharedPointer<Context> context;
     QElapsedTimer *timer;
-    QThreadPool *pool;
     float progress;
 
     QVector<QSharedPointer<RenderGraphNode>> task_track;

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
 #include "ColorConfig.hh"
 
 #include "Overview.hh"
@@ -314,6 +315,40 @@ inline qreal mix(qreal a, qreal b, qreal i) {
     return (1. - i) * a + i * b;
 }
 
+class VCalc : public QRunnable {
+public:
+    VCalc(Element &e) : elem(e) {}
+    void run() {
+        elem.cubicVolume = const_cast<G4VSolid *>(elem.solid)->GetCubicVolume();
+    }
+
+private:
+    Element &elem;
+};
+class SCalc : public QRunnable {
+public:
+    SCalc(Element &e) : elem(e) {}
+    void run() {
+        elem.surfaceArea = const_cast<G4VSolid *>(elem.solid)->GetSurfaceArea();
+    }
+
+private:
+    Element &elem;
+};
+
+static void calcCachedProps(std::vector<Element> &elts, int m) {
+    Nursery nursery;
+
+    for (Element &e : elts) {
+        if ((m == 1 || m == 4) && e.cubicVolume < 0) {
+            nursery.startSoon(new VCalc(e), kDeleteAfter);
+        }
+        if (m == 4 && e.surfaceArea < 0) {
+            nursery.startSoon(new SCalc(e), kDeleteAfter);
+        }
+    }
+}
+
 static void recgetProp(std::vector<Element> &elts, int e, int p, int m,
                        double *v) {
     double amp = 0;
@@ -324,9 +359,7 @@ static void recgetProp(std::vector<Element> &elts, int e, int p, int m,
         amp = elts[e].material->GetDensity() / CLHEP::g * CLHEP::cm3;
         break;
     case 1:
-        amp =
-            std::log10(const_cast<G4VSolid *>(elts[e].solid)->GetCubicVolume() /
-                       CLHEP::cm3);
+        amp = std::log10(elts[e].cubicVolume / CLHEP::cm3);
         break;
     case 2: {
         QSet<const G4VSolid *> roots;
@@ -351,8 +384,8 @@ static void recgetProp(std::vector<Element> &elts, int e, int p, int m,
     }
     case 4: {
         /* SA3/V2 ratio as (horrible) roundness measure */
-        double vol = const_cast<G4VSolid *>(elts[e].solid)->GetCubicVolume();
-        double sa = const_cast<G4VSolid *>(elts[e].solid)->GetSurfaceArea();
+        double vol = elts[e].cubicVolume;
+        double sa = elts[e].surfaceArea;
         double sav = sa * sa * sa / vol / vol;
         amp = std::log10(sav);
         break;
@@ -531,6 +564,7 @@ int ColorConfig::reassignColors() {
         countTree(vd.elements, 0, td, ne);
         double *vals = new double[ne]();
         int ci = prop_select->currentIndex();
+        calcCachedProps(vd.elements, ci);
         recgetProp(vd.elements, 0, 0, ci, vals);
         double mn = kInfinity, mx = -kInfinity;
         for (int i = 0; i < ne; i++) {

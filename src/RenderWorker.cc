@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
 #include "RenderWorker.hh"
 #include "BooleanTree.hh"
 
@@ -108,6 +109,9 @@ G4ThreeVector initPoint(const QPointF &scpt, const ViewData &d) {
         d.camera + updown * scpt.y() * d.scale + lright * scpt.x() * d.scale;
     return init;
 }
+
+#define CODE_LINE -1
+#define CODE_END -2
 
 RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
                   const std::vector<Element> &els,
@@ -285,7 +289,7 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
             // End clip (counts as a hit!; always relevant)
             ints[ret.N].dist = edist;
             ints[ret.N].normal = exitnormal;
-            ints[ret.N].ecode = -2;
+            ints[ret.N].ecode = CODE_END;
             ret.back_clipped = true;
             ret.N++;
             return ret;
@@ -304,12 +308,9 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
                     curr.solid->SurfaceNormal(condrot(curr, lpos));
                 ints[ret.N].dist = sdist;
                 ints[ret.N].normal = condirot(curr, lnormal);
-                ints[ret.N].ecode = n > 0 ? stack[n - 1]->ecode : -2;
+                ints[ret.N].ecode = n > 0 ? stack[n - 1]->ecode : CODE_END;
                 ret.N++;
                 if (n == 0 || ret.N >= maxhits || first_visible_hit) {
-                    if (first_visible_hit) {
-                        qFatal("Unexpected discovery on exit");
-                    }
                     return ret;
                 }
             } else if (n == 0) {
@@ -331,7 +332,8 @@ RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
                     closest->solid->SurfaceNormal(condrot(*closest, lpos));
                 ints[ret.N].dist = sdist;
                 ints[ret.N].normal = condirot(*closest, lnormal);
-                ints[ret.N].ecode = (ret.N >= maxhits) ? -2 : closest->ecode;
+                ints[ret.N].ecode =
+                    (ret.N >= maxhits) ? CODE_END : closest->ecode;
                 ret.N++;
                 if (ret.N >= maxhits || first_visible_hit) {
                     return ret;
@@ -483,7 +485,7 @@ RayPoint rayAtPoint(const QPointF &pt, qreal radius,
             if (ndevs[k] >= devthresh) {
                 ray.N = k;
                 if (k > 0) {
-                    ray.intersections[k - 1].ecode = (-1);
+                    ray.intersections[k - 1].ecode = CODE_LINE;
                 }
                 break;
             }
@@ -507,7 +509,7 @@ QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
             break;
         }
     }
-    bool line = ray.N > 0 && (ray.intersections[ray.N - 1].ecode == (-1));
+    bool line = ray.N > 0 && (ray.intersections[ray.N - 1].ecode == CODE_LINE);
     if (line && p == ray.N - 1) {
         p = ray.N - 2;
     }
@@ -516,6 +518,12 @@ QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
     // p indicates the first volume to use the color rule on
     // (p<0 indicates the line dominates)
     for (int k = p; k >= 0; --k) {
+        if (ray.intersections[k].ecode < 0) {
+            // Either line or END_CODE
+            col = FColor(1.0, 0., 0., 0);
+            continue;
+        }
+
         // We use the intersection before the volume
         const Element &eback = d.elements[ray.intersections[k].ecode];
         const VColor &base_color = d.color_table[eback.ccode];
@@ -1072,6 +1080,8 @@ int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
         m.ccode = 0;
         m.material = mat;
         m.solid = log->GetSolid();
+        m.cubicVolume = -std::numeric_limits<G4double>::infinity();
+        m.surfaceArea = -std::numeric_limits<G4double>::infinity();
         if (0) {
             m.solid = BooleanTree::compile(m.solid);
         }

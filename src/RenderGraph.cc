@@ -1,12 +1,12 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
 #include "RenderGraph.hh"
+#include "Nursery.hh"
 #include "RenderTask.hh"
 #include "RenderWorker.hh"
 
 #include <QElapsedTimer>
 #include <QImage>
 #include <QSignalMapper>
-#include <QThread>
-#include <QThreadPool>
 
 class RenderGraphHelper : public QRunnable {
 public:
@@ -40,10 +40,7 @@ Context::Context(const ViewData &d, const GridSpec &g)
     : grid(g), viewdata(new ViewData(d)) {}
 Context::~Context() { delete viewdata; }
 
-RenderGraph::RenderGraph(int nthreads) {
-    pool = new QThreadPool();
-    pool->setMaxThreadCount(nthreads);
-
+RenderGraph::RenderGraph(int nthreads) : QObject(), nursery(nthreads) {
     timer = new QElapsedTimer();
 
     qRegisterMetaType<RenderGraphNode *>("RenderGraphNode*");
@@ -59,9 +56,6 @@ RenderGraph::~RenderGraph() {
     task_track.clear();
 
     context = QSharedPointer<Context>();
-    pool->clear();
-    pool->waitForDone();
-    delete pool;
 
     delete timer;
 }
@@ -74,7 +68,7 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
     bool tracks_changed = changed & CHANGE_TRACK;
     bool oneshot = changed & CHANGE_ONESHOT;
 
-    int nthreads = pool->maxThreadCount();
+    int nthreads = nursery.idealThreadCount();
 
     context = QSharedPointer<Context>(new Context(vd, grid));
 
@@ -230,7 +224,8 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
 void RenderGraph::doQueue(QSharedPointer<RenderGraphNode> node) {
     node->status = RenderGraphNode::kActive;
     if (1) {
-        pool->start(new RenderGraphHelper(node, context, this));
+        nursery.startSoon(new RenderGraphHelper(node, context, this),
+                          kDeleteAfter);
     } else {
         RenderGraphHelper(node, context, this).run();
     }
