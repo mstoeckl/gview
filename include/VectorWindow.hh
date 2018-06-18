@@ -45,6 +45,7 @@ private:
     QRadioButton *choice_opaque;
     QPushButton *button_reroll;
     QLineEdit *line_name;
+    QComboBox *combo_resolution;
 
     ImageWidget *display;
 };

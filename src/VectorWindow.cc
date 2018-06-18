@@ -82,9 +82,16 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     choice_group->addButton(choice_opaque);
     choice_group->addButton(choice_transparent);
     choice_opaque->setChecked(true);
+    combo_resolution = new QComboBox();
+    combo_resolution->addItem("100x100");
+    combo_resolution->addItem("1000x1000");
+    combo_resolution->addItem("5000x5000");
+    combo_resolution->setCurrentIndex(1);
 
     connect(button_reroll, SIGNAL(pressed()), this, SLOT(updateColors()));
     connect(choice_group, SIGNAL(buttonToggled(int, bool)), this,
+            SLOT(updateSettings()));
+    connect(combo_resolution, SIGNAL(currentIndexChanged()), this,
             SLOT(updateSettings()));
     connect(line_name, SIGNAL(textEdited(const QString &)), this,
             SLOT(updateSettings()));
@@ -108,6 +115,7 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     layout_control->addWidget(choice_transparent);
     layout_control->addWidget(button_reroll);
     layout_control->addWidget(line_name);
+    layout_control->addWidget(combo_resolution);
     layout_control->addStretch(1);
 
     layout_columns->addLayout(layout_control, 0);
@@ -136,7 +144,9 @@ void VectorPreview::updateSettings() {
     bool is_transp = choice_transparent->isChecked();
 
     if (button_render->isEnabled()) {
-        tracer->reset(is_transp, QSize(1000, 1000), name);
+        QSize szs[3] = {QSize(100, 100), QSize(1000, 1000), QSize(5000, 5000)};
+        int i = combo_resolution->currentIndex();
+        tracer->reset(is_transp, szs[i], name);
         display->setImage(tracer->preview(QSize(100, 100)));
     }
 }
