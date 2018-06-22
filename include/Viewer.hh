@@ -36,13 +36,6 @@ typedef struct {
     G4VPhysicalVolume *vol;
 } GeoOption;
 
-typedef struct {
-    Range energy;
-    Range time;
-    IRange seqno;
-    IRange ngen;
-} TrackRestriction;
-
 class Viewer : public QMainWindow {
     Q_OBJECT
 public:
@@ -80,6 +73,7 @@ public slots:
 
 private:
     void reloadChoiceMenus();
+    void reloadLineTypeSelection();
 
     std::vector<GeoOption> geo_options;
     std::vector<TrackData> track_options;

@@ -84,6 +84,30 @@ constructMaterialList(const std::vector<GeoOption> &geo_options) {
     return mtl_list;
 }
 
+static TrackRestriction calcTrackRestriction(const TrackData &t) {
+    TrackRestriction rests;
+    t.calcTimeBounds(rests.time.low, rests.time.high);
+    rests.time.high += 0.01 * CLHEP::ns;
+    t.calcEnergyBounds(rests.energy.low, rests.energy.high);
+    rests.energy.high *= 1.2;
+    rests.energy.low /= 1.2;
+    rests.energy.low = std::max(1.0 * CLHEP::eV, rests.energy.low);
+    rests.seqno.low = 1;
+    rests.seqno.high = t.getNTracks();
+    rests.ngen.low = 1;
+    rests.ngen.high = t.calcMaxGenerations();
+    rests.type_ids.clear();
+    rests.type_visible.clear();
+    const QMap<int32_t, const G4ParticleDefinition *> &m = t.calcTypes();
+    for (int32_t q : m.keys()) {
+        rests.type_ids.push_back(
+            QPair<int32_t, const G4ParticleDefinition *>(q, m[q]));
+        rests.type_visible[q] = true;
+    }
+    rests.types = m.values().toSet().toList().toVector();
+    return rests;
+}
+
 Viewer::Viewer(const std::vector<GeoOption> &options,
                const std::vector<TrackData> &trackopts)
     : QMainWindow() {
@@ -105,17 +129,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     TrackData td =
         which_tracks == 0 ? TrackData() : track_options[which_tracks - 1];
     for (size_t i = 0; i < track_options.size(); i++) {
-        TrackRestriction rests;
-        track_options[i].calcTimeBounds(rests.time.low, rests.time.high);
-        rests.time.high += 0.01 * CLHEP::ns;
-        track_options[i].calcEnergyBounds(rests.energy.low, rests.energy.high);
-        rests.energy.high *= 1.2;
-        rests.energy.low /= 1.2;
-        rests.energy.low = std::max(1.0 * CLHEP::eV, rests.energy.low);
-        rests.seqno.low = 1;
-        rests.seqno.high = track_options[i].getNTracks();
-        rests.ngen.low = 1;
-        rests.ngen.high = track_options[i].calcMaxGenerations();
+        TrackRestriction rests = calcTrackRestriction(track_options[i]);
         track_res_actual.push_back(rests);
         track_res_bounds.push_back(rests);
     }
@@ -123,13 +137,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
         trackdata = TrackData();
     } else {
         TrackRestriction current = track_res_actual[which_tracks - 1];
-        QMap<int, bool> lineprops;
-        lineprops[G4Gamma::Definition()->GetPDGEncoding()] = true;
-        lineprops[G4Electron::Definition()->GetPDGEncoding()] = true;
-        lineprops[G4OpticalPhoton::Definition()->GetPDGEncoding()] = true;
-        lineprops[0] = true;
-        trackdata = TrackData(td, vd, current.time, current.energy,
-                              current.seqno, current.ngen, lineprops);
+        trackdata = TrackData(td, vd, current);
     }
     rayiter = 0;
 
@@ -298,15 +306,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     linecount_label = new QLabel("Lines: 0");
     vb->addWidget(linecount_label);
     line_type_selection = new QListWidget();
-    line_type_selection->addItems(QStringList() << "Gamma"
-                                                << "Electron"
-                                                << "OpticalPhoton"
-                                                << "Other");
-    for (int i = 0; i < line_type_selection->count(); i++) {
-        QListWidgetItem *item = line_type_selection->item(i);
-        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-        item->setCheckState(Qt::Checked);
-    }
+    reloadLineTypeSelection();
     connect(line_type_selection, SIGNAL(itemChanged(QListWidgetItem *)), this,
             SLOT(updatePlanes()));
     vb->addWidget(line_type_selection);
@@ -661,18 +661,18 @@ void Viewer::updateTracks(bool planes_also_changed) {
         res.time = {std::min(tlow, thigh), std::max(tlow, thigh)};
         res.seqno = {std::min(nlow, nhigh), std::max(nlow, nhigh)};
         res.ngen = {std::min(glow, ghigh), std::max(glow, ghigh)};
-        QMap<int, bool> lineprops;
-        lineprops[G4Gamma::Definition()->GetPDGEncoding()] =
-            (line_type_selection->item(0)->checkState() == Qt::Checked);
-        lineprops[G4Electron::Definition()->GetPDGEncoding()] =
-            (line_type_selection->item(1)->checkState() == Qt::Checked);
-        lineprops[G4OpticalPhoton::Definition()->GetPDGEncoding()] =
-            (line_type_selection->item(2)->checkState() == Qt::Checked);
-        lineprops[0] =
-            (line_type_selection->item(3)->checkState() == Qt::Checked);
 
-        trackdata = TrackData(track_options[which_tracks - 1], vd, res.time,
-                              res.energy, res.seqno, res.ngen, lineprops);
+        for (int i = 0; i < res.types.size(); i++) {
+            bool visible =
+                line_type_selection->item(i)->checkState() == Qt::Checked;
+            for (int j = 0; j < res.type_ids.size(); j++) {
+                if (res.type_ids[j].second == res.types[i]) {
+                    res.type_visible[res.type_ids[j].first] = visible;
+                }
+            }
+        }
+
+        trackdata = TrackData(track_options[which_tracks - 1], vd, res);
         if (0) {
             // Temp disabled on grounds of lag
             QVector<QPointF> ep, tp;
@@ -780,6 +780,9 @@ void Viewer::changeTracks(QAction *act) {
         count_upper->blockSignals(false);
         nanc_lower->blockSignals(false);
         nanc_upper->blockSignals(false);
+
+        line_type_selection->clear();
+        reloadLineTypeSelection();
     }
     times_range->setEnabled(active);
     energy_range->setEnabled(active);
@@ -885,6 +888,28 @@ void Viewer::reloadChoiceMenus() {
     connect(tadd, SIGNAL(triggered()), this, SLOT(openTracks()));
 }
 
+void Viewer::reloadLineTypeSelection() {
+    line_type_selection->blockSignals(true);
+
+    if (which_tracks > 0) {
+        const TrackRestriction &r = track_res_actual[which_tracks - 1];
+        for (const G4ParticleDefinition *p : r.types) {
+            QListWidgetItem *lwi =
+                new QListWidgetItem(QString(p->GetParticleName().c_str()));
+            lwi->setFlags(lwi->flags() | Qt::ItemIsUserCheckable);
+            bool visible = false;
+            for (QPair<int32_t, const G4ParticleDefinition *> q : r.type_ids) {
+                if (q.second == p && r.type_visible[q.first]) {
+                    visible = true;
+                }
+            }
+            lwi->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
+            line_type_selection->addItem(lwi);
+        }
+    }
+    line_type_selection->blockSignals(false);
+}
+
 void Viewer::openGeometry() {
     QString selected = "GDML (*.gdml *.gdml.gz)";
     QString fn = QFileDialog::getOpenFileName(
@@ -939,15 +964,7 @@ void Viewer::openTracks() {
     if ((fn.size() >= 4 && fn.right(4) == ".dat") ||
         (fn.size() >= 6 && fn.right(4) == ".track")) {
         TrackData nxt = TrackData(fn.toUtf8().constData());
-        TrackRestriction rests;
-        nxt.calcTimeBounds(rests.time.low, rests.time.high);
-        rests.time.high += 0.01 * CLHEP::ns;
-        nxt.calcEnergyBounds(rests.energy.low, rests.energy.high);
-        rests.energy.high *= 1.2;
-        rests.energy.low /= 1.2;
-        rests.energy.low = std::max(1.0 * CLHEP::eV, rests.energy.low);
-        rests.seqno.low = 1;
-        rests.seqno.high = nxt.getNTracks();
+        TrackRestriction rests = calcTrackRestriction(nxt);
         track_res_actual.push_back(rests);
         track_res_bounds.push_back(rests);
         track_options.push_back(nxt);

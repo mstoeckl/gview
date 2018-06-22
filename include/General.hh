@@ -113,3 +113,10 @@ private:
     qreal imind_t_s_t_2, mind_t_is_d_2;
     qreal off_ts_x, off_ts_y, off_tv_x, off_tv_y;
 };
+
+typedef struct {
+    double low, high;
+} Range;
+typedef struct {
+    size_t low, high;
+} IRange;

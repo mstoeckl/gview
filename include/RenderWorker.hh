@@ -3,6 +3,7 @@
 
 #include "General.hh"
 #include "RenderGraph.hh"
+#include "TrackData.hh"
 
 #include <G4RotationMatrix.hh>
 #include <G4ThreeVector.hh>
@@ -63,80 +64,6 @@ typedef struct RayPoint_s {
     bool front_clipped;
     bool back_clipped;
 } RayPoint;
-
-typedef struct {
-    int32_t npts;
-    int32_t ptype;
-    int64_t event_id;
-    int32_t track_id;
-    int32_t parent_id;
-    uint64_t unused;
-} TrackHeader;
-
-typedef struct {
-    float energy;
-    float time;
-    double x;
-    double y;
-    double z;
-} TrackPoint;
-
-typedef struct {
-    double low, high;
-} Range;
-typedef struct {
-    size_t low, high;
-} IRange;
-
-typedef union {
-    TrackHeader h;
-    TrackPoint p;
-} TrackBlock;
-
-typedef struct {
-    double ballRadius;
-    ushort generation;
-} TrackMetaData;
-
-class TrackPrivateData : public QSharedData {
-public:
-    size_t ntracks;
-    size_t nblocks;
-    TrackBlock *data;
-    TrackMetaData *meta;
-
-    TrackPrivateData(size_t itracks, size_t iblocks, TrackBlock *idata);
-    explicit TrackPrivateData(const char *filename);
-    TrackPrivateData(const TrackPrivateData &other);
-    ~TrackPrivateData();
-
-private:
-    size_t mmapbytes;
-};
-
-class TrackData {
-public:
-    TrackData();
-    TrackData(const char *filename);
-    TrackData(const TrackData &other);
-    TrackData(const TrackData &other, const ViewData &viewrestr,
-              const Range &seltimes, const Range &selenergies,
-              const IRange &selidxs, const IRange &genrange,
-              const QMap<int, bool> &type_active);
-    ~TrackData();
-    size_t getNBlocks() const;
-    size_t getNTracks() const;
-    const TrackBlock *getBlocks() const;
-    const TrackMetaData *getMeta() const;
-    void calcTimeBounds(double &lower, double &upper) const;
-    void calcEnergyBounds(double &lower, double &upper) const;
-    void constructRangeHistograms(QVector<QPointF> &tp, QVector<QPointF> &ep,
-                                  const Range &tr, const Range &er) const;
-    int calcMaxGenerations() const;
-
-private:
-    QSharedDataPointer<TrackPrivateData> data;
-};
 
 typedef struct {
     double abs_dist;
