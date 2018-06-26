@@ -521,9 +521,15 @@ TrackPrivateData::TrackPrivateData(const char *filename) {
 
     data = reinterpret_cast<TrackBlock *>(buf);
     ntracks = 0;
-    for (size_t i = 0; i < nblocks;) {
-        i += data[i].h.npts + 1;
+    size_t i = 0;
+    while (i < nblocks) {
+        int32_t n = std::max(data[i].h.npts, 0);
+        i += n + 1;
         ntracks++;
+    }
+    if (i > nblocks) {
+        // end was truncated
+        i--;
     }
 
     meta = setupBallRadii(data, ntracks);
