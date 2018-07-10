@@ -27,6 +27,8 @@ class LineCollection;
 class G4Material;
 class G4VSolid;
 class QProgressDialog;
+class Navigator;
+class G4VPhysicalVolume;
 
 typedef struct Element_s Element;
 typedef struct ViewData_s ViewData;
@@ -77,6 +79,7 @@ typedef struct Element_s {
     G4ThreeVector offset;
     G4RotationMatrix rot;
 
+    const G4VPhysicalVolume *orig_vol;
     const G4VSolid *solid;
     const G4Material *material;
     double cubicVolume;
@@ -102,6 +105,7 @@ typedef struct Element_s {
 } Element;
 
 typedef struct ViewData_s {
+    G4VPhysicalVolume *orig_vol;
     // What is being viewed. elements[0] is root
     std::vector<Element> elements;
     TrackData tracks;
@@ -113,6 +117,7 @@ typedef struct ViewData_s {
     G4double scene_radius;
     std::vector<VColor> color_table;
     bool split_by_material;
+    int navigator;
     bool force_opaque;
     // Simplification level
     int level_of_detail;
@@ -122,20 +127,17 @@ void countTree(const std::vector<Element> &els, int index, int &treedepth,
                int &nelements);
 G4ThreeVector forwardDirection(const G4RotationMatrix &);
 G4ThreeVector initPoint(const QPointF &, const ViewData &);
-RayPoint traceRay(const G4ThreeVector &init, const G4ThreeVector &forward,
-                  const std::vector<Element> &els,
-                  const std::vector<Plane> &clipping_planes,
-                  Intersection *intersections, int maxhits, long iteration,
-                  ElemMutables mutables[], bool first_visible_hit = false);
-RayPoint rayAtPoint(const QPointF &pt, qreal radius,
-                    const G4ThreeVector &forward, const ViewData &d, int &iter,
-                    ElemMutables *mutables, Intersection *ints,
-                    Intersection *altints, int M, int *ndevs);
+bool clipRay(const std::vector<Plane> &clipping_planes,
+             const G4ThreeVector &init, const G4ThreeVector &forward,
+             G4double &sdist, G4double &edist, G4ThreeVector &entrynormal,
+             G4ThreeVector &exitnormal);
+RayPoint rayAtPoint(Navigator &nav, const QPointF &pt, qreal radius,
+                    const G4ThreeVector &forward, const ViewData &d,
+                    Intersection *ints, Intersection *altints, int M,
+                    int *ndevs);
 QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
                  const ViewData &d, const QPointF &pt,
                  const G4ThreeVector &forward);
-
-void compressTraces(RayPoint *pt, const std::vector<Element> &elts);
 
 class G4VPhysicalVolume;
 int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,

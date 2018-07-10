@@ -126,7 +126,7 @@ void RenderWidget::setFullDetail(bool b) {
 }
 
 void RenderWidget::rerender(int what_changed) {
-    if (what_changed != CHANGE_COLOR) {
+    if (what_changed != CHANGE_COLOR && what_changed != CHANGE_TRACK) {
         // Pure color changes are fast; all other types are slow
         currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
         changed_inputs |= CHANGE_VIEWPORT;

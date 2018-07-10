@@ -3,6 +3,7 @@
 
 #include "ColorConfig.hh"
 #include "CustomWidgets.hh"
+#include "Navigator.hh"
 #include "Overview.hh"
 #include "RenderWidget.hh"
 #include "VectorTrace.hh"
@@ -24,6 +25,7 @@
 #include <QActionGroup>
 #include <QCheckBox>
 #include <QCollator>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
@@ -114,6 +116,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     which_geo = 0;
     geo_options = options;
     track_options = trackopts;
+    vd.orig_vol = geo_options[which_geo].vol;
     vd.elements.clear();
     convertCreation(vd.elements, geo_options[which_geo].vol);
     vd.scene_radius = vd.elements[0].solid->GetExtent().GetExtentRadius();
@@ -123,6 +126,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vd.level_of_detail = 0; // 0 is full; 1 is 1/9, 2 is 1/81; depends on timing
     vd.split_by_material = true;
     vd.force_opaque = false;
+    vd.navigator = nFastVolNav;
     vd.clipping_planes = std::vector<Plane>();
     which_tracks = track_options.size() > 0 ? 1 : 0;
 
@@ -306,9 +310,10 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     linecount_label = new QLabel("Lines: 0");
     vb->addWidget(linecount_label);
     line_type_selection = new QListWidget();
+    line_type_selection->setSortingEnabled(true);
     reloadLineTypeSelection();
     connect(line_type_selection, SIGNAL(itemChanged(QListWidgetItem *)), this,
-            SLOT(updatePlanes()));
+            SLOT(updateTracks()));
     vb->addWidget(line_type_selection);
     QHBoxLayout *nrrb = new QHBoxLayout();
     nrrb->addWidget(new QLabel("Gen.:"));
@@ -380,12 +385,19 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     mtl_showlines->setCheckState(Qt::Unchecked);
     connect(mtl_showlines, SIGNAL(stateChanged(int)), this,
             SLOT(updateShowLines()));
+    navig_sel = new QComboBox();
+    navig_sel->addItem("FastVol", QVariant(nFastVolNav));
+    navig_sel->addItem("Geant", QVariant(nGeantNav));
+    navig_sel->setCurrentIndex(0);
+    connect(navig_sel, SIGNAL(currentIndexChanged(int)), this,
+            SLOT(updateNavigator()));
     std::vector<const G4Material *> mtl_list =
         constructMaterialList(geo_options);
     color_config = new ColorConfig(vd, mtl_list);
     color_config->reassignColors();
     connect(color_config, SIGNAL(colorChange()), this, SLOT(updateColors()));
     mla->addWidget(mtl_showlines);
+    mla->addWidget(navig_sel);
     mla->addWidget(color_config);
     mtlc->setLayout(mla);
     dock_color->setWidget(mtlc);
@@ -571,19 +583,30 @@ void Viewer::processMouse(QMouseEvent *event) {
         int td, nelem;
         countTree(vd.elements, 0, td, nelem);
         Q_UNUSED(td);
-        ElemMutables *mutables = new ElemMutables[nelem]();
-        RayPoint rpt =
-            traceRay(initPoint(pt, vd), forwardDirection(vd.orientation),
-                     vd.elements, vd.clipping_planes, ints, M, 1, mutables);
-        delete[] mutables;
-        rayiter++;
-        compressTraces(&rpt, vd.elements);
+        FastVolNavigator nav(vd.elements, vd.clipping_planes);
+        //        GeantNavigator nav(vd.orig_vol, vd.elements,
+        //        vd.clipping_planes);
+        RayPoint rpt = nav.traceRay(initPoint(pt, vd),
+                                    forwardDirection(vd.orientation), ints, M);
         ray_table->clear();
         ray_list.clear();
         for (int j = 0; j < rpt.N; j++) {
-            QString name(vd.elements[rpt.intersections[j].ecode].name.data());
-            ray_table->addItem(name);
-            ray_list.push_back(&vd.elements[rpt.intersections[j].ecode]);
+            int ecode = rpt.intersections[j].ecode;
+            if (ecode >= 0) {
+                QString name(vd.elements[ecode].name.data());
+                ray_table->addItem(name);
+                ray_list.push_back(&vd.elements[ecode]);
+            } else {
+                // CODE_END, CODE_LINE are negative
+                if (ecode == CODE_END) {
+                    ray_table->addItem("CODE_END");
+                } else if (ecode == CODE_LINE) {
+                    ray_table->addItem("CODE_LINE");
+                } else {
+                    ray_table->addItem("CODE_UNK");
+                }
+                ray_list.push_back(NULL);
+            }
         }
 
         if (!clicked)
@@ -663,10 +686,13 @@ void Viewer::updateTracks(bool planes_also_changed) {
         res.ngen = {std::min(glow, ghigh), std::max(glow, ghigh)};
 
         for (int i = 0; i < res.types.size(); i++) {
-            bool visible =
-                line_type_selection->item(i)->checkState() == Qt::Checked;
+            QListWidgetItem *it = line_type_selection->item(i);
+            bool visible = it->checkState() == Qt::Checked;
+            const G4ParticleDefinition *pdef =
+                (const G4ParticleDefinition *)it->data(Qt::UserRole)
+                    .toULongLong();
             for (int j = 0; j < res.type_ids.size(); j++) {
-                if (res.type_ids[j].second == res.types[i]) {
+                if (res.type_ids[j].second == pdef) {
                     res.type_visible[res.type_ids[j].first] = visible;
                 }
             }
@@ -709,6 +735,7 @@ void Viewer::changeGeometry(QAction *act) {
             if (which_geo != i) {
                 // Change geometry
                 which_geo = i;
+                vd.orig_vol = geo_options[which_geo].vol;
                 vd.elements.clear();
                 convertCreation(vd.elements, geo_options[which_geo].vol);
                 vd.scene_radius =
@@ -803,13 +830,20 @@ void Viewer::rayLookup() {
         return;
     }
     int r = ray_table->row(li[0]);
+    // e may be null if for special placeholder slot
     const Element *e = ray_list[r];
-
-    QModelIndex index = tree_model->indexFromElement(e);
-    tree_view->scrollTo(index, QAbstractItemView::PositionAtCenter);
-    tree_view->selectionModel()->clearSelection();
-    tree_view->selectionModel()->select(index, QItemSelectionModel::Select);
+    if (e) {
+        QModelIndex index = tree_model->indexFromElement(e);
+        tree_view->scrollTo(index, QAbstractItemView::PositionAtCenter);
+        tree_view->selectionModel()->clearSelection();
+        tree_view->selectionModel()->select(index, QItemSelectionModel::Select);
+    }
     // ^ Triggers indicateElement
+}
+
+void Viewer::updateNavigator() {
+    vd.navigator = navig_sel->currentData().toInt();
+    rwidget->rerender(CHANGE_GEO);
 }
 
 void Viewer::updateShowLines() {
@@ -904,6 +938,7 @@ void Viewer::reloadLineTypeSelection() {
                 }
             }
             lwi->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
+            lwi->setData(Qt::UserRole, QVariant((qulonglong)p));
             line_type_selection->addItem(lwi);
         }
     }

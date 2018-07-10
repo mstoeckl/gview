@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "VectorTrace.hh"
 
+#include "Navigator.hh"
+
 #include <QFile>
 #include <QPainter>
 #include <QPen>
@@ -128,15 +130,11 @@ VectorTracer::VectorTracer(ViewData vd, TrackData td,
 
     grid_points = NULL;
     grid_nclasses = 0;
-    ray_mutables = NULL;
-    ray_iteration = 0;
 }
 
 VectorTracer::~VectorTracer() {
     if (grid_points)
         delete[] grid_points;
-    if (ray_mutables)
-        delete[] ray_mutables;
 }
 
 void VectorTracer::recolor() {
@@ -328,24 +326,13 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
         return r;
     }
 
-    if (!ray_mutables) {
-        int treedepth;
-        int nelements;
-        countTree(view_data.elements, 0, treedepth, nelements);
-        ray_mutables = new ElemMutables[nelements]();
-        if (treedepth > 10) {
-            qFatal("Excessive tree depth, fatal!");
-        }
-    }
     const int dlimit = 100;
     Intersection ints[dlimit + 1];
 
-    RayPoint rpt = traceRay(initPoint(spot, view_data),
-                            forwardDirection(view_data.orientation),
-                            view_data.elements, view_data.clipping_planes, ints,
-                            dlimit, ray_iteration, ray_mutables);
-    ray_iteration++;
-    compressTraces(&rpt, view_data.elements);
+    FastVolNavigator nav(view_data.elements, view_data.clipping_planes);
+    RayPoint rpt =
+        nav.traceRay(initPoint(spot, view_data),
+                     forwardDirection(view_data.orientation), ints, dlimit);
 
     return RenderPoint(spot, rpt);
 }

@@ -60,13 +60,6 @@ static void lineCuts(const std::vector<Plane> &clips, G4ThreeVector from,
     highE = high;
 }
 
-static bool insideConvex(const std::vector<Plane> &clips, G4ThreeVector point) {
-    // Optimizer will resolve to simple form anyway; & this is error free
-    double lowE, highE;
-    lineCuts(clips, point, point, lowE, highE);
-    return lowE < highE;
-}
-
 static TrackPoint linmix(const TrackPoint &a, const TrackPoint &b, double mx) {
     TrackPoint c;
     double dx = 1.0 - mx;
@@ -108,7 +101,7 @@ TrackData::TrackData(const TrackData &other, const ViewData &vd,
 
     for (size_t z = nlow; z < nhigh; z++) {
         const TrackHeader &oheader = oblocks[i].h;
-        const TrackPoint *seq = (TrackPoint *)&oblocks[i + 1];
+        const TrackPoint *seq = &oblocks[i + 1].p;
         i += oheader.npts + 1;
         size_t qheader = -1;
 
@@ -119,20 +112,7 @@ TrackData::TrackData(const TrackData &other, const ViewData &vd,
         }
 
         G4ThreeVector fts(seq[0].x, seq[0].y, seq[0].z);
-        bool intime = seq[0].time >= tlow && seq[0].time <= thigh;
-        bool inenergy = seq[0].energy >= elow && seq[0].energy <= ehigh;
-        bool inconvex = insideConvex(vd.clipping_planes, fts);
         bool started = false;
-        if (inconvex && intime && inenergy) {
-            TrackHeader h = oheader;
-            h.npts = 1;
-            qtracks++;
-            qheader = qblocks;
-            buf[qblocks].h = h;
-            buf[qblocks + 1].p = seq[0];
-            qblocks += 2;
-            started = true;
-        }
 
         for (int j = 0; j < oheader.npts - 1; j++) {
             double low, high;
@@ -158,6 +138,7 @@ TrackData::TrackData(const TrackData &other, const ViewData &vd,
                 if (!started) {
                     TrackHeader h = oheader;
                     h.npts = 1;
+                    qtracks++;
                     qheader = qblocks;
                     buf[qblocks].h = h;
                     buf[qblocks + 1].p = seq[j];
@@ -522,14 +503,24 @@ TrackPrivateData::TrackPrivateData(const char *filename) {
     data = reinterpret_cast<TrackBlock *>(buf);
     ntracks = 0;
     size_t i = 0;
+    int32_t max_track_length = 0;
+    const uint64_t check = (uint64_t)(-1);
     while (i < nblocks) {
         int32_t n = std::max(data[i].h.npts, 0);
+        max_track_length = std::max(max_track_length, n);
+        if (data[i].h.unused != check) {
+            qWarning("track %lu (block %lu of %lu) fails check with value %lx",
+                     ntracks, i, nblocks, data[i].h.unused);
+        }
+
         i += n + 1;
         ntracks++;
     }
     if (i > nblocks) {
         // end was truncated
         i--;
+        qWarning("Truncated, leaving %lu entire tracks; max length %d", i,
+                 max_track_length);
     }
 
     meta = setupBallRadii(data, ntracks);

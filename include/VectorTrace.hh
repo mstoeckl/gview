@@ -118,6 +118,4 @@ private:
     QVector<Region> region_list;
     QMap<QPoint, RenderPoint> edge_refinements;
     QMap<QPoint, bool> crease_edge_map;
-    ElemMutables *ray_mutables;
-    long ray_iteration;
 };

@@ -168,6 +168,7 @@ VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     /* Initialize functional stuff */
 
     ViewData view_data;
+    view_data.orig_vol = vol;
     view_data.elements.clear();
     convertCreation(view_data.elements, vol);
     view_data.scene_radius =

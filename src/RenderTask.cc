@@ -2,6 +2,7 @@
 #include "RenderTask.hh"
 
 #include "General.hh"
+#include "Navigator.hh"
 #include "RenderWorker.hh"
 
 #include <QImage>
@@ -70,8 +71,11 @@ void RenderRayTask::run(Context *ctx) {
 
     const G4double radius = 0.8 / mind;
     // Zero construct by default
-    ElemMutables *mutables = new ElemMutables[nelements]();
-    int iter = 1;
+    Navigator *nav =
+        (d->navigator == nFastVolNav)
+            ? (Navigator *)new FastVolNavigator(d->elements, d->clipping_planes)
+            : (Navigator *)new GeantNavigator(d->orig_vol, d->elements,
+                                              d->clipping_planes);
 
     // reqs: of type?
     const FlatData *flatData = &(*flat_data);
@@ -87,7 +91,7 @@ void RenderRayTask::run(Context *ctx) {
         QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
         for (int j = xl; j < xh; j++) {
             if (nconsumers <= 0) {
-                delete[] mutables;
+                delete nav;
                 return;
             }
 
@@ -106,18 +110,18 @@ void RenderRayTask::run(Context *ctx) {
 
             QPointF pt(ctx->grid.toViewCoord(j, i));
             // TODO: fix factor 4
-            RayPoint r = rayAtPoint(pt / 4, radius, forward, *d, iter, mutables,
-                                    ints, aints, M, ndevs);
+            RayPoint r = rayAtPoint(*nav, pt / 4, radius, forward, *d, ints,
+                                    aints, M, ndevs);
             QRgb color =
                 colorForRay(r, trackcol, trackdist, *d, pt / 4, forward);
             pts[j] = color;
         }
     }
-    if (d->level_of_detail <= -1) {
-        recursivelyPrintNCalls(d->elements, mutables);
-    }
+    //    if (d->level_of_detail <= -1) {
+    //        recursivelyPrintNCalls(d->elements, mutables);
+    //    }
 
-    delete[] mutables;
+    delete nav;
 }
 
 RenderRayBufferTask::RenderRayBufferTask(QRect p,
@@ -151,8 +155,11 @@ void RenderRayBufferTask::run(Context *ctx) {
 
     const G4double radius = 0.8 / mind;
     // Zero construct by default
-    ElemMutables *mutables = new ElemMutables[nelements]();
-    int iter = 1;
+    Navigator *nav =
+        (d->navigator == nFastVolNav)
+            ? (Navigator *)new FastVolNavigator(d->elements, d->clipping_planes)
+            : (Navigator *)new GeantNavigator(d->orig_vol, d->elements,
+                                              d->clipping_planes);
 
     const G4ThreeVector &forward = forwardDirection(d->orientation);
 
@@ -170,14 +177,15 @@ void RenderRayBufferTask::run(Context *ctx) {
     for (int i = yl; i < yh; i++) {
         for (int j = xl; j < xh; j++) {
             if (nconsumers <= 0) {
-                delete[] mutables;
+                free(storage);
+                delete nav;
                 return;
             }
 
             QPointF pt(ctx->grid.toViewCoord(j, i));
             // TODO: fix the factor 4
-            RayPoint r = rayAtPoint(pt / 4., radius, forward, *d, iter,
-                                    mutables, ints, aints, M, ndevs);
+            RayPoint r = rayAtPoint(*nav, pt / 4., radius, forward, *d, ints,
+                                    aints, M, ndevs);
 
             // Store ray, and copy its intersections to the buffer
             rayData[i * w + j] = r;
@@ -192,9 +200,9 @@ void RenderRayBufferTask::run(Context *ctx) {
             }
         }
     }
-    if (d->level_of_detail <= -1) {
-        recursivelyPrintNCalls(d->elements, mutables);
-    }
+    //    if (d->level_of_detail <= -1) {
+    //        recursivelyPrintNCalls(d->elements, mutables);
+    //    }
 
     if (istored > 0) {
         // If any point had an intersection
@@ -214,7 +222,7 @@ void RenderRayBufferTask::run(Context *ctx) {
         intersection_store = NULL;
     }
 
-    delete[] mutables;
+    delete nav;
 }
 
 static inline QPoint iproject(const G4ThreeVector &point,
