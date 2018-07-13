@@ -275,7 +275,7 @@ int TrackData::calcMaxGenerations() const {
     size_t ntracks = tpd->ntracks;
     TrackMetaData *meta = tpd->meta;
     TrackBlock *blocks = tpd->data;
-    int maxgen = 0;
+    ushort maxgen = 0;
     size_t *index = new size_t[ntracks];
     size_t i = 0;
     for (size_t z = 0; z < ntracks; z++) {
@@ -283,32 +283,45 @@ int TrackData::calcMaxGenerations() const {
         i += blocks[i].h.npts + 1;
     }
 
+    // Constraint: events may not be interleaved.
+    int64_t event = -1;
+    struct rec {
+        int32_t track_id;
+        int32_t parent_id;
+        size_t index;
+    };
+    const struct rec def_val = {-1, -1, (size_t)-1};
+    QMap<int32_t, struct rec> parent_lookup;
     for (size_t z = 0; z < ntracks; z++) {
-        size_t current = z;
-        int ng = 1;
-        while (current > 0 && blocks[index[current]].h.parent_id > 0) {
-            size_t ncurrent = (size_t)-1;
-            for (size_t y = current; y > 0; y--) {
-                int hi = index[y - 1];
-                if (blocks[hi].h.track_id ==
-                    blocks[index[current]].h.parent_id) {
-                    ncurrent = y - 1;
-                    break;
+        if (event != blocks[z].h.event_id) {
+            for (const struct rec &lkn : parent_lookup) {
+                int32_t track = lkn.track_id;
+                ushort ngen = 1;
+                // The first track is number 1 ?
+                while (track > 1 && ngen < (ushort)-1) {
+                    const struct rec &nkn = parent_lookup.value(track, def_val);
+                    track = nkn.parent_id;
+                    ngen++;
                 }
+                meta[lkn.index].generation = ngen;
+                maxgen = std::max(maxgen, ngen);
             }
-
-            if (ncurrent == (size_t)-1) {
-                break;
-            }
-            current = ncurrent;
-
-            ng++;
+            parent_lookup.clear();
         }
-        meta[z].generation = (ushort)std::min(ng, 65535);
-        maxgen = std::max(ng, maxgen);
+        event = blocks[z].h.event_id;
+        if (blocks[z].h.track_id == blocks[z].h.parent_id &&
+            blocks[z].h.track_id > 1) {
+            // May get valid 0/0 ids.
+            qDebug("parent loop for: index %ld event %ld track %d", z, event,
+                   blocks[z].h.track_id);
+        } else {
+            parent_lookup[blocks[z].h.track_id] = {blocks[z].h.track_id,
+                                                   blocks[z].h.parent_id, z};
+        }
     }
-    delete[] index;
-    return maxgen;
+
+    qDebug("CalcMaxGenerations can be very slow, hence skipping");
+    return (int)maxgen;
 }
 const QMap<int32_t, const G4ParticleDefinition *> TrackData::calcTypes() const {
     QMap<int32_t, const G4ParticleDefinition *> s;

@@ -71,11 +71,7 @@ void RenderRayTask::run(Context *ctx) {
 
     const G4double radius = 0.8 / mind;
     // Zero construct by default
-    Navigator *nav =
-        (d->navigator == nFastVolNav)
-            ? (Navigator *)new FastVolNavigator(d->elements, d->clipping_planes)
-            : (Navigator *)new GeantNavigator(d->orig_vol, d->elements,
-                                              d->clipping_planes);
+    Navigator *nav = Navigator::create(*d, d->navigator);
 
     // reqs: of type?
     const FlatData *flatData = &(*flat_data);
@@ -155,11 +151,7 @@ void RenderRayBufferTask::run(Context *ctx) {
 
     const G4double radius = 0.8 / mind;
     // Zero construct by default
-    Navigator *nav =
-        (d->navigator == nFastVolNav)
-            ? (Navigator *)new FastVolNavigator(d->elements, d->clipping_planes)
-            : (Navigator *)new GeantNavigator(d->orig_vol, d->elements,
-                                              d->clipping_planes);
+    Navigator *nav = Navigator::create(*d, d->navigator);
 
     const G4ThreeVector &forward = forwardDirection(d->orientation);
 

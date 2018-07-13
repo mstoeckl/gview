@@ -289,6 +289,17 @@ static void fcompressTraces(RayPoint *ray, const std::vector<Element> &elts) {
 }
 
 Navigator::~Navigator() {}
+Navigator *Navigator::create(const ViewData &vd, int navtype) {
+    switch (navtype) {
+    case nFastVolNav:
+        return new FastVolNavigator(vd.elements, vd.clipping_planes);
+    case nGeantNav:
+        return new GeantNavigator(vd.orig_vol, vd.elements, vd.clipping_planes);
+    default:
+    case nVoxelNav:
+        return NULL;
+    }
+}
 
 FastVolNavigator::FastVolNavigator(const std::vector<Element> &iels,
                                    const std::vector<Plane> &iclipping_planes)
@@ -375,8 +386,7 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
         last_vol = v;
 
         G4double safety;
-        G4double dist = nav->ComputeStep(here, forward, kInfinity, safety);
-        sdist += dist;
+        sdist += nav->ComputeStep(here, forward, kInfinity, safety);
 
         if (first) {
             first = false;
@@ -391,7 +401,7 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
                 ins.normal = entrynormal;
                 ins.ecode = ecode_map.value(v, CODE_END);
                 r.front_clipped = true;
-                if (r.N == maxhits) {
+                if (r.N == maxhits || first_visible_hit) {
                     break;
                 }
             }
@@ -399,7 +409,7 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
 
         bool valid;
 
-        if (dist > edist) {
+        if (sdist > edist) {
             Intersection &ins = r.intersections[r.N];
             r.N++;
 
@@ -418,7 +428,7 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
             ins.dist = sdist;
             ins.normal = CompactNormal(normal);
             ins.ecode = ecode_map.value(v, CODE_END);
-            if (r.N == maxhits) {
+            if (r.N == maxhits || first_visible_hit) {
                 break;
             }
         }

@@ -201,6 +201,15 @@ RayPoint rayAtPoint(Navigator &nav, const QPointF &pt, qreal radius,
     return ray;
 }
 
+void debugRayPoint(const RayPoint &ray) {
+    qDebug("> Raypoint: N=%d front_clipped=%c back_clipped=%c", ray.N,
+           ray.front_clipped ? 'Y' : 'n', ray.back_clipped ? 'Y' : 'n');
+    for (int i = 0; i < ray.N; i++) {
+        qDebug("  %d: ecode %d at %f cm", i, ray.intersections[i].ecode,
+               ray.intersections[i].dist / CLHEP::cm);
+    }
+}
+
 QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
                  const ViewData &d, const QPointF &pt,
                  const G4ThreeVector &forward) {

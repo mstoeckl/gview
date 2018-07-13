@@ -307,7 +307,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     crb->addWidget(count_lower);
     crb->addWidget(count_upper);
     vb->addLayout(crb, 0);
-    linecount_label = new QLabel("Lines: 0");
+    long ntracklines = trackdata.getNTracks();
+    linecount_label = new QLabel(
+        QStringLiteral("Tracks: %1/%2").arg(ntracklines).arg(ntracklines));
     vb->addWidget(linecount_label);
     line_type_selection = new QListWidget();
     line_type_selection->setSortingEnabled(true);
@@ -411,6 +413,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     QPushButton *orm3 = new QPushButton("Z-");
     QPushButton *orr1 = new QPushButton("+45");
     QPushButton *orr2 = new QPushButton("-45");
+    QPushButton *tosl = new QPushButton("Selected Volume");
+    QComboBox *center = new QComboBox();
+    center->addItem("<root>", 0); // ecode
     QHBoxLayout *prow = new QHBoxLayout();
     QSignalMapper *sqm = new QSignalMapper(this);
     connect(sqm, SIGNAL(mapped(int)), this, SLOT(setViewRotation(int)));
@@ -440,10 +445,14 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     QHBoxLayout *rrow = new QHBoxLayout();
     rrow->addWidget(orr1);
     rrow->addWidget(orr2);
+    QHBoxLayout *brow = new QHBoxLayout();
+    brow->addWidget(tosl);
+    brow->addWidget(center);
     QVBoxLayout *vbr = new QVBoxLayout();
     vbr->addLayout(prow, 0);
     vbr->addLayout(mrow, 0);
     vbr->addLayout(rrow, 0);
+    vbr->addLayout(brow, 0);
     vbr->addStretch(5);
     QWidget *ornt = new QWidget();
     ornt->setLayout(vbr);
@@ -583,11 +592,11 @@ void Viewer::processMouse(QMouseEvent *event) {
         int td, nelem;
         countTree(vd.elements, 0, td, nelem);
         Q_UNUSED(td);
-        FastVolNavigator nav(vd.elements, vd.clipping_planes);
-        //        GeantNavigator nav(vd.orig_vol, vd.elements,
-        //        vd.clipping_planes);
+        //        FastVolNavigator nav(vd.elements, vd.clipping_planes);
+        GeantNavigator nav(vd.orig_vol, vd.elements, vd.clipping_planes);
         RayPoint rpt = nav.traceRay(initPoint(pt, vd),
                                     forwardDirection(vd.orientation), ints, M);
+        debugRayPoint(rpt);
         ray_table->clear();
         ray_list.clear();
         for (int j = 0; j < rpt.N; j++) {
@@ -698,20 +707,23 @@ void Viewer::updateTracks(bool planes_also_changed) {
             }
         }
 
-        trackdata = TrackData(track_options[which_tracks - 1], vd, res);
+        const TrackData &base_track_data = track_options[which_tracks - 1];
+        trackdata = TrackData(base_track_data, vd, res);
         if (0) {
             // Temp disabled on grounds of lag
             QVector<QPointF> ep, tp;
-            track_options[which_tracks - 1].constructRangeHistograms(
-                tp, ep, res.time, res.energy);
+            base_track_data.constructRangeHistograms(tp, ep, res.time,
+                                                     res.energy);
             energy_range->setHistogram(ep);
             times_range->setHistogram(tp);
         }
+        linecount_label->setText(QString("Tracks: %1/%2")
+                                     .arg(trackdata.getNTracks())
+                                     .arg(base_track_data.getNTracks()));
     } else {
         // Q: how to pull QSharedData on the Elements as well
         trackdata = TrackData();
     }
-    linecount_label->setText(QString("Lines: %1").arg(trackdata.getNTracks()));
 
     if (planes_also_changed) {
         rwidget->rerender(CHANGE_VIEWPORT);
