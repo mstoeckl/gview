@@ -59,6 +59,8 @@ public slots:
     void updateTracks(bool plane_change = false);
     void updateColors();
     void updateNavigator();
+    void updateGShader();
+    void updateTShader();
     void updateShowLines();
     void screenshot(int sx = 1);
     void vectorTScreenshot();
@@ -106,7 +108,7 @@ private:
     QListWidget *ray_table;
     QVector<const Element *> ray_list;
     QCheckBox *mtl_showlines;
-    QComboBox *navig_sel;
+    QComboBox *navig_sel, *gshader_sel, *tshader_sel;
     ColorConfig *color_config;
 
     QMenu *gpicker_menu;

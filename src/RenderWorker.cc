@@ -93,35 +93,6 @@ G4ThreeVector initPoint(const QPointF &scpt, const ViewData &d) {
     return init;
 }
 
-static FColor colorMap(const Intersection &intersection,
-                       const G4ThreeVector &forward, const VColor &base,
-                       const G4ThreeVector &position, double shade_scale,
-                       bool is_clipping_plane) {
-    const G4ThreeVector &normal = intersection.normal;
-
-    // Opposed normals (i.e, for transp backsides) are mirrored
-    G4double cx = std::abs(std::acos(-normal * forward) / CLHEP::pi);
-    cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
-
-    if (is_clipping_plane) {
-        const G4ThreeVector &orthA = normal.orthogonal().unit();
-        const G4ThreeVector &orthB = normal.cross(orthA).unit();
-
-        double aslp = orthA * position;
-        double bslp = orthB * position;
-
-        double shade_factor = (aslp + bslp) * shade_scale;
-        shade_factor *= 40.;
-        double fm = std::fmod(shade_factor, 1.);
-        if (fm < 0.)
-            fm += 1.;
-        if (fm < 0.5)
-            cx *= 0.75;
-    }
-
-    return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF());
-}
-
 void countTree(const std::vector<Element> &els, int index, int &treedepth,
                int &nelements) {
     // Count nelements & depth
@@ -211,52 +182,6 @@ void debugRayPoint(const RayPoint &ray, const std::vector<Element> &els) {
                ecode < 0 ? "END"
                          : els[ray.intersections[i].ecode].name.c_str());
     }
-}
-
-QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                 const ViewData &d, const QPointF &pt,
-                 const G4ThreeVector &forward) {
-    bool rayoverride = false;
-    int p = ray.N - 1;
-    for (int k = 0; k < ray.N; k++) {
-        if (ray.intersections[k].dist > trackdist) {
-            p = k - 1;
-            // WARNING: there exist exceptions!
-            // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
-            rayoverride = true;
-            break;
-        }
-    }
-    bool line = ray.N > 0 && (ray.intersections[ray.N - 1].ecode == CODE_LINE);
-    if (line && p == ray.N - 1) {
-        p = ray.N - 2;
-    }
-    FColor col =
-        (line && !rayoverride) ? FColor(0., 0., 0., 1.f) : FColor(trackcol);
-    // p indicates the first volume to use the color rule on
-    // (p<0 indicates the line dominates)
-    for (int k = p; k >= 0; --k) {
-        if (ray.intersections[k].ecode < 0) {
-            // Either line or END_CODE
-            col = FColor(1.0, 0., 0., 0);
-            continue;
-        }
-
-        // We use the intersection before the volume
-        const Element &eback = d.elements[ray.intersections[k].ecode];
-        const VColor &base_color = d.color_table[eback.ccode];
-        const G4ThreeVector &intpos =
-            initPoint(pt, d) + ray.intersections[k].dist * forward;
-        const FColor altcol =
-            colorMap(ray.intersections[k], forward, base_color, intpos,
-                     1. / d.scale, (k == 0 && ray.front_clipped));
-        double e = (d.force_opaque ? 1. : eback.alpha);
-        if (!eback.visible) {
-            continue;
-        }
-        col = FColor::blend(altcol, col, 1 - e);
-    }
-    return col.rgba();
 }
 
 class ElemSort {

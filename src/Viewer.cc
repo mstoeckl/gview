@@ -6,6 +6,7 @@
 #include "Navigator.hh"
 #include "Overview.hh"
 #include "RenderWidget.hh"
+#include "Shaders.hh"
 #include "VectorTrace.hh"
 #include "VectorWindow.hh"
 
@@ -120,13 +121,15 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vd.elements.clear();
     convertCreation(vd.elements, geo_options[which_geo].vol);
     vd.scene_radius = vd.elements[0].solid->GetExtent().GetExtentRadius();
-    vd.scale = 2 * vd.scene_radius;
+    vd.scale = vd.scene_radius / 2;
     vd.camera = G4ThreeVector(-4 * vd.scene_radius, 0, 0);
     vd.orientation = G4RotationMatrix();
     vd.level_of_detail = 0; // 0 is full; 1 is 1/9, 2 is 1/81; depends on timing
     vd.split_by_material = true;
     vd.force_opaque = false;
     vd.navigator = nFastVolNav;
+    vd.tshader = tshaderRainbow;
+    vd.gshader = gshaderDefault;
     vd.clipping_planes = std::vector<Plane>();
     which_tracks = track_options.size() > 0 ? 1 : 0;
 
@@ -393,6 +396,21 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     navig_sel->setCurrentIndex(0);
     connect(navig_sel, SIGNAL(currentIndexChanged(int)), this,
             SLOT(updateNavigator()));
+
+    gshader_sel = new QComboBox();
+    gshader_sel->addItem("Default", QVariant(gshaderDefault));
+    gshader_sel->addItem("Normal", QVariant(gshaderNormal));
+    gshader_sel->setCurrentIndex(0);
+    connect(gshader_sel, SIGNAL(currentIndexChanged(int)), this,
+            SLOT(updateGShader()));
+
+    tshader_sel = new QComboBox();
+    tshader_sel->addItem("Rainbow", QVariant(tshaderRainbow));
+    tshader_sel->addItem("Type", QVariant(tshaderType));
+    tshader_sel->setCurrentIndex(0);
+    connect(tshader_sel, SIGNAL(currentIndexChanged(int)), this,
+            SLOT(updateTShader()));
+
     std::vector<const G4Material *> mtl_list =
         constructMaterialList(geo_options);
     color_config = new ColorConfig(vd, mtl_list);
@@ -400,6 +418,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     connect(color_config, SIGNAL(colorChange()), this, SLOT(updateColors()));
     mla->addWidget(mtl_showlines);
     mla->addWidget(navig_sel);
+    mla->addWidget(gshader_sel);
+    mla->addWidget(tshader_sel);
     mla->addWidget(color_config);
     mtlc->setLayout(mla);
     dock_color->setWidget(mtlc);
@@ -514,7 +534,7 @@ void Viewer::processKey(QKeyEvent *event) {
         return;
     }
 
-    G4double mvd = 0.1;
+    G4double mvd = 0.125;
 
     G4ThreeVector trans;
     G4RotationMatrix rot;
@@ -625,13 +645,13 @@ void Viewer::processMouse(QMouseEvent *event) {
         if (shift) {
             // Translate with mouse
             QPoint delta = event->pos() - lastpt;
-            QPointF dp = vd.scale * QPointF(delta) / dmm * 0.5;
+            QPointF dp = vd.scale * QPointF(delta) / dmm * 2.0;
             vd.camera -=
                 vd.orientation.rowZ() * dp.x() + vd.orientation.rowY() * dp.y();
             lastpt = event->pos();
         } else {
             // All rotations in progress are relative to start point
-            G4double step = atan2(vd.scale, vd.scene_radius) * 4.0;
+            G4double step = 3.0 * atan2(vd.scale, vd.scene_radius);
             QPointF nalph = QPointF(event->pos() - clickpt) / dmm * step;
             QPointF palph = QPointF(lastpt - clickpt) / dmm * step;
 
@@ -857,6 +877,16 @@ void Viewer::rayLookup() {
 void Viewer::updateNavigator() {
     vd.navigator = navig_sel->currentData().toInt();
     rwidget->rerender(CHANGE_GEO);
+}
+
+void Viewer::updateGShader() {
+    vd.gshader = gshader_sel->currentData().toInt();
+    rwidget->rerender(CHANGE_COLOR);
+}
+
+void Viewer::updateTShader() {
+    vd.tshader = tshader_sel->currentData().toInt();
+    rwidget->rerender(CHANGE_TRACK);
 }
 
 void Viewer::updateShowLines() {

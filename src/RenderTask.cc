@@ -4,6 +4,7 @@
 #include "General.hh"
 #include "Navigator.hh"
 #include "RenderWorker.hh"
+#include "Shaders.hh"
 
 #include <QImage>
 #include <geomdefs.hh>
@@ -72,6 +73,7 @@ void RenderRayTask::run(Context *ctx) {
     const G4double radius = 0.8 / mind;
     // Zero construct by default
     Navigator *nav = Navigator::create(*d, d->navigator);
+    GeoShader &shader = *getGeoShader(d->gshader);
 
     // reqs: of type?
     const FlatData *flatData = &(*flat_data);
@@ -105,17 +107,12 @@ void RenderRayTask::run(Context *ctx) {
             }
 
             QPointF pt(ctx->grid.toViewCoord(j, i));
-            // TODO: fix factor 4
-            RayPoint r = rayAtPoint(*nav, pt / 4, radius, forward, *d, ints,
-                                    aints, M, ndevs);
-            QRgb color =
-                colorForRay(r, trackcol, trackdist, *d, pt / 4, forward);
+            RayPoint r = rayAtPoint(*nav, pt, radius, forward, *d, ints, aints,
+                                    M, ndevs);
+            QRgb color = shader(r, trackcol, trackdist, *d, pt, forward);
             pts[j] = color;
         }
     }
-    //    if (d->level_of_detail <= -1) {
-    //        recursivelyPrintNCalls(d->elements, mutables);
-    //    }
 
     delete nav;
 }
@@ -175,9 +172,8 @@ void RenderRayBufferTask::run(Context *ctx) {
             }
 
             QPointF pt(ctx->grid.toViewCoord(j, i));
-            // TODO: fix the factor 4
-            RayPoint r = rayAtPoint(*nav, pt / 4., radius, forward, *d, ints,
-                                    aints, M, ndevs);
+            RayPoint r = rayAtPoint(*nav, pt, radius, forward, *d, ints, aints,
+                                    M, ndevs);
 
             // Store ray, and copy its intersections to the buffer
             rayData[i * w + j] = r;
@@ -192,9 +188,6 @@ void RenderRayBufferTask::run(Context *ctx) {
             }
         }
     }
-    //    if (d->level_of_detail <= -1) {
-    //        recursivelyPrintNCalls(d->elements, mutables);
-    //    }
 
     if (istored > 0) {
         // If any point had an intersection
@@ -227,42 +220,8 @@ static inline QPoint iproject(const G4ThreeVector &point,
     G4double idscale = 1 / dscale;
     QPointF F(local.z() * idscale, local.y() * idscale);
     off = local.x();
-    // TODO: drop factor of 4
-    QPointF sample_coord = grid.toSampleCoord(F * 4);
+    QPointF sample_coord = grid.toSampleCoord(F);
     return QPoint(std::lrint(sample_coord.x()), std::lrint(sample_coord.y()));
-}
-
-static void trackColors(const TrackHeader &h, const TrackPoint &pa,
-                        const TrackPoint &pb, const G4ThreeVector &a,
-                        const G4ThreeVector &b, const G4ThreeVector &forward,
-                        FColor &ca, FColor &cb, float &wa, float &wb) {
-    G4ThreeVector normal = b - a;
-    double coa = (normal * forward) / normal.mag();
-
-    //    double mtime = double(pa.time) * (1. - interp) * double(pb.time) *
-    //    double ptime = (int(mtime / CLHEP::ns * 1024.) % 1024) / 1024.;
-
-    double aloge = std::log10(double(pa.energy)) / 2.0;
-    double patime = aloge - std::floor(aloge);
-    ca = FColor(QColor::fromHsvF(patime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb());
-
-    double bloge = std::log10(double(pb.energy)) / 2.0;
-    double pbtime = bloge - std::floor(bloge);
-    cb = FColor(QColor::fromHsvF(pbtime, 0.8, 1.0 - 0.5 * std::abs(coa)).rgb());
-
-    if (h.ptype == 11) {
-        // e-
-        wa = 1.0f;
-        wb = 1.0f;
-    } else if (h.ptype == 22) {
-        // gamma
-        wa = 0.7f;
-        wb = 0.7f;
-    } else {
-        // others (optiphoton)
-        wa = 0.5f;
-        wb = 0.5f;
-    }
 }
 
 RenderTrackTask::RenderTrackTask(QRect p, int s, int ns,
@@ -286,6 +245,7 @@ void RenderTrackTask::run(Context *ctx) {
     const int w = ctx->grid.sampleWidth(), h = ctx->grid.sampleHeight();
     const ViewData &d = *ctx->viewdata;
     const TrackData &t = d.tracks;
+    TrackShader &shader = *getTrackShader(d.tshader);
 
     size_t ntracks = t.getNTracks();
     size_t tfrom = (ntracks * shard) / nshards;
@@ -394,8 +354,8 @@ void RenderTrackTask::run(Context *ctx) {
 
             float w1, w2;
             FColor c1, c2;
-            trackColors(header, ep, sp, epos, spos, d.orientation.rowX(), c1,
-                        c2, w1, w2);
+            shader(header, ep, sp, epos, spos, d.orientation.rowX(), c1, c2, w1,
+                   w2);
 
             for (int s = std::max(near, 0); s < std::min(far, n); s++) {
                 float x = ix + s * dx;
@@ -501,6 +461,7 @@ void RenderColorTask::run(Context *ctx) {
     const ViewData *viewData = ctx->viewdata;
     const QVector<RayPoint> &rayData = *ray_data;
     const G4ThreeVector &forward = forwardDirection(viewData->orientation);
+    GeoShader &shader = *getGeoShader(viewData->gshader);
 
     for (int i = yl; i < yh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
@@ -523,9 +484,8 @@ void RenderColorTask::run(Context *ctx) {
 
             const RayPoint &ray = rayData[sidx];
             QPointF pt(ctx->grid.toViewCoord(j, i));
-            // TODO: fix factor 4
-            QRgb color = colorForRay(ray, trackcol, trackdist, *viewData,
-                                     pt / 4, forward);
+            QRgb color =
+                shader(ray, trackcol, trackdist, *viewData, pt, forward);
             pts[j] = color;
         }
     }

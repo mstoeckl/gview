@@ -117,7 +117,7 @@ typedef struct ViewData_s {
     G4double scene_radius;
     std::vector<VColor> color_table;
     bool split_by_material;
-    int navigator;
+    int navigator, gshader, tshader;
     bool force_opaque;
     // Simplification level
     int level_of_detail;
@@ -136,9 +136,6 @@ RayPoint rayAtPoint(Navigator &nav, const QPointF &pt, qreal radius,
                     Intersection *ints, Intersection *altints, int M,
                     int *ndevs);
 void debugRayPoint(const RayPoint &ray, const std::vector<Element> &els);
-QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                 const ViewData &d, const QPointF &pt,
-                 const G4ThreeVector &forward);
 
 class G4VPhysicalVolume;
 int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,

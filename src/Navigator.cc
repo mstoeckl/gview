@@ -74,6 +74,8 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
     // TODO: make all such buffers created but once and
     // passed in, so that stack elements stay close
 
+    const double epsilon = 1e-6 * CLHEP::nm;
+
     // Assume we are already in the root element.
     // We statically allocate, because many new/frees are too expensive
     const Element *stack[maxdepth];
@@ -117,8 +119,7 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
 
     if (clippable) {
         // Start point is in the world volume, and is an intersection
-        bool store = !first_visible_hit || stack[n - 1]->visible;
-        if (store) {
+        if (!first_visible_hit || stack[n - 1]->visible) {
             ints[0].dist = sdist;
             ints[0].normal = entrynormal;
             ints[0].ecode = stack[n - 1]->ecode;
@@ -130,8 +131,7 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
         }
     } else {
         // Intersection on entry
-        bool store = !first_visible_hit || root.visible;
-        if (store) {
+        if (!first_visible_hit || root.visible) {
             ++mutables[root.ecode].ngeocalls;
             G4ThreeVector lnormal = root.solid->SurfaceNormal(local);
             ints[0].dist = sdist;
@@ -218,10 +218,19 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
                 ++cmu.ngeocalls;
                 G4ThreeVector lnormal =
                     curr.solid->SurfaceNormal(condrot(curr, lpos));
-                ints[ret.N].dist = sdist;
-                ints[ret.N].normal = condirot(curr, lnormal);
-                ints[ret.N].ecode = n > 0 ? stack[n - 1]->ecode : CODE_END;
-                ret.N++;
+                if (ret.N > 0 && sdist <= ints[ret.N - 1].dist + epsilon) {
+                    // On zero-width gap, replace with latest volume
+                    ints[ret.N - 1].dist = (sdist + ints[ret.N - 1].dist) / 2;
+                    ints[ret.N - 1].normal = condirot(curr, lnormal);
+                    ints[ret.N - 1].ecode =
+                        n > 0 ? stack[n - 1]->ecode : CODE_END;
+                } else {
+                    // New volume
+                    ints[ret.N].dist = sdist;
+                    ints[ret.N].normal = condirot(curr, lnormal);
+                    ints[ret.N].ecode = n > 0 ? stack[n - 1]->ecode : CODE_END;
+                    ret.N++;
+                }
                 if (n == 0 || ret.N >= maxhits || first_visible_hit) {
                     return ret;
                 }
@@ -242,11 +251,19 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
                 ++mutables[closest->ecode].ngeocalls;
                 G4ThreeVector lnormal =
                     closest->solid->SurfaceNormal(condrot(*closest, lpos));
-                ints[ret.N].dist = sdist;
-                ints[ret.N].normal = condirot(*closest, lnormal);
-                ints[ret.N].ecode =
-                    (ret.N >= maxhits) ? CODE_END : closest->ecode;
-                ret.N++;
+                if (ret.N > 0 && sdist <= ints[ret.N - 1].dist + epsilon) {
+                    // On zero-width gap, replace with latest volume
+                    ints[ret.N - 1].dist = (sdist + ints[ret.N - 1].dist) / 2;
+                    ints[ret.N - 1].normal = condirot(*closest, lnormal);
+                    ints[ret.N - 1].ecode = closest->ecode;
+                } else {
+                    // New volume
+                    ints[ret.N].dist = sdist;
+                    ints[ret.N].normal = condirot(*closest, lnormal);
+                    ints[ret.N].ecode =
+                        (ret.N >= maxhits) ? CODE_END : closest->ecode;
+                    ret.N++;
+                }
                 if (ret.N >= maxhits || first_visible_hit) {
                     return ret;
                 }
@@ -260,8 +277,8 @@ static void fcompressTraces(RayPoint *ray, const std::vector<Element> &elts) {
     if (ray->N <= 1) {
         return;
     }
-    Intersection *ints = ray->intersections;
-    const G4double epsilon = 0.1 * CLHEP::nm;
+    //    Intersection *ints = ray->intersections;
+    //    const G4double epsilon = 0.1 * CLHEP::nm;
     // First, nuke the empty slices
     //    int n = 0;
     //    for (int i = 0; i < ray->N - 1; i++) {
