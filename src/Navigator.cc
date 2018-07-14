@@ -1,7 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "Navigator.hh"
 
+#include <G4Box.hh>
 #include <G4Navigator.hh>
+#include <G4PVPlacement.hh>
+#include <G4StateManager.hh>
+#include <G4VExceptionHandler.hh>
 #include <G4VSolid.hh>
 
 #include <QThread>
@@ -259,33 +263,32 @@ static void fcompressTraces(RayPoint *ray, const std::vector<Element> &elts) {
     Intersection *ints = ray->intersections;
     const G4double epsilon = 0.1 * CLHEP::nm;
     // First, nuke the empty slices
-    int n = 0;
-    for (int i = 0; i < ray->N - 1; i++) {
-        G4double sep = std::abs(ints[i + 1].dist - ints[i].dist);
-        if (sep > epsilon) {
-            // Do both: evtly it overrides
-            ints[n] = ints[i];
-            ints[n + 1] = ints[i + 1];
-            n++;
-        }
-    }
+    //    int n = 0;
+    //    for (int i = 0; i < ray->N - 1; i++) {
+    //        G4double sep = std::abs(ints[i + 1].dist - ints[i].dist);
+    //        if (sep > epsilon) {
+    //            // Do both: evtly it overrides
+    //            ints[n] = ints[i];
+    //            ints[n + 1] = ints[i + 1];
+    //            n++;
+    //        }
+    //    }
 
-    // Finally, nuke intersections between similar material'd objects
-    // (If one is visible/one isn't, don't contract
-    int p = 0;
-    // 001122334  =>  0022334
-    // |x|x|y|x|  =>  |x|y|x|
-    for (int i = 0; i < n; i++) {
-        if (i == 0 ||
-            elts[ints[i].ecode].ccode != elts[ints[i - 1].ecode].ccode ||
-            elts[ints[i].ecode].visible != elts[ints[i - 1].ecode].visible) {
-            ints[p] = ints[i];
-            p++;
-        }
-    }
-    ints[p] = ints[n];
+    //    // Finally, nuke intersections between similar material'd objects
+    //    // (If one is visible/one isn't, don't contract
+    //    int p = 0;
+    //    // 001122334  =>  0022334
+    //    // |x|x|y|x|  =>  |x|y|x|
+    //    for (int i = 0; i < n; i++) {
+    //        if (i == 0 ||
+    //            elts[ints[i].ecode].ccode != elts[ints[i - 1].ecode].ccode ||
+    //            elts[ints[i].ecode].visible != elts[ints[i -
+    //            1].ecode].visible) { ints[p] = ints[i]; p++;
+    //        }
+    //    }
+    //    ints[p] = ints[n];
 
-    ray->N = p;
+    //    ray->N = p;
 }
 
 Navigator::~Navigator() {}
@@ -319,6 +322,24 @@ RayPoint FastVolNavigator::traceRay(const G4ThreeVector &init,
     return rpt;
 }
 
+class GExh : public G4VExceptionHandler {
+public:
+    GExh() {}
+
+    virtual G4bool Notify(const char *originOfException,
+                          const char *exceptionCode,
+                          G4ExceptionSeverity severity,
+                          const char *description) {
+        // TODO: logarithmic duplicate counting
+        // print on 1st, 10th, 100th, etc.
+
+        //        qDebug("EXC: %s | %s | %d | %s", originOfException,
+        //        exceptionCode,
+        //               severity, description);
+        return false;
+    }
+};
+
 GeantNavigator::GeantNavigator(G4VPhysicalVolume *iworld,
                                const std::vector<Element> &iels,
                                const std::vector<Plane> &iclipping_planes)
@@ -326,6 +347,14 @@ GeantNavigator::GeantNavigator(G4VPhysicalVolume *iworld,
     if (!iworld) {
         qFatal("Passed in null world");
     }
+
+    // Set the threadlocal exceptionhandler
+    G4VExceptionHandler *ohandle =
+        G4StateManager::GetStateManager()->GetExceptionHandler();
+    if (ohandle) {
+        delete ohandle;
+    }
+    G4StateManager::GetStateManager()->SetExceptionHandler(new GExh());
 
     // Ensure that threadlocals have copies in this thread?
     G4PVManager *pvm =
@@ -343,6 +372,11 @@ GeantNavigator::GeantNavigator(G4VPhysicalVolume *iworld,
     nav->SetWorldVolume(world);
 }
 GeantNavigator::~GeantNavigator() { delete nav; }
+
+static const char *volname(G4VPhysicalVolume *v) {
+    return v ? v->GetName().c_str() : "(null)";
+}
+
 RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
                                   const G4ThreeVector &forward,
                                   Intersection *intersections, int maxhits,
@@ -364,86 +398,101 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
         return r;
     }
 
-    // Q: subclass G4Navigator to get the interesting details?
-
-    // NOTE: get "Track stuck or not moving" error
-    // when we never reach the world volume to begin with.
-
-    // TODO: ray table, be sure to note the 'end' code & actually
-    // display it in the correct table.
-    // (CODE_LINE, CODE_EXIT, CODE_SAT)
-
     G4VPhysicalVolume *last_vol = nullptr;
-    bool first = true;
-    for (int i = 0; i < 1000; i++) {
-        /* After any position change, we locate ourselves, and then determine
-         * forward step & local normal */
+    {
+        const G4ThreeVector first_pos = init + sdist * forward;
+        const G4VSolid *root_solid = world->GetLogicalVolume()->GetSolid();
+        EInside init_pos = root_solid->Inside(first_pos);
+        int ec = ecode_map.value(world, CODE_END);
 
+        if (init_pos == kInside) {
+            // We are already inside the world. find out which subvolume
+            last_vol = nav->LocateGlobalPointAndSetup(init + sdist * forward,
+                                                      &forward);
+            int ec = ecode_map.value(last_vol, CODE_END);
+            if (!first_visible_hit || (ec >= 0 && els[ec].visible)) {
+                Intersection &ins = r.intersections[r.N++];
+                ins.dist = sdist;
+                ins.normal = entrynormal;
+                ins.ecode = ec;
+                r.front_clipped = true;
+                if (first_visible_hit) {
+                    return r;
+                }
+            }
+        } else {
+            // Are outside the world. Must perform advance-in by hand.
+            sdist += root_solid->DistanceToIn(first_pos, forward);
+            if (sdist >= edist) {
+                // nope. end clip hit first
+                return r;
+            }
+            // determine the region we just entered
+            last_vol = nav->LocateGlobalPointAndSetup(init + sdist * forward,
+                                                      &forward);
+            int ec = ecode_map.value(last_vol, CODE_END);
+            if (!first_visible_hit || (ec >= 0 && els[ec].visible)) {
+                Intersection &ins = r.intersections[r.N++];
+                ins.dist = sdist;
+                ins.normal = CompactNormal(
+                    root_solid->SurfaceNormal(init + sdist * forward));
+                ins.ecode = ec;
+                if (first_visible_hit) {
+                    return r;
+                }
+            }
+        }
+    }
+
+    // Now we begin, definitely inside the world
+    for (int i = 0; i < 100; i++) {
+        /* After any position change, we locate ourselves, and then
+         * determine forward step & local normal */
+
+        G4double safety;
+        bool valid;
         const G4ThreeVector here = init + sdist * forward;
+        double length = nav->ComputeStep(here, forward, kInfinity, safety);
+        // step was always geometrically limited
+        nav->SetGeometricallyLimitedStep();
+        const G4ThreeVector &normal = nav->GetGlobalExitNormal(here, &valid);
         G4VPhysicalVolume *v = nav->LocateGlobalPointAndSetup(here, &forward);
 
         bool change = v != last_vol;
         last_vol = v;
+        sdist += length;
 
-        G4double safety;
-        sdist += nav->ComputeStep(here, forward, kInfinity, safety);
-
-        if (first) {
-            first = false;
-            if (!v) {
-                // Skip first time
-                continue;
-            } else {
-                Intersection &ins = r.intersections[r.N];
-                r.N++;
-
+        if (sdist > edist) {
+            int nc = ecode_map.value(v, CODE_END);
+            if (!first_visible_hit || (nc >= 0 && els[nc].visible)) {
+                Intersection &ins = r.intersections[r.N++];
                 ins.dist = sdist;
-                ins.normal = entrynormal;
-                ins.ecode = ecode_map.value(v, CODE_END);
-                r.front_clipped = true;
-                if (r.N == maxhits || first_visible_hit) {
-                    break;
+                ins.normal = exitnormal;
+                ins.ecode = nc;
+                r.back_clipped = true;
+                if (r.N >= maxhits || first_visible_hit) {
+                    return r;
+                }
+            }
+            break;
+        } else if (length > 0) {
+            int nc = ecode_map.value(v, CODE_END);
+            // points out of previous volume, into current volume
+            if (!first_visible_hit || (nc >= 0 && els[nc].visible)) {
+                Intersection &ins = r.intersections[r.N++];
+                ins.dist = sdist;
+                ins.normal = CompactNormal(-normal);
+                ins.ecode = nc;
+                if (r.N >= maxhits || first_visible_hit) {
+                    return r;
                 }
             }
         }
 
-        bool valid;
-
-        if (sdist > edist) {
-            Intersection &ins = r.intersections[r.N];
-            r.N++;
-
-            ins.dist = sdist;
-            ins.normal = exitnormal;
-            ins.ecode = CODE_END;
-            r.back_clipped = true;
-            break;
-        } else if (change) {
-            const G4ThreeVector &normal =
-                nav->GetGlobalExitNormal(here, &valid);
-
-            Intersection &ins = r.intersections[r.N];
-            r.N++;
-
-            ins.dist = sdist;
-            ins.normal = CompactNormal(normal);
-            ins.ecode = ecode_map.value(v, CODE_END);
-            if (r.N == maxhits || first_visible_hit) {
-                break;
-            }
-        }
-
         if (v == NULL) {
-            break;
+            return r;
         }
     }
-
-    //    qDebug("%d", r.N);
-    // LocateGlobalPointAndSetup
-    // ComputeStep
-    // GetGlobalExitNormal
-
-    //    fcompressTraces(&r, els);
 
     return r;
 }

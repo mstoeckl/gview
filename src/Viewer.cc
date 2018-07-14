@@ -592,11 +592,12 @@ void Viewer::processMouse(QMouseEvent *event) {
         int td, nelem;
         countTree(vd.elements, 0, td, nelem);
         Q_UNUSED(td);
-        //        FastVolNavigator nav(vd.elements, vd.clipping_planes);
-        GeantNavigator nav(vd.orig_vol, vd.elements, vd.clipping_planes);
-        RayPoint rpt = nav.traceRay(initPoint(pt, vd),
-                                    forwardDirection(vd.orientation), ints, M);
-        debugRayPoint(rpt);
+        Navigator *nav = Navigator::create(
+            vd, vd.navigator == nFastVolNav ? nGeantNav : nFastVolNav);
+        RayPoint rpt = nav->traceRay(initPoint(pt, vd),
+                                     forwardDirection(vd.orientation), ints, M);
+        delete nav;
+        debugRayPoint(rpt, vd.elements);
         ray_table->clear();
         ray_list.clear();
         for (int j = 0; j < rpt.N; j++) {

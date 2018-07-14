@@ -135,7 +135,7 @@ RayPoint rayAtPoint(Navigator &nav, const QPointF &pt, qreal radius,
                     const G4ThreeVector &forward, const ViewData &d,
                     Intersection *ints, Intersection *altints, int M,
                     int *ndevs);
-void debugRayPoint(const RayPoint &ray);
+void debugRayPoint(const RayPoint &ray, const std::vector<Element> &els);
 QRgb colorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
                  const ViewData &d, const QPointF &pt,
                  const G4ThreeVector &forward);
