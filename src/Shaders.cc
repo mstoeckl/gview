@@ -37,47 +37,46 @@ static FColor colorMap(const Intersection &intersection,
 QRgb defaultColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
                         const ViewData &d, const QPointF &pt,
                         const G4ThreeVector &forward) {
-    bool rayoverride = false;
-    int p = ray.N - 1;
-    for (int k = 0; k < ray.N; k++) {
-        if (ray.intersections[k].dist > trackdist) {
-            p = k - 1;
-            // WARNING: there exist exceptions!
-            // NOT QUITE ACCURATE WITH LAYERING! TODO FIXME
-            rayoverride = true;
-            break;
-        }
-    }
-    bool line = ray.N > 0 && (ray.intersections[ray.N - 1].ecode == CODE_LINE);
-    if (line && p == ray.N - 1) {
-        p = ray.N - 2;
-    }
-    FColor col =
-        (line && !rayoverride) ? FColor(0., 0., 0., 1.f) : FColor(trackcol);
-    // p indicates the first volume to use the color rule on
-    // (p<0 indicates the line dominates)
-    for (int k = p; k >= 0; --k) {
-        if (ray.intersections[k].ecode < 0) {
-            // Either line or END_CODE
-            col = FColor(1.0, 0., 0., 0);
-            continue;
-        }
+    /* Scan from front to back, as this gives the option of quitting early */
+    /* Each intersection is a transition between two domains */
+    FColor color(0., 0., 0., 0.);
+    float weight = 1.0; // of the current component
 
-        // We use the intersection before the volume
-        const Element &eback = d.elements[ray.intersections[k].ecode];
-        const VColor &base_color = d.color_table[eback.ccode];
-        const G4ThreeVector &intpos =
-            initPoint(pt, d) + ray.intersections[k].dist * forward;
-        const FColor altcol =
-            colorMap(ray.intersections[k], forward, base_color, intpos,
-                     1. / d.scale, (k == 0 && ray.front_clipped));
-        double e = (d.force_opaque ? 1. : eback.alpha);
-        if (!eback.visible) {
-            continue;
+    for (int k = 0; k < ray.N; k++) {
+        const Intersection &ft = ray.intersections[k];
+        int ecode = ft.ecode;
+        if (trackdist < ft.dist || ecode == CODE_END) {
+            // Early termination
+            color = FColor::add(color, FColor(trackcol), weight);
+            return color.rgba();
+        } else if (ecode == CODE_LINE) {
+            // Lines are black
+            color = FColor::add(color, FColor(0., 0., 0., 1.), weight);
+            return color.rgba();
+        } else {
+            const Element &eback = d.elements[ecode];
+            if (!eback.visible) {
+                continue;
+            }
+            const VColor &base_color = d.color_table[eback.ccode];
+            const G4ThreeVector &intpos = initPoint(pt, d) + ft.dist * forward;
+            const FColor altcol =
+                colorMap(ft, forward, base_color, intpos, 1. / d.scale,
+                         (k == 0 && ray.front_clipped) ||
+                             (k == ray.N - 1 && ray.back_clipped));
+
+            float cur_fraction = (d.force_opaque ? 1. : eback.alpha);
+            color = FColor::add(color, altcol, weight * cur_fraction);
+            weight = weight * (1. - cur_fraction);
+            if (weight <= 0.) {
+                // Early termination
+                return color.rgba();
+            }
         }
-        col = FColor::blend(altcol, col, 1 - e);
     }
-    return col.rgba();
+    // Finally, add background color
+    color = FColor::add(color, FColor(trackcol), weight);
+    return color.rgba();
 }
 
 QRgb normalColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,

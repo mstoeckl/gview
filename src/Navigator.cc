@@ -273,41 +273,6 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
     return ret;
 }
 
-static void fcompressTraces(RayPoint *ray, const std::vector<Element> &elts) {
-    if (ray->N <= 1) {
-        return;
-    }
-    //    Intersection *ints = ray->intersections;
-    //    const G4double epsilon = 0.1 * CLHEP::nm;
-    // First, nuke the empty slices
-    //    int n = 0;
-    //    for (int i = 0; i < ray->N - 1; i++) {
-    //        G4double sep = std::abs(ints[i + 1].dist - ints[i].dist);
-    //        if (sep > epsilon) {
-    //            // Do both: evtly it overrides
-    //            ints[n] = ints[i];
-    //            ints[n + 1] = ints[i + 1];
-    //            n++;
-    //        }
-    //    }
-
-    //    // Finally, nuke intersections between similar material'd objects
-    //    // (If one is visible/one isn't, don't contract
-    //    int p = 0;
-    //    // 001122334  =>  0022334
-    //    // |x|x|y|x|  =>  |x|y|x|
-    //    for (int i = 0; i < n; i++) {
-    //        if (i == 0 ||
-    //            elts[ints[i].ecode].ccode != elts[ints[i - 1].ecode].ccode ||
-    //            elts[ints[i].ecode].visible != elts[ints[i -
-    //            1].ecode].visible) { ints[p] = ints[i]; p++;
-    //        }
-    //    }
-    //    ints[p] = ints[n];
-
-    //    ray->N = p;
-}
-
 Navigator::~Navigator() {}
 Navigator *Navigator::create(const ViewData &vd, int navtype) {
     switch (navtype) {
@@ -335,7 +300,6 @@ RayPoint FastVolNavigator::traceRay(const G4ThreeVector &init,
     RayPoint rpt = ftraceRay(init, forward, els, clipping_planes, intersections,
                              maxhits, iteration, mutables, first_visible_hit);
     iteration++;
-    fcompressTraces(&rpt, els);
     return rpt;
 }
 
@@ -420,8 +384,6 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
         const G4ThreeVector first_pos = init + sdist * forward;
         const G4VSolid *root_solid = world->GetLogicalVolume()->GetSolid();
         EInside init_pos = root_solid->Inside(first_pos);
-        int ec = ecode_map.value(world, CODE_END);
-
         if (init_pos == kInside) {
             // We are already inside the world. find out which subvolume
             last_vol = nav->LocateGlobalPointAndSetup(init + sdist * forward,

@@ -30,9 +30,6 @@ class QProgressDialog;
 class Navigator;
 class G4VPhysicalVolume;
 
-typedef struct Element_s Element;
-typedef struct ViewData_s ViewData;
-
 typedef struct {
     G4ThreeVector normal;
     G4double offset;
@@ -106,6 +103,7 @@ typedef struct Element_s {
 
 typedef struct ViewData_s {
     G4VPhysicalVolume *orig_vol;
+    void *octree;
     // What is being viewed. elements[0] is root
     std::vector<Element> elements;
     TrackData tracks;

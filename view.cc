@@ -61,7 +61,8 @@ int main(int argc, char **argv) {
             QTextStream out(&ofo);
             while (!in.atEnd()) {
                 QString line = in.readLine();
-                if (!line.contains("<property")) {
+                if (!line.contains("<property") && !line.contains("<matrix") &&
+                    !line.contains("<constant")) {
                     out << line << "\n";
                 }
             }

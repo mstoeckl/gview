@@ -2,6 +2,7 @@
 #include "VectorTrace.hh"
 
 #include "Navigator.hh"
+#include "Shaders.hh"
 
 #include <QFile>
 #include <QPainter>
@@ -186,14 +187,17 @@ void VectorTracer::recolor() {
 QImage VectorTracer::preview(const QSize &sz) {
     QRgb *data = new QRgb[sz.width() * sz.height()];
 
+    Navigator *nav = Navigator::create(view_data, view_data.navigator);
+
     for (int x = 0; x < sz.width(); x++) {
         for (int y = 0; y < sz.height(); y++) {
             int idx = y * sz.width() + x;
             QPointF qt = grid_coord_to_point(QPoint(x, y), sz);
-            RenderPoint pt = queryPoint(qt);
+            RenderPoint pt = queryPoint(qt, nav);
             data[idx] = calculateInteriorColor(pt).rgba();
         }
     }
+    delete nav;
 
     QImage img((uchar *)data, sz.width(), sz.height(), QImage::Format_ARGB32);
     img = img.copy();
@@ -253,14 +257,16 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
         const Element *first_a = NULL, *first_b = NULL;
         Intersection *first_ia = NULL, *first_ib = NULL;
         for (int i = 0; i < ra.N; i++) {
-            if (view_data.elements[ra.intersections[i].ecode].visible) {
+            if (ra.intersections[i].ecode >= 0 &&
+                view_data.elements[ra.intersections[i].ecode].visible) {
                 first_a = &view_data.elements[ra.intersections[i].ecode];
                 first_ia = &ra.intersections[i];
                 break;
             }
         }
         for (int i = 0; i < rb.N; i++) {
-            if (view_data.elements[rb.intersections[i].ecode].visible) {
+            if (rb.intersections[i].ecode >= 0 &&
+                view_data.elements[rb.intersections[i].ecode].visible) {
                 first_b = &view_data.elements[rb.intersections[i].ecode];
                 first_ib = &rb.intersections[i];
                 break;
@@ -302,8 +308,9 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
 static Intersection *first_nontrivial_intersection(const RenderPoint &p,
                                                    const ViewData &vd) {
     for (int i = 0; i < p.ray.N; i++) {
-        if ((i > 0 && vd.elements[p.ray.intersections[i - 1].ecode].visible) ||
-            (i < p.ray.N &&
+        if ((i > 0 && p.ray.intersections[i - 1].ecode >= 0 &&
+             vd.elements[p.ray.intersections[i - 1].ecode].visible) ||
+            (i < p.ray.N && p.ray.intersections[i].ecode >= 0 &&
              vd.elements[p.ray.intersections[i].ecode].visible)) {
             return &p.ray.intersections[i];
             break;
@@ -312,7 +319,8 @@ static Intersection *first_nontrivial_intersection(const RenderPoint &p,
     return NULL;
 }
 
-RenderPoint VectorTracer::queryPoint(QPointF spot) {
+RenderPoint VectorTracer::queryPoint(QPointF spot,
+                                     Navigator *thread_specific_nav) {
     nqueries++;
 
     QPointF bound_low = grid_coord_to_point(QPoint(0, 0), grid_size);
@@ -329,10 +337,9 @@ RenderPoint VectorTracer::queryPoint(QPointF spot) {
     const int dlimit = 100;
     Intersection ints[dlimit + 1];
 
-    FastVolNavigator nav(view_data.elements, view_data.clipping_planes);
-    RayPoint rpt =
-        nav.traceRay(initPoint(spot, view_data),
-                     forwardDirection(view_data.orientation), ints, dlimit);
+    RayPoint rpt = thread_specific_nav->traceRay(
+        initPoint(spot, view_data), forwardDirection(view_data.orientation),
+        ints, dlimit);
 
     return RenderPoint(spot, rpt);
 }
@@ -348,7 +355,8 @@ RenderPoint VectorTracer::getPoint(QPoint p) {
 void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
                                const RenderPoint &initial_outside,
                                RenderPoint *result_inside,
-                               RenderPoint *result_outside) {
+                               RenderPoint *result_outside,
+                               Navigator *thread_navigator) {
     if (typematch(initial_inside, initial_outside)) {
         qFatal("Bracket must cross class boundary");
     }
@@ -357,7 +365,7 @@ void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
     *result_outside = initial_outside;
     for (int k = 0; k < nsubdivisions; k++) {
         QPointF p_mid = 0.5 * (result_inside->coords + result_outside->coords);
-        RenderPoint test = queryPoint(p_mid);
+        RenderPoint test = queryPoint(p_mid, thread_navigator);
         if (typematch(test, *result_inside)) {
             *result_inside = test;
         } else {
@@ -369,7 +377,8 @@ void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
 void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
                                  const RenderPoint &initial_outside,
                                  RenderPoint *result_inside,
-                                 RenderPoint *result_outside) {
+                                 RenderPoint *result_outside,
+                                 Navigator *thread_nav) {
     const double cos_alpha = std::cos(M_PI / 12);
     const double min_jump = 1e-3;
     // Step 1: determine cause of difference;
@@ -394,8 +403,8 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
             : *first_nontrivial_intersection(*result_outside, view_data);
     const int nsubdivisions = 20;
     for (int i = 0; i < nsubdivisions; i++) {
-        RenderPoint mid =
-            queryPoint(0.5 * (result_inside->coords + result_outside->coords));
+        RenderPoint mid = queryPoint(
+            0.5 * (result_inside->coords + result_outside->coords), thread_nav);
         Intersection cx_mid;
         if (transparent_volumes) {
             if (mid.ray.N <= cd) {
@@ -487,15 +496,17 @@ void VectorTracer::computeGrid() {
     if (grid_points)
         delete[] grid_points;
     grid_points = new RenderPoint[W * H];
+    Navigator *nav = Navigator::create(view_data, view_data.navigator);
     for (int i = 0; i < W; i++) {
         for (int j = 0; j < H; j++) {
             int idx = i * H + j;
             QPointF spot = grid_coord_to_point(QPoint(i, j), grid_size);
-            grid_points[idx] = queryPoint(spot);
+            grid_points[idx] = queryPoint(spot, nav);
             grid_points[idx].ideal_color =
                 calculateInteriorColor(grid_points[idx]);
         }
     }
+    delete nav;
     qDebug("Grid computed");
 
     qDebug("Identifying equivalence classes");
@@ -919,6 +930,8 @@ static QVector<RenderPoint> rloop_merge(const QVector<RenderPoint> &base,
 void VectorTracer::computeEdges() {
     region_list.clear();
     int W = grid_size.width(), H = grid_size.height();
+    Navigator *nav = Navigator::create(view_data, view_data.navigator);
+
     for (int cls = 0; cls < grid_nclasses; cls++) {
         qDebug("Computing region boundaries %d", cls);
         // Compute a hull path/curve for the points, sampling new points as
@@ -1002,7 +1015,7 @@ void VectorTracer::computeEdges() {
                         QPointF pt =
                             0.5 * (grid_points[x * H + y].coords +
                                    grid_points[(x + 1) * H + y + 1].coords);
-                        RenderPoint rp = queryPoint(pt);
+                        RenderPoint rp = queryPoint(pt, nav);
                         const RenderPoint &class_rep =
                             (code == 0x5) ? grid_points[x * H + y]
                                           : grid_points[x * H + y + 1];
@@ -1081,7 +1094,7 @@ void VectorTracer::computeEdges() {
                 RenderPoint out_point = getPoint(ip_out);
 
                 RenderPoint in_limit, out_limit;
-                bracketEdge(in_point, out_point, &in_limit, &out_limit);
+                bracketEdge(in_point, out_point, &in_limit, &out_limit, nav);
                 in_limit.ideal_color =
                     calculateBoundaryColor(in_limit, out_limit);
 
@@ -1106,8 +1119,8 @@ void VectorTracer::computeEdges() {
             QVector<RenderPoint> pts;
             QVector<int> idxs;
             for (const CornerCandidate &corner : corner_cands) {
-                RenderPoint cin = queryPoint(corner.inside);
-                RenderPoint cout = queryPoint(corner.outside);
+                RenderPoint cin = queryPoint(corner.inside, nav);
+                RenderPoint cout = queryPoint(corner.outside, nav);
                 bool in_icls = typematch(cin, class_representative);
                 bool out_icls = typematch(cout, class_representative);
 
@@ -1116,7 +1129,7 @@ void VectorTracer::computeEdges() {
                 }
 
                 RenderPoint plim_in, plim_out;
-                bracketEdge(cin, cout, &plim_in, &plim_out);
+                bracketEdge(cin, cout, &plim_in, &plim_out, nav);
                 plim_in.ideal_color = calculateBoundaryColor(plim_in, plim_out);
 
                 pts.push_back(plim_in);
@@ -1137,7 +1150,7 @@ void VectorTracer::computeEdges() {
         }
         region_list.push_back(region);
     }
-
+    delete nav;
     qDebug("Number of regions: %d", region_list.size());
 
     // Draw them lines!
@@ -1225,6 +1238,7 @@ int VectorTracer::crease_depth(const RenderPoint &q0, const RenderPoint &q1,
 void VectorTracer::computeCreases() {
     qDebug("Computing creases and boundary color details");
 
+    Navigator *nav = Navigator::create(view_data, view_data.navigator);
     const int W = grid_size.width(), H = grid_size.height();
     // Basically, there are creases inside each boundary
 
@@ -1469,7 +1483,7 @@ void VectorTracer::computeCreases() {
                             QPointF pt =
                                 0.5 * (grid_points[x * H + y].coords +
                                        grid_points[(x + 1) * H + y + 1].coords);
-                            RenderPoint rp = queryPoint(pt);
+                            RenderPoint rp = queryPoint(pt, nav);
                             const RenderPoint &class_rep =
                                 (code == 0x5) ? grid_points[x * H + y]
                                               : grid_points[x * H + y + 1];
@@ -1538,14 +1552,15 @@ void VectorTracer::computeCreases() {
                         bracketEdge(
                             q0.region_class == region.class_no ? q0 : q1,
                             q0.region_class == region.class_no ? q1 : q0,
-                            &adj_point, &lim_out);
+                            &adj_point, &lim_out, nav);
                         adj_point.ideal_color =
                             calculateBoundaryColor(adj_point, lim_out);
                         adj_point.show_point = false;
                     } else if (!crease_edge_map[line_marker]) {
                         // Interior edge, not conflict
                         // Select midpoint of q0 and q1
-                        adj_point = queryPoint(0.5 * (q0.coords + q1.coords));
+                        adj_point =
+                            queryPoint(0.5 * (q0.coords + q1.coords), nav);
                         adj_point.ideal_color =
                             calculateInteriorColor(adj_point);
                         adj_point.show_point = false;
@@ -1558,7 +1573,7 @@ void VectorTracer::computeCreases() {
                         bracketCrease(
                             q0.subregion_class == subreg.subclass_no ? q0 : q1,
                             q0.subregion_class == subreg.subclass_no ? q1 : q0,
-                            &adj_point, &lim_out);
+                            &adj_point, &lim_out, nav);
                         adj_point.ideal_color =
                             calculateInteriorColor(adj_point);
                         adj_point.show_point = true;
@@ -1585,7 +1600,7 @@ void VectorTracer::computeCreases() {
                     int k = corner_cands[i].index;
                     const RenderPoint &p0 = bound[k];
                     const RenderPoint &p1 = bound[(k + 1) % bound.size()];
-                    RenderPoint qA = queryPoint(corner_cands[i].inside);
+                    RenderPoint qA = queryPoint(corner_cands[i].inside, nav);
 
                     // Both types and subregion must match
                     if (!typematch(p0, qA) || !typematch(p1, qA)) {
@@ -1598,25 +1613,26 @@ void VectorTracer::computeCreases() {
                     }
 
                     // Outside state checked only in relation to inside
-                    RenderPoint qB = queryPoint(corner_cands[i].outside);
+                    RenderPoint qB = queryPoint(corner_cands[i].outside, nav);
                     RenderPoint adj_point;
                     if (!typematch(qB, qA)) {
                         // Region boundary
                         RenderPoint lim_out;
-                        bracketEdge(qA, qB, &adj_point, &lim_out);
+                        bracketEdge(qA, qB, &adj_point, &lim_out, nav);
                         adj_point.ideal_color =
                             calculateBoundaryColor(adj_point, lim_out);
                         adj_point.show_point = false;
                     } else if (crease_depth(qA, qB, cos_alpha, min_jump) < 0) {
                         // No crease found, average it
-                        adj_point = queryPoint(0.5 * (qA.coords + qB.coords));
+                        adj_point =
+                            queryPoint(0.5 * (qA.coords + qB.coords), nav);
                         adj_point.ideal_color =
                             calculateInteriorColor(adj_point);
                         adj_point.show_point = false;
                     } else {
                         // Crease boundary
                         RenderPoint lim_out;
-                        bracketCrease(qA, qB, &adj_point, &lim_out);
+                        bracketCrease(qA, qB, &adj_point, &lim_out, nav);
                         adj_point.ideal_color =
                             calculateInteriorColor(adj_point);
                         adj_point.show_point = true;
@@ -1640,6 +1656,7 @@ void VectorTracer::computeCreases() {
             region.subregions.push_back(subreg);
         }
     }
+    delete nav;
     delete[] flood_fill_data;
     delete[] crease_edge_count;
 

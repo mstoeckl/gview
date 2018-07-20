@@ -87,14 +87,16 @@ signals:
 
 private:
     /* Function */
-    RenderPoint queryPoint(QPointF);
+    RenderPoint queryPoint(QPointF, Navigator *thread_nav);
     RenderPoint getPoint(QPoint);
     void bracketEdge(const RenderPoint &initial_inside,
                      const RenderPoint &initial_outside,
-                     RenderPoint *result_inside, RenderPoint *result_outside);
+                     RenderPoint *result_inside, RenderPoint *result_outside,
+                     Navigator *thread_nav);
     void bracketCrease(const RenderPoint &initial_inside,
                        const RenderPoint &initial_outside,
-                       RenderPoint *result_inside, RenderPoint *result_outside);
+                       RenderPoint *result_inside, RenderPoint *result_outside,
+                       Navigator *thread_nav);
     FColor calculateInteriorColor(const RenderPoint &pt);
     FColor calculateBoundaryColor(const RenderPoint &inside,
                                   const RenderPoint &outside);
@@ -116,6 +118,5 @@ private:
     RenderPoint *grid_points;
     int grid_nclasses;
     QVector<Region> region_list;
-    QMap<QPoint, RenderPoint> edge_refinements;
     QMap<QPoint, bool> crease_edge_map;
 };

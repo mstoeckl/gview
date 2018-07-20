@@ -118,6 +118,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     geo_options = options;
     track_options = trackopts;
     vd.orig_vol = geo_options[which_geo].vol;
+    vd.octree = nullptr;
     vd.elements.clear();
     convertCreation(vd.elements, geo_options[which_geo].vol);
     vd.scene_radius = vd.elements[0].solid->GetExtent().GetExtentRadius();
@@ -205,7 +206,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
 
     // TODO: icons for all actions, esp. screenshot actions
     // & so on. Bundle?
-    frame_time_display = new QAction("XXXXX.X ms");
+    frame_time_display = new QAction("XXXXX.X ms", this);
     frame_time_display->setMenuRole(QAction::NoRole);
     frame_time_display->setEnabled(false);
     QMenuBar *main_menu = new QMenuBar();
@@ -617,7 +618,7 @@ void Viewer::processMouse(QMouseEvent *event) {
         RayPoint rpt = nav->traceRay(initPoint(pt, vd),
                                      forwardDirection(vd.orientation), ints, M);
         delete nav;
-        debugRayPoint(rpt, vd.elements);
+        //        debugRayPoint(rpt, vd.elements);
         ray_table->clear();
         ray_list.clear();
         for (int j = 0; j < rpt.N; j++) {

@@ -63,6 +63,11 @@ public:
         return FColor(t * a.v[0] + s * b.v[0], t * a.v[1] + s * b.v[1],
                       t * a.v[2] + s * b.v[2], t * a.v[3] + s * b.v[3]);
     }
+    static FColor add(const FColor &acc, const FColor &b, float b_weight) {
+        return FColor(
+            acc.v[0] + b_weight * b.v[0], acc.v[1] + b_weight * b.v[1],
+            acc.v[2] + b_weight * b.v[2], acc.v[3] + b_weight * b.v[3]);
+    }
 
 private:
     float v[4];
