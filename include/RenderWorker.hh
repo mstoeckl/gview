@@ -73,8 +73,8 @@ typedef struct {
 typedef struct Element_s {
     G4String name;
     // Note: replicas not yet available
-    G4ThreeVector offset;
-    G4RotationMatrix rot;
+    G4ThreeVector offset; // local
+    G4RotationMatrix rot; // global
 
     const G4VPhysicalVolume *orig_vol;
     const G4VSolid *solid;
@@ -93,6 +93,9 @@ typedef struct Element_s {
     bool visible;
     double alpha;
 
+    // Relative to the root node
+    G4ThreeVector global_offset;
+
     // Alpha = 1.0 : opaque; alpha < 1.0, we do linear sequential color merging
     // (yes, resulting colors may be weird. Not as good as exponential
     // color influence falloff, but you can't have everything.
@@ -110,9 +113,12 @@ typedef struct ViewData_s {
     // How it is viewed
     G4ThreeVector camera;
     G4RotationMatrix orientation;
-    std::vector<Plane> clipping_planes;
+    // Frame for rotations
+    G4ThreeVector base_offset;
+    G4RotationMatrix base_rotation;
     G4double scale;
     G4double scene_radius;
+    std::vector<Plane> clipping_planes;
     std::vector<VColor> color_table;
     bool split_by_material;
     int navigator, gshader, tshader;
@@ -137,7 +143,8 @@ void debugRayPoint(const RayPoint &ray, const std::vector<Element> &els);
 
 class G4VPhysicalVolume;
 int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
-                    G4RotationMatrix rot = G4RotationMatrix(),
+                    const G4RotationMatrix &parent_rot = G4RotationMatrix(),
+                    const G4ThreeVector &parent_offset = G4ThreeVector(),
                     int *counter = NULL);
 long recursivelySumNCalls(const std::vector<Element> &elts,
                           const ElemMutables e[]);

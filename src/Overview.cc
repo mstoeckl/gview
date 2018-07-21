@@ -23,7 +23,8 @@ InfoModel::InfoModel(QObject *parent) : QAbstractTableModel(parent) {
          << "Bool roots"
          << "Bool depth"
          << "Bool splits"
-         << "Color";
+         << "Color"
+         << "Center";
     opts = keys.toVector();
     QStringList tool;
     tool << "Element name (from physical volume)"
@@ -38,7 +39,8 @@ InfoModel::InfoModel(QObject *parent) : QAbstractTableModel(parent) {
             "element"
          << "Number of boolean operations (counting duplicates) in boolean "
             "solid tree"
-         << "Current color with which the object is displayed";
+         << "Current color with which the object is displayed"
+         << "Global coordinates for the solid zero point";
     tooltips = tool.toVector();
     vals = QVector<QString>(opts.size());
     col = QColor(Qt::white);
@@ -98,6 +100,10 @@ void InfoModel::setElement(const Element *e, const ViewData &vd) {
         vals[6] = QString::number(roots.size());
         vals[7] = QString::number(treedepth);
         vals[8] = QString::number(nbooleans);
+        vals[10] =
+            QString::number(e->global_offset.x() / CLHEP::cm, 'g', 4) + ", " +
+            QString::number(e->global_offset.y() / CLHEP::cm, 'g', 4) + ", " +
+            QString::number(e->global_offset.z() / CLHEP::cm, 'g', 4) + " cm";
         col = QColor::fromRgb(vd.color_table[e->ccode].rgb());
     }
     last = e;

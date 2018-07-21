@@ -29,6 +29,7 @@ class OverView;
 class ExpoSpinBox;
 class RenderWidget;
 class InfoModel;
+class NameSelector;
 class HistogrammicRangeSlider;
 
 typedef struct {
@@ -73,6 +74,7 @@ public slots:
     void openGeometry();
     void openTracks();
     void setViewRotation(int);
+    void updatePivot();
 
 private:
     void reloadChoiceMenus();
@@ -110,6 +112,7 @@ private:
     QCheckBox *mtl_showlines;
     QComboBox *navig_sel, *gshader_sel, *tshader_sel;
     ColorConfig *color_config;
+    QComboBox *pivot_volume;
 
     QMenu *gpicker_menu;
     QMenu *tpicker_menu;

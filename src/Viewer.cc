@@ -123,6 +123,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     convertCreation(vd.elements, geo_options[which_geo].vol);
     vd.scene_radius = vd.elements[0].solid->GetExtent().GetExtentRadius();
     vd.scale = vd.scene_radius / 2;
+    vd.base_offset = G4ThreeVector();
+    vd.base_rotation = CLHEP::HepRotation::IDENTITY;
     vd.camera = G4ThreeVector(-4 * vd.scene_radius, 0, 0);
     vd.orientation = G4RotationMatrix();
     vd.level_of_detail = 0; // 0 is full; 1 is 1/9, 2 is 1/81; depends on timing
@@ -434,9 +436,14 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     QPushButton *orm3 = new QPushButton("Z-");
     QPushButton *orr1 = new QPushButton("+45");
     QPushButton *orr2 = new QPushButton("-45");
-    QPushButton *tosl = new QPushButton("Selected Volume");
-    QComboBox *center = new QComboBox();
-    center->addItem("<root>", 0); // ecode
+    pivot_volume = new QComboBox();
+    for (const Element &e : vd.elements) {
+        pivot_volume->addItem(QString::fromUtf8(e.name.c_str()), e.ecode);
+    }
+    pivot_volume->setCurrentIndex(0);
+    connect(pivot_volume, SIGNAL(currentIndexChanged(int)), this,
+            SLOT(updatePivot()));
+
     QHBoxLayout *prow = new QHBoxLayout();
     QSignalMapper *sqm = new QSignalMapper(this);
     connect(sqm, SIGNAL(mapped(int)), this, SLOT(setViewRotation(int)));
@@ -466,14 +473,11 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     QHBoxLayout *rrow = new QHBoxLayout();
     rrow->addWidget(orr1);
     rrow->addWidget(orr2);
-    QHBoxLayout *brow = new QHBoxLayout();
-    brow->addWidget(tosl);
-    brow->addWidget(center);
     QVBoxLayout *vbr = new QVBoxLayout();
     vbr->addLayout(prow, 0);
     vbr->addLayout(mrow, 0);
     vbr->addLayout(rrow, 0);
-    vbr->addLayout(brow, 0);
+    vbr->addWidget(pivot_volume, 0);
     vbr->addStretch(5);
     QWidget *ornt = new QWidget();
     ornt->setLayout(vbr);
@@ -575,8 +579,9 @@ void Viewer::processKey(QKeyEvent *event) {
         return;
     }
     vd.camera -= trans;
-    vd.camera =
-        (vd.orientation.inverse() * rot.inverse() * vd.orientation) * vd.camera;
+    vd.camera = (vd.orientation.inverse() * rot.inverse() * vd.orientation) *
+                    (vd.camera - vd.base_offset) +
+                vd.base_offset;
     vd.orientation = rot * vd.orientation;
 
 #if 0
@@ -665,7 +670,8 @@ void Viewer::processMouse(QMouseEvent *event) {
             // rotate
             vd.camera =
                 (vd.orientation.inverse() * rot.inverse() * vd.orientation) *
-                vd.camera;
+                    (vd.camera - vd.base_offset) +
+                vd.base_offset;
             vd.orientation = rot * vd.orientation;
             lastpt = event->pos();
         }
@@ -777,6 +783,16 @@ void Viewer::changeGeometry(QAction *act) {
                 if (4 * vd.scene_radius > vd.camera.mag()) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
+                // Reset pivot list
+                pivot_volume->blockSignals(true);
+                pivot_volume->clear();
+                for (const Element &e : vd.elements) {
+                    pivot_volume->addItem(QString::fromUtf8(e.name.c_str()),
+                                          e.ecode);
+                }
+                pivot_volume->setCurrentIndex(0);
+                pivot_volume->blockSignals(false);
+
                 std::vector<const G4Material *> mtl_list =
                     constructMaterialList(geo_options);
                 color_config->mergeMaterials(mtl_list);
@@ -1055,6 +1071,7 @@ void Viewer::openTracks() {
 
 void Viewer::setViewRotation(int sel) {
     if (sel < 6) {
+        // Align orientation with axis
         const CLHEP::Hep3Vector atv[6] = {
             G4ThreeVector(1, 0, 0),  G4ThreeVector(0, 1, 0),
             G4ThreeVector(0, 0, 1),  G4ThreeVector(-1, 0, 0),
@@ -1066,9 +1083,12 @@ void Viewer::setViewRotation(int sel) {
         G4ThreeVector a = atv[sel];
         G4ThreeVector b = upv[sel];
         G4ThreeVector c = atv[sel].cross(upv[sel]);
-        vd.orientation = CLHEP::HepRotation(a, b, c).inverse();
-        vd.camera = -a * 2 * vd.scale;
+        vd.orientation =
+            CLHEP::HepRotation(a, b, c).inverse() * vd.base_rotation;
+        G4ThreeVector noff(-2 * vd.scene_radius, 0, 0);
+        vd.camera = vd.base_offset + vd.orientation.inverse() * noff;
     } else {
+        // Rotate by 45 degrees
         G4RotationMatrix rot;
         if (sel == 6) {
             rot = CLHEP::HepRotationX(CLHEP::pi / 4);
@@ -1077,9 +1097,16 @@ void Viewer::setViewRotation(int sel) {
         }
         vd.camera =
             (vd.orientation.inverse() * rot.inverse() * vd.orientation) *
-            vd.camera;
+                (vd.camera - vd.base_offset) +
+            vd.base_offset;
         vd.orientation = rot * vd.orientation;
     }
 
     rwidget->rerender(CHANGE_VIEWPORT);
+}
+
+void Viewer::updatePivot() {
+    const Element &e = vd.elements[pivot_volume->currentData().toInt()];
+    vd.base_offset = -e.global_offset;
+    vd.base_rotation = e.rot;
 }

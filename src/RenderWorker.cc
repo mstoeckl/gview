@@ -202,18 +202,19 @@ public:
 };
 
 int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
-                    G4RotationMatrix rot, int *counter) {
+                    const G4RotationMatrix &parent_rot,
+                    const G4ThreeVector &parent_offset, int *counter) {
     int cc = 0;
     if (!counter) {
         counter = &cc;
     }
 
     G4ThreeVector offset = phys->GetFrameTranslation();
-    offset = rot.inverse() * offset;
+    offset = parent_rot.inverse() * offset;
     const G4RotationMatrix &r = (phys->GetFrameRotation() != NULL)
                                     ? *phys->GetFrameRotation()
                                     : G4RotationMatrix();
-    rot = r * rot;
+    G4RotationMatrix rot = r * parent_rot;
     const G4LogicalVolume *log = phys->GetLogicalVolume();
     const G4Material *mat = log->GetMaterial();
 
@@ -228,7 +229,7 @@ int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
         // Only identity has a trace of +3 => norm2 of 0
         m.rotated = rot.norm2() > 1e-10;
         m.offset = offset;
-        m.rot = rot;
+        m.global_offset = offset + parent_offset, m.rot = rot;
 
         m.ccode = 0;
         m.material = mat;
@@ -246,7 +247,8 @@ int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
 
     std::vector<int> svi;
     for (int i = 0; i < log->GetNoDaughters(); i++) {
-        svi.push_back(convertCreation(elts, log->GetDaughter(i), rot, counter));
+        svi.push_back(convertCreation(elts, log->GetDaughter(i), rot,
+                                      offset + parent_offset, counter));
     }
     ElemSort esort(elts);
     std::sort(svi.begin(), svi.end(), esort);
