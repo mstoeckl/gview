@@ -23,7 +23,7 @@ static FColor colorMap(const Intersection &intersection,
         double bslp = orthB * position;
 
         double shade_factor = (aslp + bslp) * shade_scale;
-        shade_factor *= 40.;
+        shade_factor *= 10.;
         double fm = std::fmod(shade_factor, 1.);
         if (fm < 0.)
             fm += 1.;
@@ -87,8 +87,12 @@ QRgb normalColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
     }
 
     const Intersection &i = ray.intersections[0];
-    if (i.dist > trackdist) {
+    if (i.dist > trackdist || i.ecode == CODE_END) {
         return trackcol;
+    }
+
+    if (i.ecode == CODE_LINE) {
+        return qRgba(0, 0, 0, 255);
     }
 
     FColor col((i.normal.x + 1.0) / 2, (i.normal.y + 1.0) / 2,

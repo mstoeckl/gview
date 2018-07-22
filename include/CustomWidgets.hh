@@ -13,23 +13,89 @@ class QGraphicsView;
 class QGraphicsLineItem;
 class QGraphicsPathItem;
 
+class DistanceSpinBox : public QDoubleSpinBox {
+    Q_OBJECT
+public:
+    DistanceSpinBox(QWidget *parent = nullptr);
+    virtual ~DistanceSpinBox();
+
+    QValidator::State validate(QString &, int &) const override;
+    virtual double valueFromText(const QString &) const override;
+    virtual QString textFromValue(double) const override;
+};
+
+class NormalSelector;
+/**
+ * Helper class for QWidget. Format is precisely [+-]d.ddd
+ */
+class NormalAxisSpinBox : public QAbstractSpinBox {
+    Q_OBJECT
+public:
+    NormalAxisSpinBox(NormalSelector *parent, int i);
+    virtual ~NormalAxisSpinBox();
+
+    virtual QValidator::State validate(QString &input, int &pos) const override;
+    virtual void fixup(QString &input) const override;
+    virtual void stepBy(int steps) override;
+    virtual StepEnabled stepEnabled() const override;
+
+    void displayValue(double val);
+    double apparentValue(bool &ok) const;
+
+private slots:
+    void handleUpdate();
+
+private:
+    NormalSelector *link;
+    int index;
+};
+
+/**
+ * An efficient normalized direction selection widget
+ */
+class NormalSelector : public QWidget {
+    Q_OBJECT
+public:
+    NormalSelector(QWidget *parent = nullptr);
+    virtual ~NormalSelector();
+
+    void setValue(const G4ThreeVector &);
+    G4ThreeVector value() const;
+signals:
+    void valueChanged(G4ThreeVector);
+
+protected:
+    friend class NormalAxisSpinBox;
+    void stepBy(int step, int axis);
+    void handleUpdate();
+
+    G4ThreeVector current, trial;
+private slots:
+    void trackFocusChange(QWidget *, QWidget *);
+
+private:
+    NormalAxisSpinBox *sx, *sy, *sz;
+};
+
+/*
+ * Clipping plane editor. Designed for compact distance-angle representation.
+ */
 class PlaneEdit : public QWidget {
     Q_OBJECT
 public:
-    PlaneEdit(Plane p);
+    PlaneEdit(const Plane &p);
     virtual ~PlaneEdit();
     Plane getPlane();
 public slots:
     void setActive(bool active);
 signals:
     void updated();
+private slots:
+    void doAction(int choice);
 
 private:
-    QDoubleSpinBox *nx;
-    QDoubleSpinBox *ny;
-    QDoubleSpinBox *nz;
-    QDoubleSpinBox *d;
-    QComboBox *unit;
+    NormalSelector *n;
+    DistanceSpinBox *d;
     QPushButton *act;
 };
 

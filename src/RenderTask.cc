@@ -70,7 +70,7 @@ void RenderRayTask::run(Context *ctx) {
     int yl = domain.top();
     int yh = domain.bottom();
 
-    const G4double radius = 0.8 / mind;
+    const G4double radius = 3.0 / mind;
     // Zero construct by default
     Navigator *nav = Navigator::create(*d, d->navigator);
     GeoShader &shader = *getGeoShader(d->gshader);
@@ -146,7 +146,7 @@ void RenderRayBufferTask::run(Context *ctx) {
     int yl = domain.top();
     int yh = domain.bottom();
 
-    const G4double radius = 0.8 / mind;
+    const G4double radius = 3.0 / mind;
     // Zero construct by default
     Navigator *nav = Navigator::create(*d, d->navigator);
 

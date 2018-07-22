@@ -160,10 +160,8 @@ RayPoint rayAtPoint(Navigator &nav, const QPointF &pt, qreal radius,
         const int devthresh = 2;
         for (int k = 0; k < ray.N; ++k) {
             if (ndevs[k] >= devthresh) {
-                ray.N = k;
-                if (k > 0) {
-                    ray.intersections[k - 1].ecode = CODE_LINE;
-                }
+                ray.intersections[k].ecode = CODE_LINE;
+                ray.N = k + 1;
                 break;
             }
         }
