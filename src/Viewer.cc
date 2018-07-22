@@ -691,12 +691,28 @@ void Viewer::processWheel(QWheelEvent *event) {
     rwidget->rerender(CHANGE_VIEWPORT);
 }
 
+Plane plane_transform(const Plane &p, const G4RotationMatrix &rot,
+                      const G4ThreeVector &offset) {
+    Plane q;
+    q.normal = rot * p.normal;
+    q.offset = p.offset - p.normal * offset;
+    return q;
+}
+Plane plane_itransform(const Plane &p, const G4RotationMatrix &rot,
+                       const G4ThreeVector &offset) {
+    Plane q;
+    q.normal = rot.inverse() * p.normal;
+    q.offset = p.offset + q.normal * offset;
+    return q;
+}
+
 void Viewer::updatePlanes() {
     vd.clipping_planes = std::vector<Plane>();
     for (int i = 0; i < 3; i++) {
         Plane p = plane_edit[i]->getPlane();
         if (p.normal != G4ThreeVector()) {
-            vd.clipping_planes.push_back(p);
+            Plane q = plane_itransform(p, vd.base_rotation, vd.base_offset);
+            vd.clipping_planes.push_back(q);
         }
     }
     updateTracks(true);
@@ -1106,7 +1122,20 @@ void Viewer::setViewRotation(int sel) {
 }
 
 void Viewer::updatePivot() {
+    G4ThreeVector old_offset = vd.base_offset;
+    G4RotationMatrix old_rotation = vd.base_rotation;
     const Element &e = vd.elements[pivot_volume->currentData().toInt()];
     vd.base_offset = -e.global_offset;
     vd.base_rotation = e.rot;
+    if (vd.base_offset != old_offset || vd.base_rotation != old_rotation) {
+        for (int i = 0; i < 3; i++) {
+            if (plane_edit[i]->isActive()) {
+                Plane p = plane_edit[i]->getPlane();
+                Plane q = plane_transform(
+                    plane_itransform(p, old_rotation, old_offset),
+                    vd.base_rotation, vd.base_offset);
+                plane_edit[i]->setPlane(q);
+            }
+        }
+    }
 }

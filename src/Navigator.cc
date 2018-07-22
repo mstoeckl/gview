@@ -311,6 +311,10 @@ public:
                           const char *exceptionCode,
                           G4ExceptionSeverity severity,
                           const char *description) {
+        (void)originOfException;
+        (void)exceptionCode;
+        (void)severity;
+        (void)description;
         // TODO: logarithmic duplicate counting
         // print on 1st, 10th, 100th, etc.
 
@@ -379,15 +383,14 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
         return r;
     }
 
-    G4VPhysicalVolume *last_vol = nullptr;
     {
         const G4ThreeVector first_pos = init + sdist * forward;
         const G4VSolid *root_solid = world->GetLogicalVolume()->GetSolid();
         EInside init_pos = root_solid->Inside(first_pos);
         if (init_pos == kInside) {
             // We are already inside the world. find out which subvolume
-            last_vol = nav->LocateGlobalPointAndSetup(init + sdist * forward,
-                                                      &forward);
+            G4VPhysicalVolume *last_vol = nav->LocateGlobalPointAndSetup(
+                init + sdist * forward, &forward);
             int ec = ecode_map.value(last_vol, CODE_END);
             if (!first_visible_hit || (ec >= 0 && els[ec].visible)) {
                 Intersection &ins = r.intersections[r.N++];
@@ -407,8 +410,8 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
                 return r;
             }
             // determine the region we just entered
-            last_vol = nav->LocateGlobalPointAndSetup(init + sdist * forward,
-                                                      &forward);
+            G4VPhysicalVolume *last_vol = nav->LocateGlobalPointAndSetup(
+                init + sdist * forward, &forward);
             int ec = ecode_map.value(last_vol, CODE_END);
             if (!first_visible_hit || (ec >= 0 && els[ec].visible)) {
                 Intersection &ins = r.intersections[r.N++];
@@ -437,8 +440,6 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
         const G4ThreeVector &normal = nav->GetGlobalExitNormal(here, &valid);
         G4VPhysicalVolume *v = nav->LocateGlobalPointAndSetup(here, &forward);
 
-        bool change = v != last_vol;
-        last_vol = v;
         sdist += length;
 
         if (sdist > edist) {

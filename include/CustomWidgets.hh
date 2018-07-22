@@ -109,6 +109,8 @@ public:
     PlaneEdit(const Plane &p);
     virtual ~PlaneEdit();
     Plane getPlane();
+    void setPlane(const Plane &);
+    bool isActive();
 public slots:
     void setActive(bool active);
 signals:

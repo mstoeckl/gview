@@ -118,6 +118,7 @@ QAbstractSpinBox::StepEnabled DistanceSpinBox::stepEnabled() const {
            (internal <= -dsb_max ? StepNone : StepDownEnabled);
 }
 void DistanceSpinBox::setValue(double val) {
+    bool changed = current != val;
     current = val;
     internal = std::lround(current / (1e-4 * CLHEP::nm)) / 10;
     internal = std::max(-dsb_max, std::min(dsb_max, internal));
@@ -131,6 +132,9 @@ void DistanceSpinBox::setValue(double val) {
         last_unit = std::max((exp - 4) / 3, 0);
     }
     lineEdit()->setText(formatValue(internal, last_unit));
+    if (changed) {
+        emit valueChanged(current);
+    }
 }
 double DistanceSpinBox::value() const { return current; }
 
@@ -338,6 +342,7 @@ void NormalSelector::stepBy(int dir, int axis) {
     const double cos_astep = std::cos(astep);
     const double eps = 1e-4;
 
+    G4ThreeVector original = current;
     bool x0 = std::abs(current.x()) < eps;
     bool y0 = std::abs(current.y()) < eps;
     bool z0 = std::abs(current.z()) < eps;
@@ -371,12 +376,14 @@ void NormalSelector::stepBy(int dir, int axis) {
     sx->displayValue(current.x());
     sy->displayValue(current.y());
     sz->displayValue(current.z());
-    emit valueChanged(current);
+    if (original != current) {
+        emit valueChanged(current);
+    }
 }
 void NormalSelector::handleUpdate() {
     bool xok = true, yok = true, zok = true;
     G4ThreeVector a(sx->apparentValue(xok), sy->apparentValue(yok),
-                    sx->apparentValue(zok));
+                    sz->apparentValue(zok));
     if (xok && yok && zok && a.mag2() > 0.) {
         // We have a valid state, up to scale. Emit on change
         if (a.unit() != current) {
@@ -478,6 +485,13 @@ Plane PlaneEdit::getPlane() {
     p.normal = act->isChecked() ? n->value() : G4ThreeVector();
     p.offset = d->value();
     return p;
+}
+bool PlaneEdit::isActive() { return act->isChecked(); }
+void PlaneEdit::setPlane(const Plane &p) {
+    QSignalBlocker block_d(d);
+    QSignalBlocker block_n(n);
+    d->setValue(p.offset);
+    n->setValue(p.normal);
 }
 
 ExpoSpinBox::ExpoSpinBox() {}
