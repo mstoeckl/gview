@@ -6,22 +6,45 @@
 #include <QSpinBox>
 
 class QComboBox;
-class QDoubleSpinBox;
 class QPushButton;
 class QGraphicsScene;
 class QGraphicsView;
 class QGraphicsLineItem;
 class QGraphicsPathItem;
 
-class DistanceSpinBox : public QDoubleSpinBox {
+/**
+ * Distance spin box, from 0.001nm to 999.9m. Displays 4 significant digits.
+ *
+ * Valid: 1.000nm, 32.3nm, 443.2nm, 560.3nm, 50.00m
+ * Intermediate: 1e-7m, 1.234e5mm
+ * Invalid: 16, seven, 1meter
+ */
+class DistanceSpinBox : public QAbstractSpinBox {
     Q_OBJECT
 public:
     DistanceSpinBox(QWidget *parent = nullptr);
     virtual ~DistanceSpinBox();
 
-    QValidator::State validate(QString &, int &) const override;
-    virtual double valueFromText(const QString &) const override;
-    virtual QString textFromValue(double) const override;
+    QValidator::State validate(QString &text, int &) const override;
+    virtual void fixup(QString &text) const override;
+    virtual void stepBy(int steps) override;
+    virtual StepEnabled stepEnabled() const override;
+
+    void setValue(double val);
+    double value() const;
+
+signals:
+    void valueChanged(double);
+
+private slots:
+    void handleUpdate(const QString &);
+
+private:
+    static long parseValue(const QString &text, bool &ok, int &which_unit);
+    static QString formatValue(long val, int unit);
+    double current;
+    long internal;
+    int last_unit;
 };
 
 class NormalSelector;

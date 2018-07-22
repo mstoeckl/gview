@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFocusEvent>
+#include <QFontMetrics>
 #include <QGraphicsLineItem>
 #include <QGraphicsPathItem>
 #include <QGraphicsRectItem>
@@ -16,34 +17,201 @@
 #include <QPushButton>
 #include <QSignalMapper>
 
-DistanceSpinBox::DistanceSpinBox(QWidget *parent) : QDoubleSpinBox(parent) {
-    setRange(-10 * CLHEP::m, 10 * CLHEP::m);
-    // TODO: inherit QAbstractSpinBox instead, and establish proper stepping
-    // (outward increases units; inward never decreases them; from 0 uses
-    // default)
+const long dsb_max = 999900000000000L;
+static const int dsb_nunits = 4;
+static const char *dsb_units[dsb_nunits] = {"nm", "um", "mm", "m"};
+static const int dsb_default = 2; // mm
+static long ipow(long base, int exp) {
+    long v = 1;
+    for (int i = 0; i < exp; i++) {
+        v *= base;
+    }
+    return v;
+}
+static int idigits(long val) {
+    // 0,9 -> 1 ; 10,99 -> 2; 100,999->3
+    int e = 1;
+    while (std::abs(val) >= 10) {
+        val /= 10;
+        e++;
+    }
+    return e;
+}
+DistanceSpinBox::DistanceSpinBox(QWidget *parent) : QAbstractSpinBox(parent) {
+    setSpecialValueText("distance");
+    setAlignment(Qt::AlignRight);
+    setButtonSymbols(QAbstractSpinBox::UpDownArrows);
+    setCorrectionMode(QAbstractSpinBox::CorrectToNearestValue);
+    setWrapping(false);
+    setKeyboardTracking(true);
+    setInputMethodHints(Qt::ImhPreferNumbers | Qt::ImhPreferLowercase |
+                        Qt::ImhNoAutoUppercase);
+
+    QLineEdit *le = lineEdit();
+    le->setText("+0.000mm");
+    le->setMaxLength(8);
+
+    int w = QFontMetrics(qApp->font()).width("X+0.000mmXX");
+    this->setMinimumWidth(w + le->textMargins().left() +
+                          le->textMargins().right());
+
+    internal = 0;
+    current = 0;
+    last_unit = dsb_default;
+
+    connect(le, SIGNAL(textEdited(const QString &)), this,
+            SLOT(handleUpdate(const QString &)));
 }
 DistanceSpinBox::~DistanceSpinBox() {}
 
-QValidator::State DistanceSpinBox::validate(QString &text, int &pos) const {
-    if (text.size() < 3) {
-        return QValidator::Intermediate;
-    }
-    if (!text.endsWith("cm")) {
+QValidator::State DistanceSpinBox::validate(QString &input, int &) const {
+    bool ok;
+    int unit;
+    long v = parseValue(input, ok, unit);
+    if (!ok) {
         return QValidator::Invalid;
     }
+    QString t = formatValue(v, unit);
+    if (t == input) {
+        return QValidator::Acceptable;
+    }
+    return QValidator::Intermediate;
+}
+void DistanceSpinBox::fixup(QString &input) const {
+    bool ok = true;
+    int unit = dsb_default;
+    long v = parseValue(input, ok, unit);
+    input = formatValue(v, unit);
+}
+void DistanceSpinBox::stepBy(int steps) {
+    long base = ipow(1000, last_unit + 1);
+    if (internal == 0) {
+        internal += steps * base / 10;
+    } else {
+        int exp = idigits(internal);
+        long stepsize = ipow(10, exp);
+        internal += steps * stepsize / 10;
+    }
 
-    QString cpy = text.left(text.size() - 2);
-    QValidator::State s = QDoubleSpinBox::validate(cpy, pos);
-    text = cpy + "cm";
-    return s;
+    // Clamp value to range, update appropriate unit
+    internal = std::max(-dsb_max, std::min(dsb_max, internal));
+    if (internal == 0) {
+        // reset to the default unit, unless we were more precise
+        last_unit = std::min(dsb_default, last_unit);
+    } else {
+        while (std::abs(internal) >= 1000 * base) {
+            last_unit++;
+            base = ipow(1000, last_unit);
+        }
+    }
+    lineEdit()->setText(formatValue(internal, last_unit));
+
+    // On change, update current
+    double fv = CLHEP::nm * 1e-3 * internal;
+    if (fv != current) {
+        current = fv;
+        emit valueChanged(current);
+    }
 }
-double DistanceSpinBox::valueFromText(const QString &text) const {
-    return QDoubleSpinBox::valueFromText(text.left(text.size() - 2)) *
-           CLHEP::cm;
+QAbstractSpinBox::StepEnabled DistanceSpinBox::stepEnabled() const {
+    return (internal >= dsb_max ? StepNone : StepUpEnabled) |
+           (internal <= -dsb_max ? StepNone : StepDownEnabled);
 }
-QString DistanceSpinBox::textFromValue(double val) const {
-    return QDoubleSpinBox::textFromValue(val / CLHEP::cm) + "cm";
+void DistanceSpinBox::setValue(double val) {
+    current = val;
+    internal = std::lround(current / (1e-4 * CLHEP::nm)) / 10;
+    internal = std::max(-dsb_max, std::min(dsb_max, internal));
+    if (internal == 0) {
+        last_unit = dsb_default;
+    } else {
+        // Keep only top 4 digits
+        int exp = idigits(internal);
+        long base = ipow(10, std::max(exp - 4, 0));
+        internal = (internal / base) * base;
+        last_unit = std::max((exp - 4) / 3, 0);
+    }
+    lineEdit()->setText(formatValue(internal, last_unit));
 }
+double DistanceSpinBox::value() const { return current; }
+
+long DistanceSpinBox::parseValue(const QString &input, bool &ok,
+                                 int &which_unit) {
+    // ending; then float parse, round
+    QString r;
+    for (int i = 0; i < dsb_nunits; i++) {
+        // order matters, so nm, um, mm get matched before m
+        if (input.endsWith(dsb_units[i])) {
+            r = input.left(input.size() - strlen(dsb_units[i]));
+            which_unit = i;
+            break;
+        }
+    }
+    if (r.length() <= 0) {
+        ok = false;
+        return 0;
+    }
+    int sign = 1;
+    if (r[0] == QChar('+')) {
+        r = r.right(r.size() - 1);
+    } else if (r[0] == QChar('-')) {
+        sign = -1;
+        r = r.right(r.size() - 1);
+    }
+
+    bool aok = true;
+    double s = r.toDouble(&aok) * 1e3;
+    if (!aok) {
+        ok = aok;
+        return 0;
+    }
+    return std::lround(s) * ipow(1000, which_unit) * sign;
+}
+QString DistanceSpinBox::formatValue(long val, int unit) {
+    unit = std::max(0, std::min(dsb_nunits - 1, unit));
+    bool positive = val >= 0;
+    val = std::abs(val);
+
+    int root_exp = std::max(idigits(val) - 4, 0);
+    root_exp = std::max(unit * 3, root_exp);
+
+    long digits = val / ipow(10, std::max(root_exp, 0));
+    int d3 = (digits % 10000) / 1000;
+    int d2 = (digits % 1000) / 100;
+    int d1 = (digits % 100) / 10;
+    int d0 = (digits % 10);
+
+    QString num;
+    switch (root_exp % 3) {
+    default:
+    case 0:
+        num = QString("%1.%2%3%4").arg(d3).arg(d2).arg(d1).arg(d0);
+        break;
+    case 1:
+        num = QString("%1%2.%3%4").arg(d3).arg(d2).arg(d1).arg(d0);
+        break;
+    case 2:
+        num = QString("%1%2%3.%4").arg(d3).arg(d2).arg(d1).arg(d0);
+        break;
+    }
+
+    return (positive ? '+' : '-') + num + dsb_units[unit];
+}
+void DistanceSpinBox::handleUpdate(const QString &text) {
+    bool ok = true;
+    int unit = 2;
+    long lv = parseValue(text, ok, unit);
+    if (!ok) {
+        return;
+    }
+    internal = lv;
+    last_unit = unit;
+    double fv = CLHEP::nm * 1e-3 * lv;
+    if (fv != current) {
+        current = fv;
+        emit valueChanged(current);
+    }
+}
+
 NormalAxisSpinBox::NormalAxisSpinBox(NormalSelector *parent, int i)
     : QAbstractSpinBox(parent), link(parent), index(i) {
     setSpecialValueText(i == 0 ? "x" : (i == 1 ? "y" : "z"));
@@ -59,6 +227,10 @@ NormalAxisSpinBox::NormalAxisSpinBox(NormalSelector *parent, int i)
     le->setMaxLength(6);
     le->setInputMask("#9.999");
     le->setText("+0.000");
+
+    int w = QFontMetrics(qApp->font()).width("+3.141593");
+    this->setMinimumWidth(w + le->textMargins().left() +
+                          le->textMargins().right());
 
     connect(le, SIGNAL(textEdited(const QString &)), this,
             SLOT(handleUpdate()));
@@ -206,9 +378,11 @@ void NormalSelector::handleUpdate() {
     G4ThreeVector a(sx->apparentValue(xok), sy->apparentValue(yok),
                     sx->apparentValue(zok));
     if (xok && yok && zok && a.mag2() > 0.) {
-        // We have a valid state, up to scale.
-        current = a.unit();
-        emit valueChanged(current);
+        // We have a valid state, up to scale. Emit on change
+        if (a.unit() != current) {
+            current = a.unit();
+            emit valueChanged(current);
+        }
     }
 }
 void NormalSelector::trackFocusChange(QWidget *ow, QWidget *nw) {
