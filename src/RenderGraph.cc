@@ -93,7 +93,26 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
     }
 
     // Replace graph parts (and dependents) which need changing
-    if (oneshot) {
+    bool voxelrender = vd.tracks.getNTracks() > 0;
+    if (voxelrender && 0) {
+        tasks.clear();
+        task_voxel.clear();
+        for (int i = 0; i < panes.size(); i++) {
+            QSharedPointer<RenderGraphNode> vox(
+                new RenderVoxelTask(panes[i], im));
+            task_voxel.push_back(vox);
+        }
+        // TODO: dither merge with original
+
+        task_final = QSharedPointer<RenderGraphNode>(new RenderDummyTask());
+        for (const QSharedPointer<RenderGraphNode> &p : task_voxel) {
+            task_final->addDependency(p);
+        }
+        task_final->request();
+
+        tasks = task_voxel;
+        tasks.push_back(task_final);
+    } else if (oneshot) {
         task_color.clear();
         task_merge.clear();
         task_ray.clear();

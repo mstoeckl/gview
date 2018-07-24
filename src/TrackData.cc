@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "TrackData.hh"
 
+#include "Octree.hh"
 #include "RenderWorker.hh"
+
 #include <geomdefs.hh>
 
 #include <G4Deuteron.hh>
@@ -228,6 +230,12 @@ const TrackMetaData *TrackData::getMeta() const {
     }
     return data.constData()->meta;
 }
+const OctreeRoot *TrackData::getOctree() const {
+    if (!data) {
+        return NULL;
+    }
+    return data.constData()->octree;
+}
 
 void TrackData::calcTimeBounds(double &lower, double &upper) const {
     upper = -kInfinity;
@@ -320,7 +328,7 @@ int TrackData::calcMaxGenerations() const {
         }
     }
 
-    qDebug("CalcMaxGenerations can be very slow, hence skipping");
+    delete[] index;
     return (int)maxgen;
 }
 const QMap<int32_t, const G4ParticleDefinition *> TrackData::calcTypes() const {
@@ -394,6 +402,32 @@ static TrackMetaData *setupBallRadii(const TrackBlock *blocks, size_t ntracks) {
         meta[z].ballRadius = radius;
     }
     return meta;
+}
+
+static OctreeRoot *setupOctree(const TrackBlock *blocks, size_t ntracks) {
+    Bounds b = {{kInfinity, kInfinity, kInfinity},
+                {-kInfinity, -kInfinity, -kInfinity}};
+
+    QVector<SegAddr> all_idxs(ntracks * 3);
+    for (size_t z = 0, i = 0; z < ntracks; z++) {
+        const TrackHeader &h = blocks[i].h;
+        const TrackBlock *pts = &blocks[i + 1];
+        i += h.npts + 1;
+        for (int32_t j = 0; j < h.npts; j++) {
+            if (j < h.npts - 1) {
+                SegAddr a = {z, j};
+                all_idxs.push_back(a);
+            }
+            double p[3] = {pts[j].p.x, pts[j].p.y, pts[j].p.z};
+            for (int k = 0; k < 3; k++) {
+                b.min[k] = std::min(b.min[k], p[k]);
+                b.max[k] = std::max(b.max[k], p[k]);
+            }
+        }
+    }
+
+    OctreeRoot *octree = buildDensityOctree(blocks, all_idxs, b);
+    return octree;
 }
 
 static void constructRangeHistogram(const std::vector<float> &starts,
@@ -537,6 +571,8 @@ TrackPrivateData::TrackPrivateData(const char *filename) {
     }
 
     meta = setupBallRadii(data, ntracks);
+
+    octree = setupOctree(data, ntracks);
 }
 
 TrackPrivateData::TrackPrivateData(size_t itracks, size_t iblocks,
@@ -546,6 +582,7 @@ TrackPrivateData::TrackPrivateData(size_t itracks, size_t iblocks,
     mmapbytes = 0;
     data = idata;
     meta = setupBallRadii(data, ntracks);
+    octree = setupOctree(data, ntracks);
 }
 TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
     : QSharedData(other), ntracks(other.ntracks), nblocks(other.nblocks),
@@ -561,4 +598,5 @@ TrackPrivateData::~TrackPrivateData() {
     if (meta) {
         delete[] meta;
     }
+    deleteOctree(octree);
 }

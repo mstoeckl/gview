@@ -3,6 +3,7 @@
 
 #include "General.hh"
 #include "Navigator.hh"
+#include "Octree.hh"
 #include "RenderWorker.hh"
 #include "Shaders.hh"
 
@@ -487,6 +488,35 @@ void RenderColorTask::run(Context *ctx) {
             QRgb color =
                 shader(ray, trackcol, trackdist, *viewData, pt, forward);
             pts[j] = color;
+        }
+    }
+}
+
+RenderVoxelTask::RenderVoxelTask(QRect p, QSharedPointer<QImage> i)
+    : RenderGraphNode("voxel"), image(i), domain(p) {}
+
+void RenderVoxelTask::run(Context *ctx) {
+    int xl = domain.left();
+    int xh = domain.right();
+    int yl = domain.top();
+    int yh = domain.bottom();
+    const int w = ctx->grid.sampleWidth();
+    const ViewData &vd = *ctx->viewdata;
+    const OctreeRoot &octree = *ctx->viewdata->tracks.getOctree();
+
+    for (int i = yl; i < yh; i++) {
+        QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
+        for (int j = xl; j < xh; j++) {
+            if (nconsumers <= 0) {
+                return;
+            }
+
+            // For merging at correct depth
+            QPointF pt(ctx->grid.toViewCoord(j, i));
+            const G4ThreeVector &fr = initPoint(pt, vd);
+            const G4ThreeVector &dir = forwardDirection(vd.orientation);
+            FColor color = traceDensityRay(octree, fr, dir, kInfinity);
+            pts[j] = color.rgba();
         }
     }
 }

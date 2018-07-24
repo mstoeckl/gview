@@ -69,6 +69,7 @@ private:
     QElapsedTimer *timer;
     float progress;
 
+    QVector<QSharedPointer<RenderGraphNode>> task_voxel;
     QVector<QSharedPointer<RenderGraphNode>> task_track;
     QVector<QSharedPointer<RenderGraphNode>> task_ray;
     QVector<QSharedPointer<RenderGraphNode>> task_merge;

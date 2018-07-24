@@ -10,6 +10,7 @@
 
 class G4ParticleDefinition;
 typedef struct ViewData_s ViewData;
+typedef struct OctreeRoot_s OctreeRoot;
 
 typedef struct {
     int32_t npts;
@@ -54,6 +55,7 @@ public:
     size_t nblocks;
     TrackBlock *data;
     TrackMetaData *meta;
+    OctreeRoot *octree;
 
     TrackPrivateData(size_t itracks, size_t iblocks, TrackBlock *idata);
     explicit TrackPrivateData(const char *filename);
@@ -76,6 +78,7 @@ public:
     size_t getNTracks() const;
     const TrackBlock *getBlocks() const;
     const TrackMetaData *getMeta() const;
+    const OctreeRoot *getOctree() const;
     const QMap<int32_t, const G4ParticleDefinition *> calcTypes() const;
     void calcTimeBounds(double &lower, double &upper) const;
     void calcEnergyBounds(double &lower, double &upper) const;

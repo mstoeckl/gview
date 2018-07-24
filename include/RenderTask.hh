@@ -130,3 +130,13 @@ private:
     QSharedPointer<QImage> image;
     const QRect domain;
 };
+
+class RenderVoxelTask : public RenderGraphNode {
+public:
+    RenderVoxelTask(QRect p, QSharedPointer<QImage> i);
+    virtual void run(Context *);
+
+private:
+    QSharedPointer<QImage> image;
+    const QRect domain;
+};
