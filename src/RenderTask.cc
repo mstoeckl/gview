@@ -10,6 +10,8 @@
 #include <QImage>
 #include <geomdefs.hh>
 
+#define MAX_BUFFER_DEPTH 30
+
 RenderGraphNode::RenderGraphNode(const char *type)
     : status(kWaiting), name(type), reqs(), nconsumers(0) {}
 
@@ -81,10 +83,9 @@ void RenderRayTask::run(Context *ctx) {
 
     const G4ThreeVector &forward = forwardDirection(d->orientation);
 
-    const int M = 30;
-    Intersection ints[M];
-    Intersection aints[M];
-    int ndevs[M + 1];
+    Intersection ints[MAX_BUFFER_DEPTH];
+    Intersection aints[MAX_BUFFER_DEPTH];
+    int ndevs[MAX_BUFFER_DEPTH + 1];
 
     for (int i = yl; i < yh; i++) {
         QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
@@ -109,8 +110,8 @@ void RenderRayTask::run(Context *ctx) {
 
             QPointF pt(ctx->grid.toViewCoord(j, i));
             RayPoint r = rayAtPoint(*nav, pt, radius, forward, *d, ints, aints,
-                                    M, ndevs);
-            QRgb color = shader(r, trackcol, trackdist, *d, pt, forward);
+                                    MAX_BUFFER_DEPTH, ndevs);
+            QRgb color = shader(r, trackcol, trackdist, NULL, *d, pt, forward);
             pts[j] = color;
         }
     }
@@ -153,14 +154,14 @@ void RenderRayBufferTask::run(Context *ctx) {
 
     const G4ThreeVector &forward = forwardDirection(d->orientation);
 
-    const int M = 30;
-    Intersection ints[M];
-    Intersection aints[M];
-    int ndevs[M + 1];
+    Intersection ints[MAX_BUFFER_DEPTH];
+    Intersection aints[MAX_BUFFER_DEPTH];
+    int ndevs[MAX_BUFFER_DEPTH + 1];
 
     QVector<RayPoint> &rayData = *ray_data;
 
-    size_t max_usage = M * sizeof(Intersection) * (yh - yl + 1) * (xh - xl + 1);
+    size_t max_usage =
+        MAX_BUFFER_DEPTH * sizeof(Intersection) * (yh - yl + 1) * (xh - xl + 1);
     Intersection *const storage = (Intersection *)malloc(max_usage);
     size_t istored = 0;
 
@@ -174,7 +175,7 @@ void RenderRayBufferTask::run(Context *ctx) {
 
             QPointF pt(ctx->grid.toViewCoord(j, i));
             RayPoint r = rayAtPoint(*nav, pt, radius, forward, *d, ints, aints,
-                                    M, ndevs);
+                                    MAX_BUFFER_DEPTH, ndevs);
 
             // Store ray, and copy its intersections to the buffer
             rayData[i * w + j] = r;
@@ -448,9 +449,10 @@ void RenderMergeTask::run(Context *ctx) {
 
 RenderColorTask::RenderColorTask(QRect p, QSharedPointer<QVector<RayPoint>> r,
                                  QSharedPointer<FlatData> f,
+                                 QSharedPointer<VoxData> v,
                                  QSharedPointer<QImage> i)
-    : RenderGraphNode("color"), ray_data(r), flat_data(f), image(i), domain(p) {
-}
+    : RenderGraphNode("color"), ray_data(r), flat_data(f), vox_data(v),
+      image(i), domain(p) {}
 void RenderColorTask::run(Context *ctx) {
     int xl = domain.left();
     int xh = domain.right();
@@ -461,6 +463,7 @@ void RenderColorTask::run(Context *ctx) {
     const FlatData &flatData = *flat_data;
     const ViewData *viewData = ctx->viewdata;
     const QVector<RayPoint> &rayData = *ray_data;
+    const VoxData &voxData = *vox_data;
     const G4ThreeVector &forward = forwardDirection(viewData->orientation);
     GeoShader &shader = *getGeoShader(viewData->gshader);
 
@@ -485,38 +488,93 @@ void RenderColorTask::run(Context *ctx) {
 
             const RayPoint &ray = rayData[sidx];
             QPointF pt(ctx->grid.toViewCoord(j, i));
-            QRgb color =
-                shader(ray, trackcol, trackdist, *viewData, pt, forward);
+            QRgb color = shader(ray, trackcol, trackdist,
+                                voxData.blank ? NULL : voxData.voxtrails[sidx],
+                                *viewData, pt, forward);
             pts[j] = color;
         }
     }
 }
 
-RenderVoxelTask::RenderVoxelTask(QRect p, QSharedPointer<QImage> i)
-    : RenderGraphNode("voxel"), image(i), domain(p) {}
-
-void RenderVoxelTask::run(Context *ctx) {
+RenderVoxelBufferTask::RenderVoxelBufferTask(
+    QRect p, QSharedPointer<VoxData> iv, QSharedPointer<QVector<RayPoint>> r)
+    : RenderGraphNode("voxel"), voxray_data(iv), ray_data(r),
+      voxel_store(nullptr), domain(p) {}
+RenderVoxelBufferTask::~RenderVoxelBufferTask() { free(voxel_store); }
+void RenderVoxelBufferTask::run(Context *ctx) {
     int xl = domain.left();
     int xh = domain.right();
     int yl = domain.top();
     int yh = domain.bottom();
+
     const int w = ctx->grid.sampleWidth();
     const ViewData &vd = *ctx->viewdata;
+    VoxData &voxData = *voxray_data;
+    if (!ctx->viewdata->tracks.getOctree()) {
+        // If no octree, do no work
+        voxData.blank = true;
+        return;
+    }
     const OctreeRoot &octree = *ctx->viewdata->tracks.getOctree();
+    voxData.blank = false;
+
+    const QVector<RayPoint> &rayData = *ray_data;
+
+    size_t max_usage =
+        (MAX_BUFFER_DEPTH + 1) * sizeof(double) * (yh - yl + 1) * (xh - xl + 1);
+    double *const storage = (double *)malloc(max_usage);
+    size_t istored = 0;
 
     for (int i = yl; i < yh; i++) {
-        QRgb *pts = reinterpret_cast<QRgb *>(image->scanLine(i));
         for (int j = xl; j < xh; j++) {
             if (nconsumers <= 0) {
                 return;
             }
 
+            int sidx = i * w + j;
+
             // For merging at correct depth
             QPointF pt(ctx->grid.toViewCoord(j, i));
             const G4ThreeVector &fr = initPoint(pt, vd);
             const G4ThreeVector &dir = forwardDirection(vd.orientation);
-            FColor color = traceDensityRay(octree, fr, dir, kInfinity);
-            pts[j] = color.rgba();
+
+            const RayPoint &r = rayData[sidx];
+            double *start = &storage[istored];
+            voxData.voxtrails[sidx] = start;
+            double da = r.N ? r.intersections[0].dist : kInfinity;
+            start[0] = traceDensityRay(octree, fr, dir, da);
+
+            for (int z = 0; z < r.N - 1; z++) {
+                double d0 = r.intersections[z].dist,
+                       d1 = r.intersections[z + 1].dist;
+                start[z + 1] =
+                    traceDensityRay(octree, fr + dir * d1, dir, d1 - d0);
+            }
+            if (r.N) {
+                start[r.N] = traceDensityRay(
+                    octree, fr + dir * r.intersections[r.N - 1].dist, dir,
+                    kInfinity);
+            }
+            istored += r.N + 1;
         }
+    }
+
+    //  Realloc and shrink everything. TODO: make a wrapper class!
+    if (istored > 0) {
+        // If any point had an intersection
+        double *verif =
+            (double *)realloc((void *)storage, istored * sizeof(double));
+        if (verif != storage) {
+            // Fix up pointers if the memory is moved
+            for (int i = yl; i < yh; i++) {
+                for (int j = xl; j < xh; j++) {
+                    voxData.voxtrails[i * w + j] += verif - storage;
+                }
+            }
+        }
+        voxel_store = verif;
+    } else {
+        free(storage);
+        voxel_store = NULL;
     }
 }

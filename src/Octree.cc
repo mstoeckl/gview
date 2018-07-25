@@ -5,7 +5,7 @@
 #include <G4ThreeVector.hh>
 #include <geomdefs.hh>
 
-#define DEPTH_LIMIT 7
+#define DEPTH_LIMIT 10
 
 static G4ThreeVector centerPoint(const Bounds &b) {
     return G4ThreeVector(0.5 * (b.min[0] + b.max[0]),
@@ -61,7 +61,7 @@ static QVector<SegAddr> selectTracksInBlock(const TrackBlock *blocks,
                                             const Bounds &subbounds) {
     QVector<SegAddr> ret;
     for (SegAddr addr : indices) {
-        const TrackPoint *seq = &(blocks[addr.track + 1].p);
+        const TrackPoint *seq = &(blocks[addr.header_pos + 1].p);
         const G4ThreeVector va(seq[addr.i].x, seq[addr.i].y, seq[addr.i].z);
         const G4ThreeVector vb(seq[addr.i + 1].x, seq[addr.i + 1].y,
                                seq[addr.i + 1].z);
@@ -76,42 +76,126 @@ static QVector<SegAddr> selectTracksInBlock(const TrackBlock *blocks,
     return ret;
 }
 
+static double blockVol(const Bounds &bounds) {
+    return (bounds.max[2] - bounds.min[2]) * (bounds.max[1] - bounds.min[1]) *
+           (bounds.max[0] - bounds.min[0]);
+}
+
+typedef struct {
+    bool below_is_A, below_is_B;
+} PtSides;
+
 static void initOctree(OctreeNode &node, const TrackBlock *blocks,
-                       const QVector<SegAddr> &indices, const Bounds &bounds,
-                       int split_thresh, int depth, long &node_count) {
-    qDebug("node %ld: depth=%d n=%d", node_count, depth, indices.size());
+                       SegAddr **seg_buffer, int N_at_depth,
+                       const Bounds &bounds, int split_thresh, int depth,
+                       long &node_count, int nevt) {
+    if (node_count % 1000 == 0) {
+        qDebug("node %ld: depth=%d n=%d", node_count, depth, N_at_depth);
+    }
     node_count++;
-    // relative density (?)
-    node.total = indices.size();
-    if (indices.size() < split_thresh || depth >= DEPTH_LIMIT - 1) {
+    // Calculate node density per unit. As lines typically span length, multiply
+    // by estimated net line amount, around (V^(1/3)).
+    node.density =
+        N_at_depth / (double)nevt / std::pow(blockVol(bounds), 1. / 1.5);
+
+    if (N_at_depth < split_thresh || depth >= DEPTH_LIMIT - 1) {
         node.children = NULL;
         return;
     } else {
         node.children = new OctreeNode[8];
         G4ThreeVector mid = centerPoint(bounds);
+        bool by_planes = true;
+        QVector<PtSides> sides[3];
+        QVector<float> splits[3];
+        SegAddr *seg_parent = seg_buffer[depth];
+        SegAddr *seg_child = seg_buffer[depth + 1];
+        if (by_planes) {
+            for (int axis = 0; axis < 3; axis++) {
+                sides[axis].resize(N_at_depth);
+                splits[axis].resize(N_at_depth);
+
+                // Along each axis, identify the line splitting point (if there
+                // is one) and determine where the parts belong
+                for (int k = 0; k < N_at_depth; k++) {
+                    const SegAddr &addr = seg_parent[k];
+                    const TrackBlock *seq = &blocks[addr.header_pos + 1];
+                    const G4ThreeVector va(seq[addr.i].p.x, seq[addr.i].p.y,
+                                           seq[addr.i].p.z);
+                    const G4ThreeVector vb(seq[addr.i + 1].p.x,
+                                           seq[addr.i + 1].p.y,
+                                           seq[addr.i + 1].p.z);
+
+                    G4ThreeVector pmin = va * (1. - addr.min) + addr.min * vb;
+                    G4ThreeVector pmax = va * (1. - addr.max) + addr.max * vb;
+                    PtSides sch = {pmin[axis] < mid[axis],
+                                   pmax[axis] < mid[axis]};
+                    if (sch.below_is_A != sch.below_is_B) {
+                        // The segment spans the middle; we calculate the split
+                        // point
+                        double t =
+                            (mid[axis] - va[axis]) / (vb[axis] - va[axis]);
+                        splits[axis][k] = t;
+                    }
+                    sides[axis][k] = sch;
+                }
+            }
+        }
+
         for (uint32_t i = 0; i < 8; i++) {
-            bool l[3] = {(bool)(i & 0x01), (bool)(i & 0x02), (bool)(i & 0x04)};
+            bool upper[3] = {(bool)(i & 0x01), (bool)(i & 0x02),
+                             (bool)(i & 0x04)};
             Bounds subbounds;
             for (int k = 0; k < 3; k++) {
-                subbounds.min[k] = l[k] ? mid[k] : bounds.min[k];
-                subbounds.max[k] = l[k] ? bounds.max[k] : mid[k];
+                subbounds.min[k] = upper[k] ? mid[k] : bounds.min[k];
+                subbounds.max[k] = upper[k] ? bounds.max[k] : mid[k];
             }
-            // TODO: classify the paths along each axis -- which halfbox?
-            // after all, 6 halfboxes is easier than 8 corners.
-            // also, perform class using the much shorter segments.
 
-            // furthermore -- we *already* know that the line segment intersects
-            // the box. So really, *if* we store tstart/tend, then
-            // plane comparisons (against the composite vectors) are all that
-            // are necessary; (these in turn, generate tmid-planeX, tmid-planeY,
-            // etc.) then moving down, a simple sorting network resolves the
-            // final T range.
+            // Based on the side classification, select all matching
 
-            // TODO: how do we handle tight bundles of paths?
-            const QVector<SegAddr> &subindices =
-                selectTracksInBlock(blocks, indices, subbounds);
-            initOctree(node.children[i], blocks, subindices, subbounds,
-                       split_thresh, depth + 1, node_count);
+            int N_sub = 0;
+            if (by_planes) {
+                for (int k = 0; k < N_at_depth; k++) {
+                    SegAddr seg = seg_parent[k];
+                    bool keep = true;
+                    for (int axis = 0; axis < 3; axis++) {
+                        PtSides sch = sides[axis][k];
+                        if (upper[axis]) {
+                            if (sch.below_is_A && sch.below_is_B) {
+                                keep = false;
+                                break;
+                            } else if (!sch.below_is_A && !sch.below_is_B) {
+                                // segment above, no action
+                            } else if (sch.below_is_A && !sch.below_is_B) {
+                                // segment moving up and in
+                                seg.min = std::max(seg.min, splits[axis][k]);
+                            } else if (!sch.below_is_A && sch.below_is_B) {
+                                // segment moving down and out
+                                seg.max = std::min(seg.max, splits[axis][k]);
+                            }
+                        } else {
+                            if (sch.below_is_A && sch.below_is_B) {
+                                // segment below, no action
+                            } else if (!sch.below_is_A && !sch.below_is_B) {
+                                keep = false;
+                                break;
+                            } else if (sch.below_is_A && !sch.below_is_B) {
+                                // segment moving up and out
+                                seg.max = std::min(seg.max, splits[axis][k]);
+                            } else if (!sch.below_is_A && sch.below_is_B) {
+                                // segment moving down and in
+                                seg.min = std::max(seg.min, splits[axis][k]);
+                            }
+                        }
+                    }
+                    if (keep && seg.max > seg.min) {
+                        seg_child[N_sub++] = seg;
+                    }
+                }
+            } else {
+                // subindices = selectTracksInBlock(blocks, indices, subbounds);
+            }
+            initOctree(node.children[i], blocks, seg_buffer, N_sub, subbounds,
+                       split_thresh, depth + 1, node_count, nevt);
         }
     }
 }
@@ -122,12 +206,25 @@ OctreeRoot *buildDensityOctree(const TrackBlock *blocks,
     OctreeRoot *root = new OctreeRoot();
     root->bounds = bounds;
 
+    // Buffer setup (TODO: limit overallocation)
+    SegAddr **temp_stacks = new SegAddr *[DEPTH_LIMIT + 1];
+    temp_stacks[0] = (SegAddr *)indices.data();
+    for (int i = 1; i < DEPTH_LIMIT + 1; i++) {
+        temp_stacks[i] = new SegAddr[indices.size()];
+    }
+
     long node_count = 0;
-    int split_thresh = indices.size() / 1000;
-    initOctree(root->tree, blocks, indices, root->bounds, split_thresh, 0,
-               node_count);
+    int split_thresh = indices.size() / 10000;
+    initOctree(root->tree, blocks, temp_stacks, indices.size(), root->bounds,
+               split_thresh, 0, node_count, indices.size());
     long max_node_count =
         ((1L << (DEPTH_LIMIT * 3 + 3)) - 1) / ((1L << DEPTH_LIMIT) - 1);
+
+    // Buffer cleanup
+    for (int i = 1; i < DEPTH_LIMIT + 1; i++) {
+        delete[] temp_stacks[i];
+    }
+    delete[] temp_stacks;
 
     qDebug("%ld/%ld total octree nodes", node_count, max_node_count);
     return root;
@@ -143,10 +240,6 @@ static void delOct(const OctreeNode &n) {
 void deleteOctree(const OctreeRoot *n) {
     delOct(n->tree);
     delete n;
-}
-
-static float hyptan(float f) {
-    return (std::exp(f) - std::exp(-f)) / (std::exp(f) + std::exp(-f));
 }
 
 static double crossDistance(const G4ThreeVector &p, const G4ThreeVector &dir,
@@ -235,54 +328,18 @@ static double recursiveCubeIntegral(const OctreeNode &node,
         return total;
 
     } else {
-        //        double t_start = 0., t_end = t_max;
-        //        int fclipaxis = -1, bclipaxis = -1;
-        //        clipBox(start, direction, bounds, t_start, t_end, fclipaxis,
-        //        bclipaxis); if (t_end <= t_start) {
-        //            return 0;
-        //        }
-        //        return (t_end - t_start) * node.value;
-
-        // sums can be greater than individual?
-        return node.total;
-        //        return cxdist * node.total;
-    } /*
-
-
-     // For now, trivial iteration.
-     double total = 0.;
-     G4ThreeVector mid = centerPoint(bounds);
-     for (uint32_t i = 0; i < 8; i++) {
-         bool l[3] = {(bool)(i & 0x01), (bool)(i & 0x02), (bool)(i & 0x04)};
-         Bounds subbounds;
-         for (int k = 0; k < 3; k++) {
-             subbounds.min[k] = l[k] ? mid[k] : bounds.min[k];
-             subbounds.max[k] = l[k] ? bounds.max[k] : mid[k];
-         }
-
-         double t_start = 0., t_end = t_max;
-         int fclipaxis = -1, bclipaxis = -1;
-         clipBox(start, direction, subbounds, t_start, t_end, fclipaxis,
-                 bclipaxis);
-         if (t_end <= t_start) {
-             continue;
-         }
-
-         double amt = t_end - t_start;
-         total += amt;
-     }
-     qDebug("%f %f", t_max, total);
-     return total;*/
+        return node.density * cxdist;
+    }
 }
 
-FColor traceDensityRay(const OctreeRoot &root, const G4ThreeVector &start,
+double traceDensityRay(const OctreeRoot &root, const G4ThreeVector &start,
                        const G4ThreeVector &direction, double t_max) {
     // TODO: clip start/end offsets, and enter true recursive case
 
     // TODO: locate start location, & use recursive navigation method
     // (but with an *explicit* stack)
-    int coords[DEPTH_LIMIT + 2];
-    int depth = 0;
+    //    int coords[DEPTH_LIMIT + 2];
+    //    int depth = 0;
 
     // TODO: clip to bounds!
     double t_start = -kInfinity, t_end = kInfinity;
@@ -294,10 +351,10 @@ FColor traceDensityRay(const OctreeRoot &root, const G4ThreeVector &start,
     //    qDebug("%f %f | %d %d", t_start, t_end, fclipaxis, bclipaxis);
 
     if (t_start < 0) {
-        return FColor(0., 0, 0, 1);
+        return 0.; // FColor(0., 0, 0, 1);
     }
     if (t_end < t_start) {
-        return FColor(0.5, 0.5, 0.5, 1);
+        return 0.; // FColor(0.5, 0.5, 0.5, 1);
     }
     G4ThreeVector contact = start + direction * t_start;
 
@@ -307,23 +364,8 @@ FColor traceDensityRay(const OctreeRoot &root, const G4ThreeVector &start,
                                      start + t_start * direction, direction,
                                      t_end - t_start);
 
-    //    qDebug("%f %f %f mm", contact.x(), contact.y(), contact.z());
-    //    if (t_start > t_end) {
-    //        return FColor(1., 0, 0, 1);
-    //    }
-
-    //    double mtl = t_end - t_start;
-    //    qDebug("%f | %f", v, mtl);
-    //    qDebug("%f %f", t_start, t_end);
-
-    //    double xd = (root.bounds.max - root.bounds.min).mag();
-    //    double scale_val = 10000.0; // xd * root.tree.value ;
-    double scale_val = root.tree.total;
-    //    qDebug("%f %f %f", v, scale_val, xd);
-
-    //    qDebug("%f %f", v, scale_val);
-    float s = hyptan(v / scale_val);
-    //    float k = hyptan(t_end / nat_dist);
-    //    qDebug("%f %f -> %f %f", t_start / nat_dist, t_end / nat_dist, s, k);
-    return FColor(1. - s, 1. - s, 1., 0.5);
+    // Normalize by the total tree density
+    double xd = (root.bounds.max - root.bounds.min).mag();
+    double scale_val = root.tree.density * xd;
+    return v / scale_val;
 }

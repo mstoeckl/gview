@@ -62,6 +62,7 @@ public slots:
     void updateNavigator();
     void updateGShader();
     void updateTShader();
+    void updateVoxDens();
     void updateShowLines();
     void screenshot(int sx = 1);
     void vectorTScreenshot();
@@ -112,6 +113,7 @@ private:
     QCheckBox *mtl_showlines;
     QComboBox *navig_sel, *gshader_sel, *tshader_sel;
     ColorConfig *color_config;
+    QDoubleSpinBox *vox_density;
     QComboBox *pivot_volume;
 
     QMenu *gpicker_menu;

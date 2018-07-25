@@ -93,26 +93,8 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
     }
 
     // Replace graph parts (and dependents) which need changing
-    bool voxelrender = vd.tracks.getNTracks() > 0;
-    if (voxelrender && 0) {
-        tasks.clear();
+    if (oneshot) {
         task_voxel.clear();
-        for (int i = 0; i < panes.size(); i++) {
-            QSharedPointer<RenderGraphNode> vox(
-                new RenderVoxelTask(panes[i], im));
-            task_voxel.push_back(vox);
-        }
-        // TODO: dither merge with original
-
-        task_final = QSharedPointer<RenderGraphNode>(new RenderDummyTask());
-        for (const QSharedPointer<RenderGraphNode> &p : task_voxel) {
-            task_final->addDependency(p);
-        }
-        task_final->request();
-
-        tasks = task_voxel;
-        tasks.push_back(task_final);
-    } else if (oneshot) {
         task_color.clear();
         task_merge.clear();
         task_ray.clear();
@@ -192,6 +174,24 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
             }
         }
 
+        if (geo_changed || tracks_changed || task_voxel.size() <= 0) {
+            task_voxel.clear();
+
+            QSharedPointer<QVector<RayPoint>> ray_data =
+                reinterpret_cast<RenderRayBufferTask *>(task_raybuf[0].data())
+                    ->ray_data;
+            QSharedPointer<VoxData> voxdata(new VoxData(w, h));
+            for (int i = 0; i < panes.size(); i++) {
+                QSharedPointer<RenderGraphNode> vox(
+                    new RenderVoxelBufferTask(panes[i], voxdata, ray_data));
+                // TODO: use rectangle intersection to find overlaps
+                for (const QSharedPointer<RenderGraphNode> &p : task_raybuf) {
+                    vox->addDependency(p);
+                }
+                task_voxel.push_back(vox);
+            }
+        }
+
         if (1) {
             (void)color_changed;
             task_color.clear();
@@ -199,21 +199,27 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
             QSharedPointer<QVector<RayPoint>> ray_data =
                 reinterpret_cast<RenderRayBufferTask *>(task_raybuf[0].data())
                     ->ray_data;
+            QSharedPointer<VoxData> vox_data =
+                reinterpret_cast<RenderVoxelBufferTask *>(task_voxel[0].data())
+                    ->voxray_data;
             QSharedPointer<FlatData> flat_data =
                 reinterpret_cast<RenderMergeTask *>(task_merge[0].data())
                     ->flat_data;
-            if (ray_data.isNull() || flat_data.isNull()) {
+            if (ray_data.isNull() || flat_data.isNull() || vox_data.isNull()) {
                 qFatal("Null color dependents");
             }
 
             for (int i = 0; i < rows.size(); i++) {
-                QSharedPointer<RenderGraphNode> color(
-                    new RenderColorTask(rows[i], ray_data, flat_data, im));
+                QSharedPointer<RenderGraphNode> color(new RenderColorTask(
+                    rows[i], ray_data, flat_data, vox_data, im));
                 // TODO: use rectangle intersection test to find overlaps
                 for (const QSharedPointer<RenderGraphNode> &p : task_merge) {
                     color->addDependency(p);
                 }
                 for (const QSharedPointer<RenderGraphNode> &p : task_raybuf) {
+                    color->addDependency(p);
+                }
+                for (const QSharedPointer<RenderGraphNode> &p : task_voxel) {
                     color->addDependency(p);
                 }
                 task_color.push_back(color);
@@ -226,7 +232,7 @@ void RenderGraph::start(QSharedPointer<QImage> im, const GridSpec &grid,
         }
         task_final->request();
 
-        tasks = task_track + task_merge + task_raybuf + task_color;
+        tasks = task_track + task_merge + task_raybuf + task_color + task_voxel;
         tasks.push_back(task_final);
     }
 

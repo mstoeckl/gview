@@ -411,19 +411,25 @@ static OctreeRoot *setupOctree(const TrackBlock *blocks, size_t ntracks) {
     QVector<SegAddr> all_idxs(ntracks * 3);
     for (size_t z = 0, i = 0; z < ntracks; z++) {
         const TrackHeader &h = blocks[i].h;
+        const size_t header_index = i;
         const TrackBlock *pts = &blocks[i + 1];
-        i += h.npts + 1;
         for (int32_t j = 0; j < h.npts; j++) {
             if (j < h.npts - 1) {
-                SegAddr a = {z, j};
+                SegAddr a = {header_index, j, 0.f, 1.f};
                 all_idxs.push_back(a);
             }
-            double p[3] = {pts[j].p.x, pts[j].p.y, pts[j].p.z};
+            G4ThreeVector p(pts[j].p.x, pts[j].p.y, pts[j].p.z);
+            if (std::isnan(pts[j].p.x) || std::isnan(pts[j].p.y) ||
+                std::isnan(pts[j].p.y)) {
+                qFatal("Encountered a NAN! This is bad!");
+            }
+
             for (int k = 0; k < 3; k++) {
                 b.min[k] = std::min(b.min[k], p[k]);
                 b.max[k] = std::max(b.max[k], p[k]);
             }
         }
+        i += h.npts + 1;
     }
 
     OctreeRoot *octree = buildDensityOctree(blocks, all_idxs, b);
@@ -572,7 +578,8 @@ TrackPrivateData::TrackPrivateData(const char *filename) {
 
     meta = setupBallRadii(data, ntracks);
 
-    octree = setupOctree(data, ntracks);
+    //    octree = setupOctree(data, ntracks);
+    octree = NULL;
 }
 
 TrackPrivateData::TrackPrivateData(size_t itracks, size_t iblocks,
@@ -582,7 +589,8 @@ TrackPrivateData::TrackPrivateData(size_t itracks, size_t iblocks,
     mmapbytes = 0;
     data = idata;
     meta = setupBallRadii(data, ntracks);
-    octree = setupOctree(data, ntracks);
+    //    octree = setupOctree(data, ntracks);
+    octree = NULL;
 }
 TrackPrivateData::TrackPrivateData(const TrackPrivateData &other)
     : QSharedData(other), ntracks(other.ntracks), nblocks(other.nblocks),

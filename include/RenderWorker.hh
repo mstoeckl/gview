@@ -120,6 +120,7 @@ typedef struct ViewData_s {
     G4double scene_radius;
     std::vector<Plane> clipping_planes;
     std::vector<VColor> color_table;
+    double voxel_base_density;
     bool split_by_material;
     int navigator, gshader, tshader;
     bool force_opaque;

@@ -28,6 +28,18 @@ public:
     }
 };
 
+class VoxData {
+public:
+    const int w, h;
+    bool blank;
+    double **voxtrails;
+    VoxData(int iw, int ih) : w(iw), h(ih) {
+        voxtrails = (double **)malloc(w * h * sizeof(double *));
+        blank = true;
+    }
+    ~VoxData() { free(voxtrails); }
+};
+
 /**
  * RenderGraphNode is a single render graph node to compute
  * some quantity once. It aborts the calculation when no nodes
@@ -121,22 +133,29 @@ private:
 class RenderColorTask : public RenderGraphNode {
 public:
     RenderColorTask(QRect p, QSharedPointer<QVector<RayPoint>> r,
-                    QSharedPointer<FlatData> f, QSharedPointer<QImage> i);
+                    QSharedPointer<FlatData> f, QSharedPointer<VoxData> v,
+                    QSharedPointer<QImage> i);
     virtual void run(Context *);
 
 private:
     QSharedPointer<QVector<RayPoint>> ray_data;
     QSharedPointer<FlatData> flat_data;
+    QSharedPointer<VoxData> vox_data;
     QSharedPointer<QImage> image;
     const QRect domain;
 };
 
-class RenderVoxelTask : public RenderGraphNode {
+class RenderVoxelBufferTask : public RenderGraphNode {
 public:
-    RenderVoxelTask(QRect p, QSharedPointer<QImage> i);
+    RenderVoxelBufferTask(QRect p, QSharedPointer<VoxData> voxray_data,
+                          QSharedPointer<QVector<RayPoint>> r);
+    virtual ~RenderVoxelBufferTask();
     virtual void run(Context *);
 
+    QSharedPointer<VoxData> voxray_data;
+
 private:
-    QSharedPointer<QImage> image;
+    QSharedPointer<QVector<RayPoint>> ray_data;
+    double *voxel_store;
     const QRect domain;
 };

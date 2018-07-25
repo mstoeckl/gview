@@ -133,6 +133,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vd.navigator = nFastVolNav;
     vd.tshader = tshaderRainbow;
     vd.gshader = gshaderDefault;
+    vd.voxel_base_density = 1.0;
     vd.clipping_planes = std::vector<Plane>();
     which_tracks = track_options.size() > 0 ? 1 : 0;
 
@@ -414,6 +415,12 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     connect(tshader_sel, SIGNAL(currentIndexChanged(int)), this,
             SLOT(updateTShader()));
 
+    vox_density = new QDoubleSpinBox();
+    vox_density->setDecimals(3);
+    vox_density->setRange(-10., 10.);
+    connect(vox_density, SIGNAL(valueChanged(double)), this,
+            SLOT(updateVoxDens()));
+
     std::vector<const G4Material *> mtl_list =
         constructMaterialList(geo_options);
     color_config = new ColorConfig(vd, mtl_list);
@@ -423,6 +430,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     mla->addWidget(navig_sel);
     mla->addWidget(gshader_sel);
     mla->addWidget(tshader_sel);
+    mla->addWidget(vox_density);
     mla->addWidget(color_config);
     mtlc->setLayout(mla);
     dock_color->setWidget(mtlc);
@@ -920,6 +928,11 @@ void Viewer::updateGShader() {
 void Viewer::updateTShader() {
     vd.tshader = tshader_sel->currentData().toInt();
     rwidget->rerender(CHANGE_TRACK);
+}
+
+void Viewer::updateVoxDens() {
+    vd.voxel_base_density = std::exp2(vox_density->value());
+    rwidget->rerender(CHANGE_COLOR);
 }
 
 void Viewer::updateShowLines() {

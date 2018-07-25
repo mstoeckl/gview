@@ -9,7 +9,7 @@
 typedef struct OctreeNode_s OctreeNode;
 struct OctreeNode_s {
     // data?
-    double total;
+    double density;
     OctreeNode *children; // pointer to an array of 8
 };
 typedef struct {
@@ -18,8 +18,9 @@ typedef struct {
 } Bounds;
 
 typedef struct {
-    size_t track;
+    size_t header_pos;
     int32_t i;
+    float min, max;
 } SegAddr;
 
 typedef struct OctreeRoot_s {
@@ -32,7 +33,7 @@ OctreeRoot *buildDensityOctree(const TrackBlock *blocks,
                                const Bounds &bounds);
 
 typedef struct RayPoint_s RayPoint;
-FColor traceDensityRay(const OctreeRoot &root, const G4ThreeVector &start,
+double traceDensityRay(const OctreeRoot &root, const G4ThreeVector &start,
                        const G4ThreeVector &direction, double distance);
 
 void deleteOctree(const OctreeRoot *);

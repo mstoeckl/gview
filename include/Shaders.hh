@@ -6,8 +6,8 @@
 // Q: just use a function pointer -- could save time & avoid allocproblem
 
 typedef QRgb GeoShader(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                       const ViewData &d, const QPointF &pt,
-                       const G4ThreeVector &forward);
+                       double *voxel_density, const ViewData &d,
+                       const QPointF &pt, const G4ThreeVector &forward);
 typedef void TrackShader(const TrackHeader &h, const TrackPoint &pa,
                          const TrackPoint &pb, const G4ThreeVector &a,
                          const G4ThreeVector &b, const G4ThreeVector &forward,

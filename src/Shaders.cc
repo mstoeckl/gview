@@ -35,8 +35,8 @@ static FColor colorMap(const Intersection &intersection,
 }
 
 QRgb defaultColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                        const ViewData &d, const QPointF &pt,
-                        const G4ThreeVector &forward) {
+                        double *voxel_cumulants, const ViewData &d,
+                        const QPointF &pt, const G4ThreeVector &forward) {
     /* Scan from front to back, as this gives the option of quitting early */
     /* Each intersection is a transition between two domains */
     FColor color(0., 0., 0., 0.);
@@ -80,24 +80,44 @@ QRgb defaultColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
 }
 
 QRgb normalColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                       const ViewData &, const QPointF &,
-                       const G4ThreeVector &) {
-    if (ray.N <= 0) {
-        return trackcol;
-    }
+                       double *voxel_cumulants, const ViewData &d,
+                       const QPointF &, const G4ThreeVector &) {
+    if (voxel_cumulants) {
+        FColor voxc(0.5, 0.5, 0.5, 1.);
+        FColor bgc(1., 1., 1., 0.);
+        FColor line(0., 0., 0., 1.);
 
-    const Intersection &i = ray.intersections[0];
-    if (i.dist > trackdist || i.ecode == CODE_END) {
-        return trackcol;
-    }
+        // TODO: make last parameter & all color choices tunable
+        double s = std::exp(-voxel_cumulants[0] / d.voxel_base_density);
+        if (ray.N <= 0) {
+            return FColor::blend(voxc, bgc, s).rgba();
+        }
+        const Intersection &i = ray.intersections[0];
+        if (i.ecode == CODE_END) {
+            return FColor::blend(voxc, bgc, s).rgba();
+        }
+        if (i.ecode == CODE_LINE) {
+            return FColor::blend(voxc, line, s).rgba();
+        }
+        FColor col((i.normal.x + 1.0) / 2, (i.normal.y + 1.0) / 2,
+                   (i.normal.z + 1.0) / 2);
+        return FColor::blend(voxc, col, s).rgba();
+    } else {
+        if (ray.N <= 0) {
+            return trackcol;
+        }
+        const Intersection &i = ray.intersections[0];
+        if (i.dist > trackdist || i.ecode == CODE_END) {
+            return trackcol;
+        }
+        if (i.ecode == CODE_LINE) {
+            return qRgba(0, 0, 0, 255);
+        }
 
-    if (i.ecode == CODE_LINE) {
-        return qRgba(0, 0, 0, 255);
+        FColor col((i.normal.x + 1.0) / 2, (i.normal.y + 1.0) / 2,
+                   (i.normal.z + 1.0) / 2);
+        return col.rgba();
     }
-
-    FColor col((i.normal.x + 1.0) / 2, (i.normal.y + 1.0) / 2,
-               (i.normal.z + 1.0) / 2);
-    return col.rgba();
 }
 
 void rainbowColorForSegment(const TrackHeader &h, const TrackPoint &pa,
