@@ -238,8 +238,10 @@ static void delOct(const OctreeNode &n) {
     }
 }
 void deleteOctree(const OctreeRoot *n) {
-    delOct(n->tree);
-    delete n;
+    if (n) {
+        delOct(n->tree);
+        delete n;
+    }
 }
 
 static double crossDistance(const G4ThreeVector &p, const G4ThreeVector &dir,

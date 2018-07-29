@@ -27,6 +27,7 @@
 #include <QCheckBox>
 #include <QCollator>
 #include <QComboBox>
+#include <QContextMenuEvent>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
@@ -219,20 +220,20 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     tpicker_menu = main_menu->addMenu("Choose Tracks");
     reloadChoiceMenus();
     // TODO: checkbox by visibility
-    QMenu *sub = main_menu->addMenu("View");
-    sub->addAction(clipAction);
-    sub->addAction(treeAction);
-    sub->addAction(infoAction);
-    sub->addAction(rayAction);
-    sub->addAction(mtlAction);
-    sub->addAction(oriAction);
+    view_menu = main_menu->addMenu("View");
+    view_menu->addAction(clipAction);
+    view_menu->addAction(treeAction);
+    view_menu->addAction(infoAction);
+    view_menu->addAction(rayAction);
+    view_menu->addAction(mtlAction);
+    view_menu->addAction(oriAction);
     main_menu->addSeparator();
-    QMenu *imgmenu = main_menu->addMenu("Screenshot");
-    imgmenu->addAction(screenAction);
-    imgmenu->addAction(screen4Action);
-    imgmenu->addAction(vectorTAction);
-    imgmenu->addAction(vectorOAction);
-    imgmenu->addAction(vectorPAction);
+    screenshot_menu = main_menu->addMenu("Screenshot");
+    screenshot_menu->addAction(screenAction);
+    screenshot_menu->addAction(screen4Action);
+    screenshot_menu->addAction(vectorTAction);
+    screenshot_menu->addAction(vectorOAction);
+    screenshot_menu->addAction(vectorPAction);
 
     rwidget = new RenderWidget(vd, trackdata);
     this->setCentralWidget(rwidget);
@@ -245,6 +246,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
             SLOT(processMouse(QMouseEvent *)));
     connect(rwidget, SIGNAL(forwardWheel(QWheelEvent *)), this,
             SLOT(processWheel(QWheelEvent *)));
+    connect(rwidget, SIGNAL(forwardContextMenu(QContextMenuEvent *)), this,
+            SLOT(processContextMenu(QContextMenuEvent *)));
 
     // Clipping plane control
     dock_clip = new QDockWidget("Clipping", this);
@@ -602,14 +605,18 @@ void Viewer::processKey(QKeyEvent *event) {
 
 void Viewer::processMouse(QMouseEvent *event) {
     if (event->type() == QEvent::MouseButtonPress) {
-        if (event->modifiers() & Qt::ShiftModifier) {
-            shift = true;
-        } else {
-            shift = false;
+        if (event->button() == Qt::LeftButton) {
+            if (event->modifiers() & Qt::ShiftModifier) {
+                shift = true;
+            } else {
+                shift = false;
+            }
+            clicked = true;
+            clickpt = event->pos();
+            lastpt = clickpt;
+        } else if (event->button() == Qt::RightButton) {
+            // TODO: context menu
         }
-        clicked = true;
-        clickpt = event->pos();
-        lastpt = clickpt;
     } else if (event->type() == QEvent::MouseButtonRelease) {
         // or mouse exit?
         clicked = false;
@@ -697,6 +704,15 @@ void Viewer::processWheel(QWheelEvent *event) {
         vd.scale = vd.scene_radius / 1048576.;
     }
     rwidget->rerender(CHANGE_VIEWPORT);
+}
+
+void Viewer::processContextMenu(QContextMenuEvent *event) {
+    QMenu menu(this);
+    menu.addMenu(tpicker_menu);
+    menu.addMenu(gpicker_menu);
+    menu.addMenu(view_menu);
+    menu.addMenu(screenshot_menu);
+    menu.exec(event->globalPos());
 }
 
 Plane plane_transform(const Plane &p, const G4RotationMatrix &rot,

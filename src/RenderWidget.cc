@@ -295,6 +295,9 @@ void RenderWidget::mousePressEvent(QMouseEvent *e) { emit forwardMouse(e); }
 void RenderWidget::mouseReleaseEvent(QMouseEvent *e) { emit forwardMouse(e); }
 void RenderWidget::mouseMoveEvent(QMouseEvent *e) { emit forwardMouse(e); }
 void RenderWidget::wheelEvent(QWheelEvent *event) { emit forwardWheel(event); }
+void RenderWidget::contextMenuEvent(QContextMenuEvent *event) {
+    emit forwardContextMenu(event);
+}
 
 RenderSaveObject::RenderSaveObject(ViewData &v, const TrackData &t, int w,
                                    int h)

@@ -12,13 +12,12 @@ public:
     RenderWidget(ViewData &v, const TrackData &t);
     virtual ~RenderWidget();
 
-    virtual void resizeEvent(QResizeEvent *evt);
-    virtual void paintEvent(QPaintEvent *evt);
 signals:
     void frameTime(qreal);
     void forwardKey(QKeyEvent *e);
     void forwardMouse(QMouseEvent *);
     void forwardWheel(QWheelEvent *);
+    void forwardContextMenu(QContextMenuEvent *);
 
 public slots:
     void setFullDetail(bool);
@@ -29,12 +28,15 @@ public slots:
     void rerender(int changes);
 
 protected:
-    virtual void keyPressEvent(QKeyEvent *);
-    virtual void keyReleaseEvent(QKeyEvent *);
-    virtual void mousePressEvent(QMouseEvent *);
-    virtual void mouseReleaseEvent(QMouseEvent *);
-    virtual void mouseMoveEvent(QMouseEvent *);
-    virtual void wheelEvent(QWheelEvent *);
+    virtual void resizeEvent(QResizeEvent *evt) override;
+    virtual void paintEvent(QPaintEvent *evt) override;
+    virtual void keyPressEvent(QKeyEvent *) override;
+    virtual void keyReleaseEvent(QKeyEvent *) override;
+    virtual void mousePressEvent(QMouseEvent *) override;
+    virtual void mouseReleaseEvent(QMouseEvent *) override;
+    virtual void mouseMoveEvent(QMouseEvent *) override;
+    virtual void wheelEvent(QWheelEvent *) override;
+    virtual void contextMenuEvent(QContextMenuEvent *) override;
 
 private:
     void rerender_priv();

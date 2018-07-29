@@ -48,6 +48,7 @@ public slots:
     void processKey(QKeyEvent *e);
     void processMouse(QMouseEvent *);
     void processWheel(QWheelEvent *);
+    void processContextMenu(QContextMenuEvent *);
 
     void showFrameTime(qreal);
     void restClip();
@@ -116,8 +117,7 @@ private:
     QDoubleSpinBox *vox_density;
     QComboBox *pivot_volume;
 
-    QMenu *gpicker_menu;
-    QMenu *tpicker_menu;
+    QMenu *gpicker_menu, *tpicker_menu, *view_menu, *screenshot_menu;
     QLabel *linecount_label;
     QListWidget *line_type_selection;
 
