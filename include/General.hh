@@ -103,13 +103,13 @@ public:
         // sample point center in image coordinates
         qreal sx = imind_t_s_t_2 * x + off_tv_x;
         qreal sy = imind_t_s_t_2 * y + off_tv_y;
-        return QPointF(sx, sy);
+        return QPointF(sx, -sy);
     }
 
     // Map from box incl. [-1,1]x[-1,1] to sample coordinates
     inline QPointF toSampleCoord(QPointF viewCoord) const {
         qreal x = mind_t_is_d_2 * viewCoord.x() + off_ts_x;
-        qreal y = mind_t_is_d_2 * viewCoord.y() + off_ts_y;
+        qreal y = mind_t_is_d_2 * (-viewCoord.y()) + off_ts_y;
         return QPointF(x, y);
     }
 

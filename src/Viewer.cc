@@ -545,6 +545,8 @@ void Viewer::restRay() { dock_ray->setVisible(true); }
 void Viewer::restColor() { dock_color->setVisible(true); }
 void Viewer::restOrient() { dock_orient->setVisible(true); }
 
+static QPointF yflip(const QPointF &p) { return QPoint(p.x(), -p.y()); }
+
 void Viewer::processKey(QKeyEvent *event) {
     if (event->type() != QEvent::KeyPress) {
         return;
@@ -556,10 +558,10 @@ void Viewer::processKey(QKeyEvent *event) {
     G4RotationMatrix rot;
     switch (event->key()) {
     case Qt::Key_Up:
-        trans = vd.scale * vd.orientation.rowY() * mvd;
+        trans = -vd.scale * vd.orientation.rowY() * mvd;
         break;
     case Qt::Key_Down:
-        trans = -vd.scale * vd.orientation.rowY() * mvd;
+        trans = vd.scale * vd.orientation.rowY() * mvd;
         break;
     case Qt::Key_Left:
         trans = vd.scale * vd.orientation.rowZ() * mvd;
@@ -569,10 +571,10 @@ void Viewer::processKey(QKeyEvent *event) {
         break;
     // Note: corotate the camera vector
     case Qt::Key_W:
-        rot = CLHEP::HepRotationZ(-atan2(vd.scale, vd.scene_radius) / 12);
+        rot = CLHEP::HepRotationZ(atan2(vd.scale, vd.scene_radius) / 12);
         break;
     case Qt::Key_S:
-        rot = CLHEP::HepRotationZ(atan2(vd.scale, vd.scene_radius) / 12);
+        rot = CLHEP::HepRotationZ(-atan2(vd.scale, vd.scene_radius) / 12);
         break;
     case Qt::Key_A:
         rot = CLHEP::HepRotationY(-atan2(vd.scale, vd.scene_radius) / 12);
@@ -612,7 +614,7 @@ void Viewer::processMouse(QMouseEvent *event) {
                 shift = false;
             }
             clicked = true;
-            clickpt = event->pos();
+            clickpt = yflip(event->localPos());
             lastpt = clickpt;
         } else if (event->button() == Qt::RightButton) {
             // TODO: context menu
@@ -624,10 +626,10 @@ void Viewer::processMouse(QMouseEvent *event) {
         // Ray tracking
         int h = rwidget->geometry().height();
         int w = rwidget->geometry().width();
-        int mind = std::min(w, h);
         QPoint coord = rwidget->mapFromGlobal(event->globalPos());
-        QPointF pt((coord.x() - w / 2.) / (2. * mind),
-                   (coord.y() - h / 2.) / (2. * mind));
+        GridSpec grid(w, h, 1);
+        QPointF pt = grid.toViewCoord(coord.x(), coord.y());
+
         const int M = 50;
         Intersection ints[M + 1];
         int td, nelem;
@@ -665,16 +667,16 @@ void Viewer::processMouse(QMouseEvent *event) {
         int dmm = std::min(this->width(), this->height());
         if (shift) {
             // Translate with mouse
-            QPoint delta = event->pos() - lastpt;
-            QPointF dp = vd.scale * QPointF(delta) / dmm * 2.0;
+            QPointF delta = yflip(event->localPos()) - lastpt;
+            QPointF dp = vd.scale * delta / dmm * 2.0;
             vd.camera -=
                 vd.orientation.rowZ() * dp.x() + vd.orientation.rowY() * dp.y();
-            lastpt = event->pos();
+            lastpt = yflip(event->localPos());
         } else {
             // All rotations in progress are relative to start point
             G4double step = 3.0 * atan2(vd.scale, vd.scene_radius);
-            QPointF nalph = QPointF(event->pos() - clickpt) / dmm * step;
-            QPointF palph = QPointF(lastpt - clickpt) / dmm * step;
+            QPointF nalph = (yflip(event->localPos()) - clickpt) / dmm * step;
+            QPointF palph = (lastpt - clickpt) / dmm * step;
 
             G4RotationMatrix next = CLHEP::HepRotationY(nalph.x()) *
                                     CLHEP::HepRotationZ(-nalph.y());
@@ -688,7 +690,7 @@ void Viewer::processMouse(QMouseEvent *event) {
                     (vd.camera - vd.base_offset) +
                 vd.base_offset;
             vd.orientation = rot * vd.orientation;
-            lastpt = event->pos();
+            lastpt = yflip(event->localPos());
         }
         rwidget->rerender(CHANGE_VIEWPORT);
     }

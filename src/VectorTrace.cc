@@ -78,18 +78,14 @@ void RenderPoint::swap(RenderPoint &other) {
 }
 
 static QPointF grid_coord_to_point(const QPoint &pt, const QSize &grid_size) {
-    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    const int S = std::max(W, H);
-
-    QPointF spot((pt.x() - 0.5 * W) / S, (pt.y() - 0.5 * H) / S);
-    return spot;
+    GridSpec gs(grid_size.width(), grid_size.height(), 1);
+    QPointF vpt = gs.toViewCoord(pt.x(), pt.y());
+    return vpt;
 }
 static QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
-    const int W = grid_size.width() - 1, H = grid_size.height() - 1;
-    const int S = std::max(W, H);
-
-    QPointF spot(pt.x() * S + 0.5 * W, pt.y() * S + 0.5 * H);
-    return spot;
+    GridSpec gs(grid_size.width(), grid_size.height(), 1);
+    QPointF gpt = gs.toSampleCoord(pt);
+    return gpt;
 }
 static void recsetColorsByMaterial(std::vector<Element> &elts,
                                    QVector<FColor> &color_table,
@@ -188,6 +184,13 @@ QImage VectorTracer::preview(const QSize &sz) {
     QRgb *data = new QRgb[sz.width() * sz.height()];
 
     Navigator *nav = Navigator::create(view_data, view_data.navigator);
+    const QPointF &corner_a = grid_coord_to_point(QPoint(0, 0), sz);
+    const QPointF &corner_b = grid_coord_to_point(
+        QPoint(grid_size.width() - 1, grid_size.height() - 1), sz);
+    bound_low = QPointF(std::min(corner_a.x(), corner_b.x()),
+                        std::min(corner_a.y(), corner_b.y()));
+    bound_high = QPointF(std::max(corner_a.x(), corner_b.x()),
+                         std::max(corner_a.y(), corner_b.y()));
 
     for (int x = 0; x < sz.width(); x++) {
         for (int y = 0; y < sz.height(); y++) {
@@ -323,9 +326,6 @@ RenderPoint VectorTracer::queryPoint(QPointF spot,
                                      Navigator *thread_specific_nav) {
     nqueries++;
 
-    QPointF bound_low = grid_coord_to_point(QPoint(0, 0), grid_size);
-    QPointF bound_high = grid_coord_to_point(
-        QPoint(grid_size.width() - 1, grid_size.height() - 1), grid_size);
     const double eps = 1e-10;
     if (spot.x() < bound_low.x() - eps || spot.y() < bound_low.y() - eps ||
         spot.x() > bound_high.x() + eps || spot.y() > bound_high.y() + eps) {
@@ -358,7 +358,17 @@ void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
                                RenderPoint *result_outside,
                                Navigator *thread_navigator) {
     if (typematch(initial_inside, initial_outside)) {
-        qFatal("Bracket must cross class boundary");
+        if (!initial_inside.ray.N && !initial_outside.ray.N) {
+            // If both regions are empty, fall back to midpoint.
+            // (This might happen when the scene is empty)
+            QPointF p_mid =
+                0.5 * (initial_inside.coords + initial_outside.coords);
+            *result_inside = queryPoint(p_mid, thread_navigator);
+            *result_outside = initial_outside;
+            return;
+        } else {
+            qFatal("Bracket must cross class boundary");
+        }
     }
     const int nsubdivisions = 20;
     *result_inside = initial_inside;
@@ -495,6 +505,16 @@ void VectorTracer::computeGrid() {
     qDebug("Starting grid computation");
     if (grid_points)
         delete[] grid_points;
+
+    // Calculate bounds. Note there may be inversions
+    const QPointF &corner_a = grid_coord_to_point(QPoint(0, 0), grid_size);
+    const QPointF &corner_b = grid_coord_to_point(
+        QPoint(grid_size.width() - 1, grid_size.height() - 1), grid_size);
+    bound_low = QPointF(std::min(corner_a.x(), corner_b.x()),
+                        std::min(corner_a.y(), corner_b.y()));
+    bound_high = QPointF(std::max(corner_a.x(), corner_b.x()),
+                         std::max(corner_a.y(), corner_b.y()));
+
     grid_points = new RenderPoint[W * H];
     Navigator *nav = Navigator::create(view_data, view_data.navigator);
     for (int i = 0; i < W; i++) {
@@ -1726,7 +1746,7 @@ static QPolygonF shift_and_scale_loop(const QVector<RenderPoint> &loop,
                                       const QPointF &offset, double T) {
     QPolygonF a;
     for (const RenderPoint &p : loop) {
-        a.push_back((p.coords + offset) * T);
+        a.push_back((p.coords + offset) * (T / 2));
     }
     return a;
 }
@@ -2226,7 +2246,8 @@ void VectorTracer::computeGradients() {
 
         s << "  <defs>\n";
 
-        const QPointF offset(0.5 * W / S + 1. / S, 0.5 * H / S + 1. / S);
+        const QPointF offset =
+            2 * QPointF(0.5 * W / S + 1. / S, 0.5 * H / S + 1. / S);
         // Hatching fill overlays
         for (const Region &region : region_list) {
             // TODO: per-material settings? normal angle dependence

@@ -108,6 +108,7 @@ private:
                      double cos_alpha, double min_jump, bool *is_jump = NULL);
     Steps step_next;
     QString file_name;
+    QPointF bound_low, bound_high;
     long nqueries;
     bool transparent_volumes;
     QVector<FColor> element_colors;

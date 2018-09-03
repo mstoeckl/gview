@@ -121,8 +121,8 @@ private:
     QLabel *linecount_label;
     QListWidget *line_type_selection;
 
-    QPoint clickpt;
-    QPoint lastpt;
+    QPointF clickpt;
+    QPointF lastpt;
     bool clicked;
     bool shift;
     long rayiter;

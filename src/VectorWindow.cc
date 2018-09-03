@@ -85,13 +85,13 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     combo_resolution = new QComboBox();
     combo_resolution->addItem("100x100");
     combo_resolution->addItem("1000x1000");
-    combo_resolution->addItem("5000x5000");
-    combo_resolution->setCurrentIndex(1);
+    combo_resolution->addItem("2500x2500");
+    combo_resolution->setCurrentIndex(0);
 
     connect(button_reroll, SIGNAL(pressed()), this, SLOT(updateColors()));
     connect(choice_group, SIGNAL(buttonToggled(int, bool)), this,
             SLOT(updateSettings()));
-    connect(combo_resolution, SIGNAL(currentIndexChanged()), this,
+    connect(combo_resolution, SIGNAL(currentIndexChanged(int)), this,
             SLOT(updateSettings()));
     connect(line_name, SIGNAL(textEdited(const QString &)), this,
             SLOT(updateSettings()));
@@ -144,7 +144,7 @@ void VectorPreview::updateSettings() {
     bool is_transp = choice_transparent->isChecked();
 
     if (button_render->isEnabled()) {
-        QSize szs[3] = {QSize(100, 100), QSize(1000, 1000), QSize(5000, 5000)};
+        QSize szs[3] = {QSize(100, 100), QSize(1000, 1000), QSize(2500, 2500)};
         int i = combo_resolution->currentIndex();
         tracer->reset(is_transp, szs[i], name);
         display->setImage(tracer->preview(QSize(100, 100)));
