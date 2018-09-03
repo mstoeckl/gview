@@ -88,14 +88,14 @@ static QPointF point_to_grid_coord(const QPointF &pt, const QSize &grid_size) {
     return gpt;
 }
 static void recsetColorsByMaterial(std::vector<Element> &elts,
-                                   QVector<FColor> &color_table,
-                                   QMap<QString, FColor> &color_map,
+                                   std::vector<VColor> &color_table,
+                                   QMap<QString, VColor> &color_map,
                                    QMap<QString, int> &idx_map, int idx) {
     // We hard-code color associations to be more consistent
     Element &elem = elts[idx];
     QString key(elem.material->GetName().c_str());
     if (!color_map.count(key)) {
-        FColor c = randColor();
+        VColor c(randColor().rgba());
         color_map[key] = c;
         qWarning("Material `%s` assigned random color: rgb=(%f %f %f)",
                  key.toUtf8().constData(), c.redF(), c.blueF(), c.greenF());
@@ -135,49 +135,56 @@ VectorTracer::~VectorTracer() {
 }
 
 void VectorTracer::recolor() {
-    QMap<QString, FColor> color_map;
-    color_map["ArGas"] = FColor(0.8, 0.8, 0.8);
+    QMap<QString, VColor> color_map;
+    color_map["ArGas"] = VColor::fromRgbF(0.8, 0.8, 0.8);
     color_map["Argas"] = color_map["ArGas"];
     color_map["ArgonGas"] = color_map["ArgonGas"];
-    color_map["Air"] = FColor(0.8, 0.8, 0.8);
+    color_map["Air"] = VColor::fromRgbF(0.8, 0.8, 0.8);
 
-    color_map["Al6061"] = FColor(1.0, 0.2, 0.2);
-    color_map["Al5083"] = FColor(0.8, 0.4, 0.4);
-    color_map["G4_Al"] = FColor(0.9, 0.3, 0.4);
+    color_map["Al6061"] = VColor::fromRgbF(1.0, 0.2, 0.2);
+    color_map["Al5083"] = VColor::fromRgbF(0.8, 0.4, 0.4);
+    color_map["G4_Al"] = VColor::fromRgbF(0.9, 0.3, 0.4);
 
     // Often have nickel plated lead
-    color_map["G4_Pb"] = FColor(0.4, 0.0, 0.7);
-    color_map["G4_Ni"] = FColor(0.5, 0.1, 0.8);
+    color_map["G4_Pb"] = VColor::fromRgbF(0.4, 0.0, 0.7);
+    color_map["G4_Ni"] = VColor::fromRgbF(0.5, 0.1, 0.8);
 
-    color_map["G4_Cu"] = FColor(0.0, 0.9, 0.7);
-    color_map["G4_Au"] = FColor(1.0, 0.9, 0.0);
+    color_map["G4_Cu"] = VColor::fromRgbF(0.0, 0.9, 0.7);
+    color_map["G4_Au"] = VColor::fromRgbF(1.0, 0.9, 0.0);
     color_map["Gold"] = color_map["G4_Au"];
-    color_map["BaF2"] = FColor(1.0, 1.0, 1.0);
+    color_map["BaF2"] = VColor::fromRgbF(1.0, 1.0, 1.0);
 
-    color_map["Teflon"] = FColor(0.0, 0.8, 0.2);
-    color_map["C2H2O"] = FColor(0.9, 0.9, 0.5);
-    color_map["Lexan"] = FColor(0.7, 0.7, 0.9);
-    color_map["Mylar"] = FColor(0.7, 0.9, 0.7);
+    color_map["Teflon"] = VColor::fromRgbF(0.0, 0.8, 0.2);
+    color_map["C2H2O"] = VColor::fromRgbF(0.9, 0.9, 0.5);
+    color_map["Lexan"] = VColor::fromRgbF(0.7, 0.7, 0.9);
+    color_map["Mylar"] = VColor::fromRgbF(0.7, 0.9, 0.7);
 
-    color_map["PolyimideFoam"] = FColor(0.8, 0.5, 0.2);
-    color_map["Delrin"] = FColor(0.6, 0.7, 0.9);
-    color_map["UVSilica"] = FColor(0.6, 0.8, 1.0);
-    color_map["UHMW"] = FColor(0.4, 0.4, 0.4);
+    color_map["PolyimideFoam"] = VColor::fromRgbF(0.8, 0.5, 0.2);
+    color_map["Delrin"] = VColor::fromRgbF(0.6, 0.7, 0.9);
+    color_map["UVSilica"] = VColor::fromRgbF(0.6, 0.8, 1.0);
+    color_map["UHMW"] = VColor::fromRgbF(0.4, 0.4, 0.4);
 
-    color_map["Polycarb"] = FColor(0.7, 0.8, 0.3);
-    color_map["Hevimet"] = FColor(0.3, 0.35, 0.35);
-    color_map["Kapton"] = FColor(0.7, 0.7, 0.6);
+    color_map["Polycarb"] = VColor::fromRgbF(0.7, 0.8, 0.3);
+    color_map["Hevimet"] = VColor::fromRgbF(0.3, 0.35, 0.35);
+    color_map["Kapton"] = VColor::fromRgbF(0.7, 0.7, 0.6);
 
-    color_map["TungstenCarbide"] = FColor(0.3, 0.3, 0.3);
-    color_map["G4_W"] = FColor(0.4, 0.3, 0.3);
+    color_map["TungstenCarbide"] = VColor::fromRgbF(0.3, 0.3, 0.3);
+    color_map["G4_W"] = VColor::fromRgbF(0.4, 0.3, 0.3);
 
-    color_map["Stainless304"] = FColor(0.6, 0.0, 0.0);
-    color_map["Vespel"] = FColor(0.7, 0.5, 0.3);
+    color_map["Stainless304"] = VColor::fromRgbF(0.6, 0.0, 0.0);
+    color_map["Vespel"] = VColor::fromRgbF(0.7, 0.5, 0.3);
 
     QMap<QString, int> idx_map;
+
+    if (0) {
+        view_data.color_table.clear();
+        recsetColorsByMaterial(view_data.elements, view_data.color_table,
+                               color_map, idx_map, 0);
+    }
     element_colors.clear();
-    recsetColorsByMaterial(view_data.elements, element_colors, color_map,
-                           idx_map, 0);
+    for (VColor v : view_data.color_table) {
+        element_colors.append(FColor(v.rgb()));
+    }
 }
 
 QImage VectorTracer::preview(const QSize &sz) {
@@ -339,7 +346,7 @@ RenderPoint VectorTracer::queryPoint(QPointF spot,
 
     RayPoint rpt = thread_specific_nav->traceRay(
         initPoint(spot, view_data), forwardDirection(view_data.orientation),
-        ints, dlimit);
+        ints, dlimit, view_data.force_opaque);
 
     return RenderPoint(spot, rpt);
 }
@@ -457,46 +464,76 @@ static FColor intersectionColor(const G4ThreeVector &normal,
     return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF(), 1.0);
 }
 
-static FColor retractionMerge(const RenderPoint &pt, FColor seed,
-                              const G4ThreeVector &normal,
-                              const QVector<FColor> &color_table,
-                              const ViewData &vd, int startpoint,
-                              bool transparent_volumes) {
-    for (int k = startpoint; k >= 0; --k) {
-        if (!vd.elements[pt.ray.intersections[k].ecode].visible) {
-            continue;
-        }
-
-        // We use the intersection before the volume
-        const FColor &base_color =
-            color_table[vd.elements[pt.ray.intersections[k].ecode].ccode];
-        FColor alt_color = intersectionColor(pt.ray.intersections[k].normal,
-                                             normal, base_color);
-        double e = transparent_volumes
-                       ? vd.elements[pt.ray.intersections[k].ecode].alpha
-                       : 1.0;
-
-        seed = FColor::blend(seed, alt_color, e);
-    }
-    return seed;
-}
 FColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
-
-    FColor color(0.9, 0.9, 0.9, 0.1);
-    return retractionMerge(pt, color, view_data.orientation.rowX(),
-                           element_colors, view_data, pt.ray.N - 2,
-                           transparent_volumes);
+    const G4ThreeVector &forward = forwardDirection(view_data.orientation);
+    GeoShader &shader = *getGeoShader(view_data.gshader);
+    FColor color = shader(pt.ray, FColor(1., 1., 1., 0), 9e99, NULL, view_data,
+                          pt.coords, forward);
+    return color;
 }
 FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
                                             const RenderPoint &outside) {
-    // lim necessary <= inside.nhits
+
     int lim = faildepth(inside, outside);
-    FColor color(0., 0., 0., 1.);
-    if (!transparent_volumes)
-        return color;
-    // It is possible that lim=inside.nhits if outside has an extra solid
-    return retractionMerge(inside, color, view_data.orientation.rowX(),
-                           element_colors, view_data, lim - 1, true);
+    if (lim < 0) {
+        qFatal("Faildepth should be nonnegative over a boundary");
+    }
+    if (lim > std::min(inside.ray.N, outside.ray.N)) {
+        qFatal("Faildepth should not be greater by more than one than either "
+               "option");
+    }
+
+    const G4ThreeVector &forward = forwardDirection(view_data.orientation);
+    GeoShader &shader = *getGeoShader(view_data.gshader);
+
+    const RayPoint &ri = inside.ray;
+    const RayPoint &ro = outside.ray;
+
+    RayPoint combo;
+    combo.N = lim + 1;
+    combo.intersections = new Intersection[combo.N];
+    for (int i = 0; i < combo.N - 1; i++) {
+        combo.intersections[i].dist =
+            (ri.intersections[i].dist + ro.intersections[i].dist) / 2;
+        combo.intersections[i].ecode = ri.intersections[i].ecode;
+        combo.intersections[i].normal =
+            CompactNormal((G4ThreeVector(ri.intersections[i].normal) +
+                           G4ThreeVector(ro.intersections[i].normal)) /
+                          2);
+    }
+    combo.intersections[combo.N - 1].ecode = CODE_LINE;
+    if (combo.N > ri.N) {
+        combo.intersections[combo.N - 1].dist =
+            ro.intersections[combo.N - 1].dist;
+        combo.intersections[combo.N - 1].normal =
+            ro.intersections[combo.N - 1].normal;
+    } else if (combo.N > ro.N) {
+        combo.intersections[combo.N - 1].dist =
+            ri.intersections[combo.N - 1].dist;
+        combo.intersections[combo.N - 1].normal =
+            ri.intersections[combo.N - 1].normal;
+    } else {
+        combo.intersections[combo.N - 1].dist =
+            (ri.intersections[combo.N - 1].dist +
+             ro.intersections[combo.N - 1].dist) /
+            2;
+        combo.intersections[combo.N - 1].normal = CompactNormal(
+            (G4ThreeVector(ri.intersections[combo.N - 1].normal) +
+             G4ThreeVector(ro.intersections[combo.N - 1].normal)) /
+            2);
+    }
+
+    // TODO: record plane index instead, and zero on disagreement
+    combo.front_clipped = inside.ray.front_clipped && outside.ray.front_clipped;
+    combo.front_clipped = inside.ray.back_clipped && outside.ray.back_clipped;
+
+    QPointF mco = (inside.coords + outside.coords) / 2;
+    FColor color = shader(combo, FColor(1., 1., 1., 0), 9e99, NULL, view_data,
+                          mco, forward);
+
+    delete[] combo.intersections;
+
+    return color;
 }
 
 void VectorTracer::computeGrid() {
@@ -2220,6 +2257,8 @@ void VectorTracer::computeGradients() {
     const int S = std::max(W, H);
     const double px_per_mm = 3.78;
     double T = 45 * px_per_mm;
+    double Tx = T, Ty = -T;
+    // TODO: use `point_to_grid_coord` and then rescale the grid
     QRectF viewbox(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S);
 
     // Gradient -- a piecewise composite of linear and radial gradients.
@@ -2247,7 +2286,7 @@ void VectorTracer::computeGradients() {
         s << "  <defs>\n";
 
         const QPointF offset =
-            2 * QPointF(0.5 * W / S + 1. / S, 0.5 * H / S + 1. / S);
+            2 * QPointF(0.5 * W / S + 1. / S, (0.5 * H / S + 1. / S));
         // Hatching fill overlays
         for (const Region &region : region_list) {
             // TODO: per-material settings? normal angle dependence

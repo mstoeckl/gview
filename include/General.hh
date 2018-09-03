@@ -11,6 +11,7 @@ inline uint32_t randint(uint32_t excl_upper) {
 // Very fast, simple, and compact color handling
 class VColor {
 public:
+    VColor() : pr(0), pg(0), pb(0) {}
     VColor(uint8_t r, uint8_t g, uint8_t b) : pr(r), pg(g), pb(b) {}
     VColor(QRgb rgb) : pr(qRed(rgb)), pg(qGreen(rgb)), pb(qBlue(rgb)) {}
     static VColor fromRgbF(float r, float g, float b) {

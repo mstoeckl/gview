@@ -34,9 +34,10 @@ static FColor colorMap(const Intersection &intersection,
     return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF());
 }
 
-QRgb defaultColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                        double *voxel_cumulants, const ViewData &d,
-                        const QPointF &pt, const G4ThreeVector &forward) {
+FColor defaultColorForRay(const RayPoint &ray, const FColor &trackcol,
+                          G4double trackdist, double *voxel_cumulants,
+                          const ViewData &d, const QPointF &pt,
+                          const G4ThreeVector &forward) {
     /* Scan from front to back, as this gives the option of quitting early */
     /* Each intersection is a transition between two domains */
     FColor color(0., 0., 0., 0.);
@@ -48,11 +49,11 @@ QRgb defaultColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
         if (trackdist < ft.dist || ecode == CODE_END) {
             // Early termination
             color = FColor::add(color, FColor(trackcol), weight);
-            return color.rgba();
+            return color;
         } else if (ecode == CODE_LINE) {
             // Lines are black
             color = FColor::add(color, FColor(0., 0., 0., 1.), weight);
-            return color.rgba();
+            return color;
         } else {
             const Element &eback = d.elements[ecode];
             if (!eback.visible) {
@@ -70,18 +71,18 @@ QRgb defaultColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
             weight = weight * (1. - cur_fraction);
             if (weight <= 0.) {
                 // Early termination
-                return color.rgba();
+                return color;
             }
         }
     }
     // Finally, add background color
-    color = FColor::add(color, FColor(trackcol), weight);
-    return color.rgba();
+    return FColor::add(color, FColor(trackcol), weight);
 }
 
-QRgb normalColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
-                       double *voxel_cumulants, const ViewData &d,
-                       const QPointF &, const G4ThreeVector &) {
+FColor normalColorForRay(const RayPoint &ray, const FColor &trackcol,
+                         G4double trackdist, double *voxel_cumulants,
+                         const ViewData &d, const QPointF &,
+                         const G4ThreeVector &) {
     if (voxel_cumulants) {
         FColor voxc(0.5, 0.5, 0.5, 1.);
         FColor bgc(1., 1., 1., 0.);
@@ -90,18 +91,18 @@ QRgb normalColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
         // TODO: make last parameter & all color choices tunable
         double s = std::exp(-voxel_cumulants[0] / d.voxel_base_density);
         if (ray.N <= 0) {
-            return FColor::blend(voxc, bgc, s).rgba();
+            return FColor::blend(voxc, bgc, s);
         }
         const Intersection &i = ray.intersections[0];
         if (i.ecode == CODE_END) {
-            return FColor::blend(voxc, bgc, s).rgba();
+            return FColor::blend(voxc, bgc, s);
         }
         if (i.ecode == CODE_LINE) {
-            return FColor::blend(voxc, line, s).rgba();
+            return FColor::blend(voxc, line, s);
         }
         FColor col((i.normal.x + 1.0) / 2, (i.normal.y + 1.0) / 2,
                    (i.normal.z + 1.0) / 2);
-        return FColor::blend(voxc, col, s).rgba();
+        return FColor::blend(voxc, col, s);
     } else {
         if (ray.N <= 0) {
             return trackcol;
@@ -111,12 +112,12 @@ QRgb normalColorForRay(const RayPoint &ray, QRgb trackcol, G4double trackdist,
             return trackcol;
         }
         if (i.ecode == CODE_LINE) {
-            return qRgba(0, 0, 0, 255);
+            return FColor(0., 0., 0., 1.);
         }
 
         FColor col((i.normal.x + 1.0) / 2, (i.normal.y + 1.0) / 2,
                    (i.normal.z + 1.0) / 2);
-        return col.rgba();
+        return col;
     }
 }
 
