@@ -190,9 +190,10 @@ ColorConfig::ColorConfig(ViewData &ivd,
     : vd(ivd) {
     active_mode = ColorByMaterial;
     mode_chooser = new QComboBox();
-    mode_chooser->addItem("Material");
-    mode_chooser->addItem("Property");
-    mode_chooser->addItem("Flow map");
+    mode_chooser->addItem("Material", ColorByMaterial);
+    mode_chooser->addItem("MPreset", ColorByMPreset);
+    mode_chooser->addItem("Property", ColorByProperty);
+    mode_chooser->addItem("Flow map", ColorByProperty);
     mode_chooser->setCurrentIndex(0);
     connect(mode_chooser, SIGNAL(currentIndexChanged(int)), this,
             SLOT(changeMode()));
@@ -541,6 +542,65 @@ static void recsetFlowColors(std::vector<Element> &elts, int i,
     }
 }
 
+static FColor randColor() {
+    return FColor(randint(65536) / 65535., randint(65536) / 65535.,
+                  randint(65536) / 65535., 1.0);
+}
+
+static std::vector<VColor>
+preset_colors(const std::vector<const G4Material *> &material_list) {
+    QMap<QString, VColor> color_map;
+    color_map["ArGas"] = VColor::fromRgbF(0.8, 0.8, 0.8);
+    color_map["Argas"] = color_map["ArGas"];
+    color_map["ArgonGas"] = color_map["ArgonGas"];
+    color_map["Air"] = VColor::fromRgbF(0.8, 0.8, 0.8);
+
+    color_map["Al6061"] = VColor::fromRgbF(1.0, 0.2, 0.2);
+    color_map["Al5083"] = VColor::fromRgbF(0.8, 0.4, 0.4);
+    color_map["G4_Al"] = VColor::fromRgbF(0.9, 0.3, 0.4);
+
+    // Often have nickel plated lead
+    color_map["G4_Pb"] = VColor::fromRgbF(0.4, 0.0, 0.7);
+    color_map["G4_Ni"] = VColor::fromRgbF(0.5, 0.1, 0.8);
+
+    color_map["G4_Cu"] = VColor::fromRgbF(0.0, 0.9, 0.7);
+    color_map["G4_Au"] = VColor::fromRgbF(1.0, 0.9, 0.0);
+    color_map["Gold"] = color_map["G4_Au"];
+    color_map["BaF2"] = VColor::fromRgbF(1.0, 1.0, 1.0);
+
+    color_map["Teflon"] = VColor::fromRgbF(0.0, 0.8, 0.2);
+    color_map["C2H2O"] = VColor::fromRgbF(0.9, 0.9, 0.5);
+    color_map["Lexan"] = VColor::fromRgbF(0.7, 0.7, 0.9);
+    color_map["Mylar"] = VColor::fromRgbF(0.7, 0.9, 0.7);
+
+    color_map["PolyimideFoam"] = VColor::fromRgbF(0.8, 0.5, 0.2);
+    color_map["Delrin"] = VColor::fromRgbF(0.6, 0.7, 0.9);
+    color_map["UVSilica"] = VColor::fromRgbF(0.6, 0.8, 1.0);
+    color_map["UHMW"] = VColor::fromRgbF(0.4, 0.4, 0.4);
+
+    color_map["Polycarb"] = VColor::fromRgbF(0.7, 0.8, 0.3);
+    color_map["Hevimet"] = VColor::fromRgbF(0.3, 0.35, 0.35);
+    color_map["Kapton"] = VColor::fromRgbF(0.7, 0.7, 0.6);
+
+    color_map["TungstenCarbide"] = VColor::fromRgbF(0.3, 0.3, 0.3);
+    color_map["G4_W"] = VColor::fromRgbF(0.4, 0.3, 0.3);
+
+    color_map["Stainless304"] = VColor::fromRgbF(0.6, 0.0, 0.0);
+    color_map["Vespel"] = VColor::fromRgbF(0.7, 0.5, 0.3);
+
+    std::vector<VColor> colors;
+    for (const G4Material *m : material_list) {
+        const char *cn = m->GetName().c_str();
+        if (color_map.count(cn)) {
+            colors.push_back(color_map[cn]);
+        } else {
+            qWarning("No preset color available for `%s`", cn);
+            colors.push_back(VColor(randColor().rgba()));
+        }
+    }
+    return colors;
+}
+
 int ColorConfig::reassignColors() {
     int render_change = CHANGE_COLOR;
     if (force_opaque->isChecked() != vd.force_opaque ||
@@ -551,8 +611,14 @@ int ColorConfig::reassignColors() {
     vd.split_by_material = div_by_class->isChecked();
 
     switch (active_mode) {
+    case ColorByMPreset:
     case ColorByMaterial: {
-        vd.color_table = mtl_color_table;
+        if (active_mode == ColorByMaterial) {
+            vd.color_table = mtl_color_table;
+        } else {
+            vd.color_table.clear();
+            vd.color_table = preset_colors(material_list);
+        }
         std::map<const G4Material *, int> idxs;
         for (int i = 0; i < int(material_list.size()); i++) {
             idxs[material_list[i]] = i;
@@ -663,23 +729,20 @@ void ColorConfig::changeMode() {
             superlayout->itemAt(i)->widget()->setVisible(false);
         }
     }
-    switch (mode_chooser->currentIndex()) {
-    case 0: {
-        active_mode = ColorByMaterial;
-
+    active_mode = (ColorMode)mode_chooser->currentData().toInt();
+    switch (active_mode) {
+    case ColorByMaterial: {
         mtl_table->setVisible(true);
     } break;
-    case 1: {
-        active_mode = ColorByProperty;
-
+    case ColorByMPreset:
+        break;
+    case ColorByProperty: {
         prop_select->setVisible(true);
         prop_base_button->setVisible(true);
         prop_target_button->setVisible(true);
         stretch_widget->setVisible(true);
     } break;
-    case 2: {
-        active_mode = ColorFromFlowmap;
-
+    case ColorFromFlowmap: {
         flow_load->setVisible(true);
         flow_label->setVisible(true);
         flow_target->setVisible(true);
@@ -771,8 +834,9 @@ void ColorConfig::mergeMaterials(
             }
         }
         if (!found) {
-            mtl_color_table.push_back(VColor(
-                QColor::fromHslF(rand() / float(RAND_MAX - 1), 1., 0.5).rgb()));
+            f3 color = rainbow_nhue(rand() / float(RAND_MAX - 1));
+            mtl_color_table.push_back(
+                VColor::fromRgbF(color[0], color[1], color[2]));
         }
     }
     mtl_model->recalculate();

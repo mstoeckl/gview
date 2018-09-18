@@ -184,12 +184,14 @@ QWidget *HueSpinBoxDelegate::createEditor(QWidget *parent,
 
 void HueSpinBoxDelegate::setEditorData(QWidget *editor,
                                        const QModelIndex &index) const {
+    double nhue = index.model()->data(index, Qt::EditRole).toDouble();
+    f3 o_srgb = rainbow_nhue(nhue);
+    const QColor &c = QColor::fromRgbF(o_srgb[0], o_srgb[1], o_srgb[2]);
+
     QDoubleSpinBox *spinBox = static_cast<QDoubleSpinBox *>(editor);
     spinBox->blockSignals(true);
-    double v = index.model()->data(index, Qt::EditRole).toDouble();
-    spinBox->setValue(v);
-    spinBox->setStyleSheet("background-color: " +
-                           QColor::fromHslF(v, 0.5, 0.7).name());
+    spinBox->setValue(std::round(nhue * 100.) / 100.);
+    spinBox->setStyleSheet("background-color: " + c.name());
     spinBox->blockSignals(false);
 }
 void HueSpinBoxDelegate::setModelData(QWidget *editor,
@@ -226,23 +228,26 @@ QVariant MaterialModel::data(const QModelIndex &index, int role) const {
         return QVariant();
     }
     int r = index.row();
-    qreal hue = 0., sat = 0., light = 0.;
-    QColor::fromRgb(colors[size_t(r)].rgb()).getHslF(&hue, &sat, &light);
+
+    f3 c_srgb(colors[size_t(r)].redF(), colors[size_t(r)].greenF(),
+              colors[size_t(r)].blueF());
+    qreal nhue = color_srgb_to_nhue(c_srgb);
 
     // Assume only valid indices...
     if (role == Qt::DisplayRole) {
         if (index.column() == 0) {
-            return QVariant(QString::number(hue, 'f', 2));
+            return QVariant(QString::number(nhue, 'f', 2));
         }
     }
     if (role == Qt::BackgroundColorRole) {
         if (index.column() == 0) {
-            return QVariant(QColor::fromHslF(hue, 0.5, 0.7));
+            f3 o_srgb = rainbow_nhue(nhue);
+            return QVariant(QColor::fromRgbF(o_srgb[0], o_srgb[1], o_srgb[2]));
         }
     }
     if (role == Qt::EditRole) {
         if (index.column() == 0) {
-            return QVariant(hue);
+            return QVariant(nhue);
         }
     }
     return QVariant();
@@ -255,8 +260,10 @@ bool MaterialModel::setData(const QModelIndex &index, const QVariant &value,
     int r = index.row();
     if (role == Qt::EditRole) {
         if (index.column() == 0) {
+            f3 o_srgb = rainbow_nhue(value.toDouble());
+
             colors[size_t(r)] =
-                VColor(QColor::fromHslF(value.toDouble(), 1, 0.5).rgb());
+                VColor(QColor::fromRgbF(o_srgb[0], o_srgb[1], o_srgb[2]).rgb());
             QVector<int> roles;
             roles.push_back(Qt::DisplayRole);
             emit dataChanged(index, index, roles);
@@ -291,7 +298,10 @@ void MaterialModel::hueUpdate(QWidget *w) {
         return;
     }
     int row = e->maximumHeight() - 1000;
-    colors[size_t(row)] = VColor(QColor::fromHslF(e->value(), 1, 0.5).rgb());
+    double nhue = e->value();
+    f3 o_srgb = rainbow_nhue(nhue);
+    colors[size_t(row)] =
+        VColor(QColor::fromRgbF(o_srgb[0], o_srgb[1], o_srgb[2]).rgb());
     QModelIndex idx = index(row, 0);
     QVector<int> roles;
     roles.push_back(Qt::EditRole);

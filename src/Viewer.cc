@@ -249,9 +249,13 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     connect(rwidget, SIGNAL(forwardContextMenu(QContextMenuEvent *)), this,
             SLOT(processContextMenu(QContextMenuEvent *)));
 
+    QSizePolicy dosp(QSizePolicy::MinimumExpanding,
+                     QSizePolicy::MinimumExpanding);
+
     // Clipping plane control
     dock_clip = new QDockWidget("Clipping", this);
     QWidget *cont = new QWidget();
+    cont->setSizePolicy(dosp);
     QVBoxLayout *vb = new QVBoxLayout();
     Plane iplanes[3];
     iplanes[0].offset = 0;
@@ -334,15 +338,12 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vb->addLayout(nrrb, 0);
     vb->addStretch(1);
     cont->setLayout(vb);
+    // TODO: abstract out this pattern
     QScrollArea *asf = new QScrollArea();
     asf->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     asf->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     asf->setWidget(cont);
     asf->setWidgetResizable(true);
-    cont->setSizePolicy(
-        QSizePolicy(QSizePolicy::Maximum, QSizePolicy::Maximum));
-    asf->setSizePolicy(
-        QSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred));
     dock_clip->setWidget(asf);
 
     // Tree view (with vis/novis, hue control
@@ -491,6 +492,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vbr->addWidget(pivot_volume, 0);
     vbr->addStretch(5);
     QWidget *ornt = new QWidget();
+    ornt->setSizePolicy(dosp);
     ornt->setLayout(vbr);
     dock_orient->setWidget(ornt);
 
@@ -624,10 +626,8 @@ void Viewer::processMouse(QMouseEvent *event) {
         clicked = false;
     } else if (event->type() == QEvent::MouseMove) {
         // Ray tracking
-        int h = rwidget->geometry().height();
-        int w = rwidget->geometry().width();
         QPoint coord = rwidget->mapFromGlobal(event->globalPos());
-        GridSpec grid(w, h, 1);
+        GridSpec grid(rwidget->width(), rwidget->height(), 1);
         QPointF pt = grid.toViewCoord(coord.x(), coord.y());
 
         const int M = 50;

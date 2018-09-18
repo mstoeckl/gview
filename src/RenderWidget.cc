@@ -212,6 +212,11 @@ void RenderWidget::aborted() {
 }
 
 void RenderWidget::resizeEvent(QResizeEvent *evt) {
+    QWidget::resizeEvent(evt);
+    if (evt->oldSize() == evt->size()) {
+        // No size change, no update
+        return;
+    }
     if (evt->size().width() <= 0 || evt->size().height() <= 0) {
         // Don't bother rendering empty images
         return;

@@ -135,52 +135,6 @@ VectorTracer::~VectorTracer() {
 }
 
 void VectorTracer::recolor() {
-    QMap<QString, VColor> color_map;
-    color_map["ArGas"] = VColor::fromRgbF(0.8, 0.8, 0.8);
-    color_map["Argas"] = color_map["ArGas"];
-    color_map["ArgonGas"] = color_map["ArgonGas"];
-    color_map["Air"] = VColor::fromRgbF(0.8, 0.8, 0.8);
-
-    color_map["Al6061"] = VColor::fromRgbF(1.0, 0.2, 0.2);
-    color_map["Al5083"] = VColor::fromRgbF(0.8, 0.4, 0.4);
-    color_map["G4_Al"] = VColor::fromRgbF(0.9, 0.3, 0.4);
-
-    // Often have nickel plated lead
-    color_map["G4_Pb"] = VColor::fromRgbF(0.4, 0.0, 0.7);
-    color_map["G4_Ni"] = VColor::fromRgbF(0.5, 0.1, 0.8);
-
-    color_map["G4_Cu"] = VColor::fromRgbF(0.0, 0.9, 0.7);
-    color_map["G4_Au"] = VColor::fromRgbF(1.0, 0.9, 0.0);
-    color_map["Gold"] = color_map["G4_Au"];
-    color_map["BaF2"] = VColor::fromRgbF(1.0, 1.0, 1.0);
-
-    color_map["Teflon"] = VColor::fromRgbF(0.0, 0.8, 0.2);
-    color_map["C2H2O"] = VColor::fromRgbF(0.9, 0.9, 0.5);
-    color_map["Lexan"] = VColor::fromRgbF(0.7, 0.7, 0.9);
-    color_map["Mylar"] = VColor::fromRgbF(0.7, 0.9, 0.7);
-
-    color_map["PolyimideFoam"] = VColor::fromRgbF(0.8, 0.5, 0.2);
-    color_map["Delrin"] = VColor::fromRgbF(0.6, 0.7, 0.9);
-    color_map["UVSilica"] = VColor::fromRgbF(0.6, 0.8, 1.0);
-    color_map["UHMW"] = VColor::fromRgbF(0.4, 0.4, 0.4);
-
-    color_map["Polycarb"] = VColor::fromRgbF(0.7, 0.8, 0.3);
-    color_map["Hevimet"] = VColor::fromRgbF(0.3, 0.35, 0.35);
-    color_map["Kapton"] = VColor::fromRgbF(0.7, 0.7, 0.6);
-
-    color_map["TungstenCarbide"] = VColor::fromRgbF(0.3, 0.3, 0.3);
-    color_map["G4_W"] = VColor::fromRgbF(0.4, 0.3, 0.3);
-
-    color_map["Stainless304"] = VColor::fromRgbF(0.6, 0.0, 0.0);
-    color_map["Vespel"] = VColor::fromRgbF(0.7, 0.5, 0.3);
-
-    QMap<QString, int> idx_map;
-
-    if (0) {
-        view_data.color_table.clear();
-        recsetColorsByMaterial(view_data.elements, view_data.color_table,
-                               color_map, idx_map, 0);
-    }
     element_colors.clear();
     for (VColor v : view_data.color_table) {
         element_colors.append(FColor(v.rgb()));
@@ -504,14 +458,14 @@ FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
     combo.intersections[combo.N - 1].ecode = CODE_LINE;
     if (combo.N > ri.N) {
         combo.intersections[combo.N - 1].dist =
-            ro.intersections[combo.N - 1].dist;
+            ro.N ? ro.intersections[combo.N - 1].dist : 9e99;
         combo.intersections[combo.N - 1].normal =
-            ro.intersections[combo.N - 1].normal;
+            ro.N ? ro.intersections[combo.N - 1].normal : CompactNormal();
     } else if (combo.N > ro.N) {
         combo.intersections[combo.N - 1].dist =
-            ri.intersections[combo.N - 1].dist;
+            ri.N ? ri.intersections[combo.N - 1].dist : 9e99;
         combo.intersections[combo.N - 1].normal =
-            ri.intersections[combo.N - 1].normal;
+            ro.N ? ri.intersections[combo.N - 1].normal : CompactNormal();
     } else {
         combo.intersections[combo.N - 1].dist =
             (ri.intersections[combo.N - 1].dist +
@@ -2321,11 +2275,11 @@ void VectorTracer::computeGradients() {
                              .arg(subreg.subclass_no)
                              .arg(viewbox.center().x() -
                                   T * std::sin(subreg.linear_angle))
-                             .arg(viewbox.center().y() -
+                             .arg(viewbox.center().y() +
                                   T * std::cos(subreg.linear_angle))
                              .arg(viewbox.center().x() +
                                   T * std::sin(subreg.linear_angle))
-                             .arg(viewbox.center().y() +
+                             .arg(viewbox.center().y() -
                                   T * std::cos(subreg.linear_angle))
                              .arg(1 ? "repeat" : "pad");
                     for (int i = 0; i < subreg.linear_colors.size(); i++) {

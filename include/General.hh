@@ -126,3 +126,22 @@ typedef struct {
 typedef struct {
     size_t low, high;
 } IRange;
+
+// A float[3] that can be returned by value
+class f3 {
+public:
+    f3() { v[0] = v[1] = v[2] = 0.; }
+    f3(float v0, float v1, float v2) {
+        v[0] = v0;
+        v[1] = v1;
+        v[2] = v2;
+    }
+    float &operator[](int i) { return v[i]; }
+    float operator[](int i) const { return v[i]; }
+
+private:
+    float v[3];
+};
+
+f3 rainbow_nhue(const float nhue);
+float color_srgb_to_nhue(const f3 &srgb);

@@ -62,6 +62,7 @@ class ColorConfig : public QWidget {
 public:
     typedef enum {
         ColorByMaterial,
+        ColorByMPreset,
         ColorByProperty,
         ColorFromFlowmap
     } ColorMode;
