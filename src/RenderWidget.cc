@@ -41,7 +41,8 @@ static int ilog(int b, int x) {
 
 static int isqrt(int x) { return std::sqrt(x); }
 
-static QImage fastIntegerScale(const QImage &base, const GridSpec &grid) {
+static QImage fastIntegerScaleToOpaque(const QImage &base,
+                                       const GridSpec &grid) {
     size_t S = grid.pixelSize();
     if (S <= 1) {
         return base;
@@ -51,12 +52,9 @@ static QImage fastIntegerScale(const QImage &base, const GridSpec &grid) {
                base.pixelFormat().bitsPerPixel());
     }
 
-    QElapsedTimer timer;
-    timer.start();
-
     const size_t W = base.width(), H = base.height();
     const size_t iW = grid.imageWidth(), iH = grid.imageHeight();
-    QImage scaled(iW, iH, base.format());
+    QImage scaled(iW, iH, QImage::Format_RGB32);
     size_t slinelength = scaled.bytesPerLine();
     size_t blinelength = base.bytesPerLine();
 
@@ -193,7 +191,7 @@ void RenderWidget::completed(qreal time_secs) {
         arrived = aCompl;
     }
 
-    cached = fastIntegerScale(*back, back_grid);
+    cached = fastIntegerScaleToOpaque(*back, back_grid);
     this->repaint();
 
     if (back_grid.pixelSize() == immediate_lod) {
