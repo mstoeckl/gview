@@ -40,7 +40,6 @@ typedef struct {
     float linear_angle;
     float linear_start;
     float linear_stop;
-    int linear_nsteps;
     QVector<QRgb> linear_colors;
 } Subregion;
 

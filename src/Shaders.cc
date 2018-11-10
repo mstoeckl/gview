@@ -13,7 +13,7 @@ static FColor colorMap(const Intersection &intersection,
 
     // Opposed normals (i.e, for transp backsides) are mirrored
     G4double cx = std::abs(std::acos(-normal * forward) / CLHEP::pi);
-    cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
+    cx = 1.0 - std::max(0.0, std::min(1.0, 0.9 * cx));
 
     if (is_clipping_plane) {
         const G4ThreeVector &orthA = normal.orthogonal().unit();

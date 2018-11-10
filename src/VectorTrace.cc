@@ -408,15 +408,6 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
         }
     }
 }
-static FColor intersectionColor(const G4ThreeVector &normal,
-                                const G4ThreeVector &forward,
-                                const FColor &base) {
-    // Opposed normals (i.e, for transp backsides) are mirrored
-    float cx = std::abs(std::acos(-normal * forward) / CLHEP::pi);
-    cx = 1.0 - std::max(0.0, std::min(1.0, 0.7 * cx));
-
-    return FColor(cx * base.redF(), cx * base.greenF(), cx * base.blueF(), 1.0);
-}
 
 FColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
     const G4ThreeVector &forward = forwardDirection(view_data.orientation);
@@ -1538,7 +1529,6 @@ void VectorTracer::computeCreases() {
             subreg.linear_angle = 0.;
             subreg.linear_start = 0.;
             subreg.linear_stop = 0.;
-            subreg.linear_nsteps = 0;
             subreg.linear_colors.clear();
 
             subreg.boundaries.clear();
@@ -1734,29 +1724,28 @@ void VectorTracer::computeCreases() {
 }
 
 static QPolygonF shift_and_scale_loop(const QVector<RenderPoint> &loop,
-                                      const QPointF &offset, double T) {
+                                      const QMatrix &transform) {
     QPolygonF a;
     for (const RenderPoint &p : loop) {
-        a.push_back((p.coords + offset) * (T / 2));
+        a.push_back(transform.map(p.coords));
     }
     return a;
 }
 static QVector<QPolygonF> boundary_loops_for_region(const Region &region,
-                                                    const QPointF &offset,
-                                                    double T) {
+                                                    const QMatrix &transform) {
     QVector<QPolygonF> n;
-    n.push_back(shift_and_scale_loop(region.exterior, offset, T));
+    n.push_back(shift_and_scale_loop(region.exterior, transform));
     for (const QVector<RenderPoint> &loop : region.interior) {
-        n.push_back(shift_and_scale_loop(loop, offset, T));
+        n.push_back(shift_and_scale_loop(loop, transform));
     }
     return n;
 }
-static QVector<QPolygonF> boundary_loops_for_subregion(const Subregion &subreg,
-                                                       const QPointF &offset,
-                                                       double T) {
+static QVector<QPolygonF>
+boundary_loops_for_subregion(const Subregion &subreg,
+                             const QMatrix &transform) {
     QVector<QPolygonF> n;
     for (const QVector<RenderPoint> &loop : subreg.boundaries) {
-        n.push_back(shift_and_scale_loop(loop, offset, T));
+        n.push_back(shift_and_scale_loop(loop, transform));
     }
     return n;
 }
@@ -1777,6 +1766,8 @@ static QString color_hex_name_rgb(QRgb color) {
 
 static QPolygonF simplify_poly(const QPolygonF &orig, double max_error,
                                bool loop = true) {
+    // TODO: bezier support; use rolling approach, error relative to
+    // 50% subsample with 50% subsample using curvature tricks as well?
     if (0)
         return orig;
 
@@ -1879,10 +1870,10 @@ static QString svg_path_text_from_polygons(const QVector<QPolygonF> &loops,
     return path_string.join(" ");
 }
 
-static double compute_histogram_angle(const Region &region,
-                                      const Subregion &subreg,
-                                      RenderPoint *grid_points,
-                                      const QSize &grid_size) {
+static float compute_histogram_angle(const Region &region,
+                                     const Subregion &subreg,
+                                     RenderPoint *grid_points,
+                                     const QSize &grid_size) {
     // TODO: ensure subregion bounding & point lookup is fast & local
 
     const int W = grid_size.width(), H = grid_size.height();
@@ -1925,9 +1916,9 @@ static double compute_histogram_angle(const Region &region,
                 float mag_dx = pdx.ideal_color.magnitude();
                 float mag_dy = pdy.ideal_color.magnitude();
 
-                float dx = (mag_dx - mag_base) / dxs[k];
-                float dy = (mag_dy - mag_base) / dys[k];
-                float mag2 = (dx * dx + dy * dy);
+                double dx = (mag_dx - mag_base) / dxs[k];
+                double dy = (mag_dy - mag_base) / dys[k];
+                double mag2 = (dx * dx + dy * dy);
                 if (mag2 <= 0.)
                     continue;
                 // S1 -> RP1=S1 doubles the angle
@@ -1941,10 +1932,16 @@ static double compute_histogram_angle(const Region &region,
         // Uniformly distributed angles, or just none at all
         return 0.;
     }
-    float angle = std::atan2(sum_sin, sum_cos);
+    double angle = std::atan2(sum_sin, sum_cos);
     // The half-pi shift gives an angle perpendicular to dominant
     // gradient direction
     return std::fmod(-angle / 2 + M_PI / 2, M_PI);
+}
+
+static float proj_angle(const QPointF &p, float angle) {
+    float proj_x = -std::sin(angle);
+    float proj_y = std::cos(angle);
+    return p.x() * proj_x + p.y() * proj_y;
 }
 
 static void fill_linear_histogram_for_angle(
@@ -1956,10 +1953,8 @@ static void fill_linear_histogram_for_angle(
     // Determine histogram parameters
     double tmin = std::numeric_limits<float>::infinity();
     double tmax = -std::numeric_limits<float>::infinity();
-    double proj_x = std::sin(angle);
-    double proj_y = std::cos(angle);
     for (const QPair<FColor, QPointF> &p : interior_colors) {
-        double t = proj_x * p.second.x() + proj_y * p.second.y();
+        double t = proj_angle(p.second, angle);
         tmin = std::min(tmin, t);
         tmax = std::max(tmax, t);
     }
@@ -1969,7 +1964,6 @@ static void fill_linear_histogram_for_angle(
     region.linear_angle = angle;
     region.linear_start = tmin;
     region.linear_stop = tmax;
-    region.linear_nsteps = nsteps;
     region.linear_colors.clear();
     // Compute average color
     double *histogram_r = new double[nsteps];
@@ -1986,11 +1980,11 @@ static void fill_linear_histogram_for_angle(
     }
     for (const QPair<FColor, QPointF> &p : interior_colors) {
         QColor color(p.first.rgba());
-        double t = proj_x * p.second.x() + proj_y * p.second.y();
-        double cell = (region.linear_nsteps - 1.) * (t - region.linear_start) /
+        double t = proj_angle(p.second, angle);
+        double cell = (nsteps - 1.) * (t - region.linear_start) /
                       (region.linear_stop - region.linear_start);
         int lidx = (int)std::floor(cell);
-        lidx = std::max(0, std::min(region.linear_nsteps - 2, lidx));
+        lidx = std::max(0, std::min(nsteps - 2, lidx));
         double frac = std::max(0.0, std::min(1.0, cell - lidx));
         histogram_r[lidx] += color.redF() * (1. - frac);
         histogram_g[lidx] += color.greenF() * (1. - frac);
@@ -2033,6 +2027,7 @@ static int rgba_distance2(QRgb a, QRgb b) {
 static long
 compute_gradient_error(const Subregion &region,
                        const QVector<QPair<FColor, QPointF>> &interior_colors) {
+    int nsteps = region.linear_colors.size();
     long sqe = 0.;
     for (const QPair<FColor, QPointF> &p : interior_colors) {
         QRgb color = p.first.rgba();
@@ -2041,15 +2036,12 @@ compute_gradient_error(const Subregion &region,
         if (region.gradient_type == GradientType::gSolid) {
             pred = region.solid_color;
         } else if (region.gradient_type == GradientType::gLinear) {
-            double proj_x = std::sin(region.linear_angle);
-            double proj_y = std::cos(region.linear_angle);
-            double t = proj_x * p.second.x() + proj_y * p.second.y();
+            double t = proj_angle(p.second, region.linear_angle);
 
-            double cell = (region.linear_nsteps - 1.) *
-                          (t - region.linear_start) /
+            double cell = (nsteps - 1.) * (t - region.linear_start) /
                           (region.linear_stop - region.linear_start);
             int lidx = (int)std::floor(cell);
-            lidx = std::max(0, std::min(region.linear_nsteps - 2, lidx));
+            lidx = std::max(0, std::min(nsteps - 2, lidx));
             double frac = std::max(0.0, std::min(1.0, cell - lidx));
 
             QRgb a = region.linear_colors[lidx];
@@ -2173,7 +2165,7 @@ void VectorTracer::computeGradients() {
                                                 grid_size, angle);
                 qDebug("class %d subclass %d angle %f nsteps %d",
                        region.class_no, subreg.subclass_no, angle,
-                       subreg.linear_nsteps);
+                       subreg.linear_colors.size());
             }
 
             // Fall back to solid if uniform
@@ -2211,7 +2203,10 @@ void VectorTracer::computeGradients() {
     const int S = std::max(W, H);
     const double px_per_mm = 3.78;
     double T = 45 * px_per_mm;
-    double Tx = T, Ty = -T;
+    const QPointF offset =
+        2 * QPointF(0.5 * W / S + 1. / S, (0.5 * H / S + 1. / S));
+    QMatrix transf(T / 2, 0, 0, -T / 2, offset.x() * T / 2, offset.y() * T / 2);
+
     // TODO: use `point_to_grid_coord` and then rescale the grid
     QRectF viewbox(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S);
 
@@ -2239,8 +2234,6 @@ void VectorTracer::computeGradients() {
 
         s << "  <defs>\n";
 
-        const QPointF offset =
-            2 * QPointF(0.5 * W / S + 1. / S, (0.5 * H / S + 1. / S));
         // Hatching fill overlays
         for (const Region &region : region_list) {
             // TODO: per-material settings? normal angle dependence
@@ -2266,6 +2259,25 @@ void VectorTracer::computeGradients() {
         for (const Region &region : region_list) {
             for (const Subregion &subreg : region.subregions) {
                 if (subreg.gradient_type == GradientType::gLinear) {
+                    // Locate center point
+                    QPointF sscenter;
+                    for (const RenderPoint &p : subreg.boundaries[0]) {
+                        sscenter += p.coords;
+                    }
+                    sscenter /= subreg.boundaries[0].size();
+
+                    float ssf = proj_angle(sscenter, subreg.linear_angle);
+
+                    float lsin = std::sin(subreg.linear_angle),
+                          lcos = std::cos(subreg.linear_angle);
+                    QPointF ssfstart = sscenter + (subreg.linear_start - ssf) *
+                                                      QPointF(-lsin, lcos);
+                    QPointF ssfstop = sscenter + (subreg.linear_stop - ssf) *
+                                                     QPointF(-lsin, lcos);
+
+                    ssfstart = transf.map(ssfstart);
+                    ssfstop = transf.map(ssfstop);
+
                     s << QString("   <linearGradient id=\"gradient%1_%2\" "
                                  "x1=\"%3\" "
                                  "y1=\"%4\" x2=\"%5\" y2=\"%6\" "
@@ -2273,32 +2285,21 @@ void VectorTracer::computeGradients() {
                                  "gradientUnits=\"userSpaceOnUse\">\n")
                              .arg(region.class_no)
                              .arg(subreg.subclass_no)
-                             .arg(viewbox.center().x() -
-                                  T * std::sin(subreg.linear_angle))
-                             .arg(viewbox.center().y() +
-                                  T * std::cos(subreg.linear_angle))
-                             .arg(viewbox.center().x() +
-                                  T * std::sin(subreg.linear_angle))
-                             .arg(viewbox.center().y() -
-                                  T * std::cos(subreg.linear_angle))
-                             .arg(1 ? "repeat" : "pad");
-                    for (int i = 0; i < subreg.linear_colors.size(); i++) {
-                        double stop_pos =
-                            (subreg.linear_start +
-                             i * (subreg.linear_stop - subreg.linear_start) /
-                                 (subreg.linear_nsteps - 1.));
-                        if ((i <= 0 || subreg.linear_colors[i] ==
-                                           subreg.linear_colors[i - 1]) &&
-                            (i >= subreg.linear_colors.size() - 1 ||
-                             subreg.linear_colors[i] ==
-                                 subreg.linear_colors[i + 1])) {
+                             .arg(ssfstart.x())
+                             .arg(ssfstart.y())
+                             .arg(ssfstop.x())
+                             .arg(ssfstop.y())
+                             .arg(0 ? "repeat" : "pad");
+                    int nsteps = subreg.linear_colors.size();
+                    for (int i = 0; i < nsteps; i++) {
+                        double stop_pos = i / (nsteps - 1.);
+
+                        if (i > 0 && i < nsteps - 1 &&
+                            subreg.linear_colors[i] ==
+                                subreg.linear_colors[i - 1]) {
                             // Skip redundant points
                             continue;
                         }
-
-                        // in range [-0.5, 0.5] subset [-1.0,1.0]
-                        stop_pos = (stop_pos + 1.0) / 2.0;
-                        // in range [0.0, 1.0]
 
                         double alpha = QColor(subreg.linear_colors[i]).alphaF();
                         s << QString(
@@ -2322,7 +2323,7 @@ void VectorTracer::computeGradients() {
             // Compute region limit
             for (const Subregion &subreg : region.subregions) {
                 const QVector<QPolygonF> &subloops =
-                    boundary_loops_for_subregion(subreg, offset, T);
+                    boundary_loops_for_subregion(subreg, transf);
 
                 QString fill_desc;
                 if (subreg.gradient_type == GradientType::gSolid) {
@@ -2343,7 +2344,7 @@ void VectorTracer::computeGradients() {
                          .arg(svg_path_text_from_polygons(subloops));
             }
             const QVector<QPolygonF> &loops =
-                boundary_loops_for_region(region, offset, T);
+                boundary_loops_for_region(region, transf);
             // Overlay mix with hatching
             if (region.is_clipped_patch) {
                 s << QString("  <path id=\"region_hatch%1\" "
@@ -2362,7 +2363,7 @@ void VectorTracer::computeGradients() {
                  .arg(T * 0.003);
         for (const Region &region : region_list) {
             const QVector<QPolygonF> &loops =
-                boundary_loops_for_region(region, offset, T);
+                boundary_loops_for_region(region, transf);
             for (int i = 0; i < loops.size(); i++) {
                 QVector<QPolygonF> solo;
                 solo.push_back(loops[i]);
@@ -2387,7 +2388,7 @@ void VectorTracer::computeGradients() {
                         }
                     }
                     if (all_visible) {
-                        QPolygonF loop = shift_and_scale_loop(bound, offset, T);
+                        QPolygonF loop = shift_and_scale_loop(bound, transf);
                         QVector<QPolygonF> solo;
                         solo.push_back(loop);
 
@@ -2415,7 +2416,7 @@ void VectorTracer::computeGradients() {
                                 crease_col.blueF() / 2, crease_col.alphaF());
                             QVector<QPolygonF> solo;
                             solo.push_back(shift_and_scale_loop(
-                                visible_segments[m], offset, T));
+                                visible_segments[m], transf));
                             s << QString("    <path id=\"edge%1_%2_%3_%4\" "
                                          "stroke=\"%5\" stroke-width=\"%6\" "
                                          "d=\"%7\"/>\n")
