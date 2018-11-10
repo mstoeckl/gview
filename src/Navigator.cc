@@ -42,7 +42,9 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
     // Minimum feature size, yet still above double discrimination threshold
     //    const G4double epsilon = 1e-3 * CLHEP::nanometer;
 
-    G4double sdist, edist;
+    // We set edist as kInfinity/4 so that later increments of kInfinity/2
+    // (which is less than the distanceToIn failure result) surpass it.
+    G4double sdist = 0., edist = kInfinity / 4;
     G4ThreeVector entrynormal;
     G4ThreeVector exitnormal;
     bool exists = clipRay(clipping_planes, init, forward, sdist, edist,
@@ -159,7 +161,10 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
         }
         G4double exitdist = cmu.abs_dist - sdist;
 
-        G4double closestDist = 2 * kInfinity;
+        // Typically, no-collision implies a distance of kInfinity,
+        // but floating point error may reduce this slightly. Thus if
+        // the distance-to-in is kInfinity, we automatically get no-intersection
+        G4double closestDist = kInfinity / 2;
         const Element *closest = NULL;
         G4ThreeVector closestPos;
         for (size_t walk = 0; walk < curr.children.size(); walk++) {
@@ -187,10 +192,7 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
                 emu.niter = iteration;
             }
             G4double altdist = emu.abs_dist - sdist;
-            if (altdist >= kInfinity) {
-                // No intersection
-                continue;
-            } else if (altdist < closestDist) {
+            if (altdist < closestDist) {
                 closestPos = sub;
                 closest = &elem;
                 closestDist = altdist;
@@ -374,7 +376,7 @@ RayPoint GeantNavigator::traceRay(const G4ThreeVector &init,
     r.front_clipped = false;
     r.back_clipped = false;
     r.intersections = intersections;
-    G4double sdist, edist;
+    G4double sdist = 0., edist = kInfinity / 2;
     G4ThreeVector entrynormal;
     G4ThreeVector exitnormal;
     bool exists = clipRay(clipping_planes, init, forward, sdist, edist,

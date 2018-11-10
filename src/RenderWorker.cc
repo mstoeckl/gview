@@ -49,8 +49,6 @@ bool clipRay(const std::vector<Plane> &clipping_planes,
              const G4ThreeVector &init, const G4ThreeVector &forward,
              G4double &sdist, G4double &edist, G4ThreeVector &entrynormal,
              G4ThreeVector &exitnormal) {
-    sdist = 0.0;
-    edist = kInfinity;
     // Computes esdist, entryexitnormal. Returns 1 iff a ray exists
     for (uint i = 0; i < clipping_planes.size(); i++) {
         const Plane &p = clipping_planes[i];
