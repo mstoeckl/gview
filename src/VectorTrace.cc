@@ -350,7 +350,7 @@ FColor VectorTracer::calculateInteriorColor(const RenderPoint &pt) {
     const G4ThreeVector &forward = forwardDirection(view_data.orientation);
     GeoShader &shader = *getGeoShader(view_data.gshader);
     FColor color = shader(pt.ray, FColor(1., 1., 1., 0), 9e99, NULL, view_data,
-                          pt.coords, forward);
+                          pt.coords, forward, false);
     return color;
 }
 FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
@@ -411,7 +411,7 @@ FColor VectorTracer::calculateBoundaryColor(const RenderPoint &inside,
 
     QPointF mco = (inside.coords + outside.coords) / 2;
     FColor color = shader(combo, FColor(1., 1., 1., 0), 9e99, NULL, view_data,
-                          mco, forward);
+                          mco, forward, false);
 
     delete[] combo.intersections;
 
@@ -1001,16 +1001,6 @@ void VectorTracer::computeEdges() {
         region.xmax = xmax;
         region.ymin = ymin;
         region.ymax = ymax;
-        region.is_clipped_patch = false;
-        if (class_representative.ray.intersections) {
-            region.is_clipped_patch = class_representative.ray.front_clipped;
-        }
-        if (class_representative.ray.N > 0) {
-            if (!view_data
-                     .elements[class_representative.ray.intersections[0].ecode]
-                     .visible)
-                region.is_clipped_patch = false;
-        }
 
         for (int i = 0; i < loops.size(); i++) {
             QVector<RenderPoint> qlp;
@@ -1150,6 +1140,13 @@ int VectorTracer::crease_depth(const RenderPoint &q0, const RenderPoint &q1,
     if (!q0.ray.intersections || !q1.ray.intersections)
         return -1;
 
+    // Two clipping planes will always produce a crease
+    if (q0.ray.N >= 1 && q1.ray.N >= 1 && q0.ray.front_clipped &&
+        q1.ray.front_clipped &&
+        q0.ray.intersections[0].normal != q1.ray.intersections[0].normal) {
+        return 0;
+    }
+
     for (int i = 0; i < std::min(q0.ray.N, q1.ray.N); i++) {
         const Intersection &a0 = q0.ray.intersections[i];
         const Intersection &a1 = q1.ray.intersections[i];
@@ -1237,6 +1234,7 @@ void VectorTracer::computeCreases() {
         QSet<QPoint> pt_set = QSet<QPoint>::fromList(pt_list.toList());
         int subreg_no = -1;
         QVector<QPoint> altered_list = pt_list;
+        QVector<QPoint> subreg_representative_coords;
         while (pt_set.size()) {
             subreg_no += 1;
             pt_list = pt_set.toList().toVector();
@@ -1247,6 +1245,7 @@ void VectorTracer::computeCreases() {
 
             QPoint p0 = pt_list[randint(pt_list.size())];
             grid_points[p0.x() * H + p0.y()].subregion_class = subreg_no;
+            subreg_representative_coords.append(p0);
             flood_fill_data[p0.x() * H + p0.y()] = 1;
             pt_set.remove(p0);
             altered_list.push_back(p0);
@@ -1456,6 +1455,21 @@ void VectorTracer::computeCreases() {
             subreg.linear_stop = 0.;
             subreg.linear_colors.clear();
 
+            // Determine if subregion is clipped region
+            subreg.is_clipped_patch = false;
+            subreg.representative_coord = subreg_representative_coords[subcls];
+            QPoint src = subreg_representative_coords[subcls];
+            const RenderPoint &subreg_class_rep =
+                grid_points[src.x() * H + src.y()];
+            if (subreg_class_rep.ray.intersections) {
+                subreg.is_clipped_patch = subreg_class_rep.ray.front_clipped;
+            }
+            if (subreg_class_rep.ray.N > 0) {
+                int ec = subreg_class_rep.ray.intersections[0].ecode;
+                if (ec < 0 || !view_data.elements[ec].visible)
+                    subreg.is_clipped_patch = false;
+            }
+
             subreg.boundaries.clear();
             for (int zzz = 0; zzz < loops.size(); zzz++) {
                 const QPolygon &poly = loops[zzz];
@@ -1649,15 +1663,15 @@ void VectorTracer::computeCreases() {
 }
 
 static QPolygonF shift_and_scale_loop(const QVector<RenderPoint> &loop,
-                                      const QMatrix &transform) {
+                                      const QTransform &transform) {
     QPolygonF a;
     for (const RenderPoint &p : loop) {
         a.push_back(transform.map(p.coords));
     }
     return a;
 }
-static QVector<QPolygonF> boundary_loops_for_region(const Region &region,
-                                                    const QMatrix &transform) {
+static QVector<QPolygonF>
+boundary_loops_for_region(const Region &region, const QTransform &transform) {
     QVector<QPolygonF> n;
     n.push_back(shift_and_scale_loop(region.exterior, transform));
     for (const QVector<RenderPoint> &loop : region.interior) {
@@ -1667,7 +1681,7 @@ static QVector<QPolygonF> boundary_loops_for_region(const Region &region,
 }
 static QVector<QPolygonF>
 boundary_loops_for_subregion(const Subregion &subreg,
-                             const QMatrix &transform) {
+                             const QTransform &transform) {
     QVector<QPolygonF> n;
     for (const QVector<RenderPoint> &loop : subreg.boundaries) {
         n.push_back(shift_and_scale_loop(loop, transform));
@@ -2130,7 +2144,10 @@ void VectorTracer::computeGradients() {
     double T = 45 * px_per_mm;
     const QPointF offset =
         2 * QPointF(0.5 * W / S + 1. / S, (0.5 * H / S + 1. / S));
-    QMatrix transf(T / 2, 0, 0, -T / 2, offset.x() * T / 2, offset.y() * T / 2);
+    QTransform transf(T / 2, 0, 0, -T / 2, offset.x() * T / 2,
+                      offset.y() * T / 2);
+    QTransform dirtransf(transf.m11(), transf.m12(), transf.m21(), transf.m22(),
+                         0., 0.);
 
     // TODO: use `point_to_grid_coord` and then rescale the grid
     QRectF viewbox(0., 0., T * (W + 2) / (double)S, T * (H + 2) / (double)S);
@@ -2158,25 +2175,58 @@ void VectorTracer::computeGradients() {
 
         s << "  <defs>\n";
 
-        // Hatching fill overlays
+        // Hatching fill overlays (by type)
+        QMap<CompactNormal, int> normal_directions;
         for (const Region &region : region_list) {
-            // TODO: per-material settings? normal angle dependence
-            if (region.is_clipped_patch) {
-                double angle = 60.0;
-                double hatch_width = T / 40.;
-
-                s << QString("    <pattern id=\"hatching%1\" width=\"%2\" "
-                             "height=\"10\" patternTransform=\"rotate(%3 0 "
-                             "0)\" patternUnits=\"userSpaceOnUse\">\n")
-                         .arg(region.class_no)
-                         .arg(hatch_width)
-                         .arg(angle);
-                s << QString("       <line x1=\"0\" y1=\"0\" x2=\"0\" "
-                             "y2=\"10\" stroke=\"%1\" stroke-width=\"%2\"/>\n")
-                         .arg(color_hex_name_rgb(qRgb(0, 0, 0)))
-                         .arg(hatch_width);
-                s << QString("    </pattern>\n");
+            for (const Subregion &subreg : region.subregions) {
+                // consider average normal over subregion
+                if (subreg.is_clipped_patch) {
+                    QPoint src = subreg.representative_coord;
+                    const CompactNormal &normal =
+                        grid_points[src.x() * H + src.y()]
+                            .ray.intersections[0]
+                            .normal;
+                    if (!normal_directions.contains(normal)) {
+                        normal_directions[normal] = normal_directions.size();
+                    }
+                }
             }
+        }
+        const G4ThreeVector &updown = view_data.orientation.rowY();
+        const G4ThreeVector &lright = view_data.orientation.rowZ();
+        for (CompactNormal nd : normal_directions.keys()) {
+            int idx = normal_directions[nd];
+            const G4ThreeVector &normal = nd;
+
+            const G4ThreeVector &orthA = normal.orthogonal().unit();
+            const G4ThreeVector &orthB = normal.cross(orthA).unit();
+            const G4ThreeVector &pattern_dir = (orthA + orthB);
+            // Convert to unit viewport space
+            double udf = pattern_dir.dot(updown) / view_data.scale,
+                   lrf = pattern_dir.dot(lright) / view_data.scale;
+            double nudf, nlrf;
+            // Convert to SVG space
+            dirtransf.map(udf, lrf, &nudf, &nlrf);
+            // Compute spacing/angle
+            double spacing = 10 * std::sqrt(nudf * nudf + nlrf * nlrf);
+            double angle = std::atan2(nudf, nlrf);
+
+            //            double hatch_width = spacing / 2;
+
+            double hatch_width = T / 40.;
+            qDebug("spacing %f hatch_width %f", spacing, hatch_width);
+
+            s << QString("    <pattern id=\"hatching%1\" width=\"%2\" "
+                         "height=\"10\" patternTransform=\"rotate(%3 0 "
+                         "0)\" patternUnits=\"userSpaceOnUse\">\n")
+                     .arg(idx)
+                     .arg(hatch_width)
+                     .arg(angle * 180 / CLHEP::pi);
+            s << QString("       <line x1=\"0\" y1=\"0\" x2=\"0\" "
+                         "y2=\"10\" stroke=\"%1\" stroke-width=\"%2\"/>\n")
+                     .arg(color_hex_name_rgb(qRgb(0, 0, 0)))
+                     .arg(hatch_width);
+            s << QString("    </pattern>\n");
         }
 
         // Gradients
@@ -2266,16 +2316,25 @@ void VectorTracer::computeGradients() {
                          .arg(subreg.subclass_no)
                          .arg(fill_desc)
                          .arg(svg_path_text_from_polygons(subloops));
-            }
-            const QVector<QPolygonF> &loops =
-                boundary_loops_for_region(region, transf);
-            // Overlay mix with hatching
-            if (region.is_clipped_patch) {
-                s << QString("  <path id=\"region_hatch%1\" "
-                             "fill=\"url(#hatching%1)\" opacity=\"0.2\" "
-                             "d=\"%2\"/>\n")
-                         .arg(region.class_no)
-                         .arg(svg_path_text_from_polygons(loops));
+
+                // Overlay mix with hatching
+                if (subreg.is_clipped_patch) {
+                    QPoint src = subreg.representative_coord;
+                    const CompactNormal &normal =
+                        grid_points[src.x() * H + src.y()]
+                            .ray.intersections[0]
+                            .normal;
+                    int idx = normal_directions[normal];
+                    s << QString("  <path id=\"region_hatch%1_%2\" "
+                                 "fill=\"url(#hatching%3)\" opacity=\"0.2\" "
+                                 "d=\"%4\"/>\n")
+                             .arg(region.class_no)
+                             .arg(subreg.subclass_no)
+                             .arg(idx)
+                             .arg(svg_path_text_from_polygons(subloops));
+                }
+                if (subreg.is_clipped_patch) {
+                }
             }
         }
         s << QString("</g>\n");

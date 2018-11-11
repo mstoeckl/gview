@@ -41,6 +41,13 @@ public:
     CompactNormal() : x(0.), y(0.), z(0.) {}
     CompactNormal(G4ThreeVector n) : x(n.x()), y(n.y()), z(n.z()) {}
     operator G4ThreeVector() const { return G4ThreeVector(x, y, z); }
+    bool operator==(const CompactNormal &o) const {
+        return x == o.x && y == o.y && z == o.z;
+    }
+    bool operator!=(const CompactNormal &o) const { return !(o == *this); }
+    bool operator<(const CompactNormal &o) const {
+        return x < o.x || (x == o.x && (y < o.y || (y == o.y && z < o.z)));
+    }
 
     float x;
     float y;
@@ -50,10 +57,10 @@ public:
 typedef struct Intersection_s {
     // The normal at the intersection
     CompactNormal normal;
-    // Distance from ray start to intersection
-    G4double dist;
     // Volume behind the intersection
     int ecode;
+    // Distance from ray start to intersection
+    G4double dist;
 } Intersection;
 
 typedef struct RayPoint_s {
@@ -96,9 +103,9 @@ typedef struct Element_s {
     // Relative to the root node
     G4ThreeVector global_offset;
 
-    // Alpha = 1.0 : opaque; alpha < 1.0, we do linear sequential color merging
-    // (yes, resulting colors may be weird. Not as good as exponential
-    // color influence falloff, but you can't have everything.
+    // Alpha = 1.0 : opaque; alpha < 1.0, we do linear sequential color
+    // merging (yes, resulting colors may be weird. Not as good as
+    // exponential color influence falloff, but you can't have everything.
     // (the background color is white!)
 
     std::vector<int> children;

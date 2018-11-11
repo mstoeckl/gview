@@ -111,8 +111,8 @@ void RenderRayTask::run(Context *ctx) {
             QPointF pt(ctx->grid.toViewCoord(j, i));
             RayPoint r = rayAtPoint(*nav, pt, radius, forward, *d, ints, aints,
                                     MAX_BUFFER_DEPTH, ndevs);
-            FColor color =
-                shader(r, FColor(trackcol), trackdist, NULL, *d, pt, forward);
+            FColor color = shader(r, FColor(trackcol), trackdist, NULL, *d, pt,
+                                  forward, true);
             pts[j] = color.rgba();
         }
     }
@@ -492,7 +492,7 @@ void RenderColorTask::run(Context *ctx) {
             FColor color =
                 shader(ray, FColor(trackcol), trackdist,
                        voxData.blank ? NULL : voxData.voxtrails[sidx],
-                       *viewData, pt, forward);
+                       *viewData, pt, forward, true);
             pts[j] = color.rgba();
         }
     }

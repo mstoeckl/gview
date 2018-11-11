@@ -8,7 +8,7 @@
 typedef FColor GeoShader(const RayPoint &ray, const FColor &trackcol,
                          G4double trackdist, double *voxel_density,
                          const ViewData &d, const QPointF &pt,
-                         const G4ThreeVector &forward);
+                         const G4ThreeVector &forward, bool show_cut_marks);
 typedef void TrackShader(const TrackHeader &h, const TrackPoint &pa,
                          const TrackPoint &pb, const G4ThreeVector &a,
                          const G4ThreeVector &b, const G4ThreeVector &forward,

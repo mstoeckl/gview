@@ -41,6 +41,10 @@ typedef struct {
     float linear_start;
     float linear_stop;
     QVector<QRgb> linear_colors;
+
+    // Add clipping plane marks
+    bool is_clipped_patch;
+    QPoint representative_coord;
 } Subregion;
 
 typedef struct {
@@ -50,8 +54,6 @@ typedef struct {
     // Boundary
     QVector<RenderPoint> exterior;
     QVector<QVector<RenderPoint>> interior;
-    // Add clipping plane marks
-    bool is_clipped_patch;
     // Exterior lines
     QRgb meanExteriorColor;
     QVector<QRgb> meanInteriorColors;
