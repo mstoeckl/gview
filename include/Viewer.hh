@@ -66,8 +66,7 @@ public slots:
     void updateVoxDens();
     void updateShowLines();
     void screenshot(int sx = 1);
-    void vectorTScreenshot();
-    void vectorOScreenshot();
+    void vectorScreenshot();
     void vectorPreview();
     void changeGeometry(QAction *);
     void changeTracks(QAction *);

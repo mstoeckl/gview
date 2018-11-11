@@ -65,16 +65,14 @@ class VectorTracer : public QObject {
     Q_OBJECT
 public:
     VectorTracer(ViewData view_data, TrackData track_data,
-                 const QString &target_file, bool transparency = true,
-                 QObject *parent = NULL);
+                 const QString &target_file, QObject *parent = NULL);
     virtual ~VectorTracer();
     QImage preview(const QSize &sz);
 
 public slots:
     void renderFull();
     void renderStep();
-    void reset(bool transparent, const QSize &grid_size,
-               const QString &target_name);
+    void reset(const QSize &grid_size, const QString &target_name);
     void recolor();
 
     void computeGrid();
@@ -109,7 +107,6 @@ private:
     QString file_name;
     QPointF bound_low, bound_high;
     long nqueries;
-    bool transparent_volumes;
     QVector<FColor> element_colors;
 
     ViewData view_data;

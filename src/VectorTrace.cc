@@ -5,10 +5,12 @@
 #include "Shaders.hh"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QPainter>
 #include <QPen>
 #include <QProcess>
 #include <QSet>
+#include <QTemporaryFile>
 #include <QTextStream>
 #include <QTime>
 
@@ -113,13 +115,11 @@ static void recsetColorsByMaterial(std::vector<Element> &elts,
 }
 
 VectorTracer::VectorTracer(ViewData vd, TrackData td,
-                           const QString &target_file, bool transparency,
-                           QObject *parent)
+                           const QString &target_file, QObject *parent)
     : QObject(parent), view_data(vd), track_data(td) {
     step_next = Steps::sGrid;
     file_name = target_file;
     nqueries = 0;
-    transparent_volumes = transparency;
 
     recolor();
 
@@ -196,13 +196,12 @@ void VectorTracer::renderStep() {
         break;
     }
 }
-void VectorTracer::reset(bool transp, const QSize &size,
-                         const QString &target_name) {
+void VectorTracer::reset(const QSize &size, const QString &target_name) {
     step_next = Steps::sGrid;
-    transparent_volumes = transp;
     grid_size = size;
     file_name = target_name;
-    qDebug("Reset tracer: %s mode", transp ? "transparent" : "opaque");
+    qDebug("Reset tracer: size (%d,%d), file %s", grid_size.width(),
+           grid_size.height(), file_name.toUtf8().constData());
 }
 int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
     // Dummy points always match each other
@@ -212,75 +211,28 @@ int VectorTracer::faildepth(const RenderPoint &a, const RenderPoint &b) {
     if (!ra.intersections && !rb.intersections)
         return -1;
 
-    if (!transparent_volumes) {
-        // Consider only the first disagreement in visible volumes
-        // Q: should compressTraces automatically vanish invisible volumes?
-        // and use a null element gap instead?
-        if (!ra.intersections || !rb.intersections)
-            return 0;
-        const Element *first_a = NULL, *first_b = NULL;
-        Intersection *first_ia = NULL, *first_ib = NULL;
-        for (int i = 0; i < ra.N; i++) {
-            if (ra.intersections[i].ecode >= 0 &&
-                view_data.elements[ra.intersections[i].ecode].visible) {
-                first_a = &view_data.elements[ra.intersections[i].ecode];
-                first_ia = &ra.intersections[i];
-                break;
-            }
-        }
-        for (int i = 0; i < rb.N; i++) {
-            if (rb.intersections[i].ecode >= 0 &&
-                view_data.elements[rb.intersections[i].ecode].visible) {
-                first_b = &view_data.elements[rb.intersections[i].ecode];
-                first_ib = &rb.intersections[i];
-                break;
-            }
-        }
-        if (first_a != first_b) {
-            return 0;
-        }
-        if (first_ia && first_ib && ra.front_clipped != rb.front_clipped) {
-            return 0;
-        }
-        return -1;
-    } else {
-        if (ra.front_clipped != rb.front_clipped) {
-            return 0;
-        }
-
-        for (int i = 0; i < std::min(ra.N, rb.N); i++) {
-            if (ra.intersections[i].ecode != rb.intersections[i].ecode) {
-                return i;
-            }
-        }
-        if (ra.N != rb.N) {
-            return std::min(ra.N, rb.N);
-        }
-        if (!ra.intersections || !rb.intersections)
-            return 0;
-
-        if (ra.back_clipped != rb.back_clipped) {
-            // note ra.N == rb.N
-            return ra.N - 1;
-        }
-
-        // no failure
-        return -1;
+    if (ra.front_clipped != rb.front_clipped) {
+        return 0;
     }
-}
 
-static Intersection *first_nontrivial_intersection(const RenderPoint &p,
-                                                   const ViewData &vd) {
-    for (int i = 0; i < p.ray.N; i++) {
-        if ((i > 0 && p.ray.intersections[i - 1].ecode >= 0 &&
-             vd.elements[p.ray.intersections[i - 1].ecode].visible) ||
-            (i < p.ray.N && p.ray.intersections[i].ecode >= 0 &&
-             vd.elements[p.ray.intersections[i].ecode].visible)) {
-            return &p.ray.intersections[i];
-            break;
+    for (int i = 0; i < std::min(ra.N, rb.N); i++) {
+        if (ra.intersections[i].ecode != rb.intersections[i].ecode) {
+            return i;
         }
     }
-    return NULL;
+    if (ra.N != rb.N) {
+        return std::min(ra.N, rb.N);
+    }
+    if (!ra.intersections || !rb.intersections)
+        return 0;
+
+    if (ra.back_clipped != rb.back_clipped) {
+        // note ra.N == rb.N
+        return ra.N - 1;
+    }
+
+    // no failure
+    return -1;
 }
 
 RenderPoint VectorTracer::queryPoint(QPointF spot,
@@ -364,33 +316,18 @@ void VectorTracer::bracketCrease(const RenderPoint &initial_inside,
     *result_outside = initial_outside;
 
     // Step 2: bisect on cause of difference
-    Intersection cx_inside =
-        transparent_volumes
-            ? result_inside->ray.intersections[cd]
-            : *first_nontrivial_intersection(*result_inside, view_data);
-    Intersection cx_outside =
-        transparent_volumes
-            ? result_outside->ray.intersections[cd]
-            : *first_nontrivial_intersection(*result_outside, view_data);
+    Intersection cx_inside = result_inside->ray.intersections[cd];
+    Intersection cx_outside = result_outside->ray.intersections[cd];
     const int nsubdivisions = 20;
     for (int i = 0; i < nsubdivisions; i++) {
         RenderPoint mid = queryPoint(
             0.5 * (result_inside->coords + result_outside->coords), thread_nav);
         Intersection cx_mid;
-        if (transparent_volumes) {
-            if (mid.ray.N <= cd) {
-                // Size failure for midpoint; abort
-                return;
-            }
-            cx_mid = mid.ray.intersections[cd];
-        } else {
-            Intersection *k = first_nontrivial_intersection(mid, view_data);
-            if (!k) {
-                // Lack of visible zone for midpoint; abort
-                return;
-            }
-            cx_mid = *k;
+        if (mid.ray.N <= cd) {
+            // Size failure for midpoint; abort
+            return;
         }
+        cx_mid = mid.ray.intersections[cd];
         if (is_jump) {
             if (std::abs(cx_mid.dist - cx_inside.dist) <
                 std::abs(cx_mid.dist - cx_outside.dist)) {
@@ -1213,24 +1150,12 @@ int VectorTracer::crease_depth(const RenderPoint &q0, const RenderPoint &q1,
     if (!q0.ray.intersections || !q1.ray.intersections)
         return -1;
 
-    if (transparent_volumes) {
-        for (int i = 0; i < std::min(q0.ray.N, q1.ray.N); i++) {
-            const Intersection &a0 = q0.ray.intersections[i];
-            const Intersection &a1 = q1.ray.intersections[i];
-            if (crease_check(a0, a1, q0.coords, q1.coords, view_data, cos_alpha,
-                             min_jump, is_jump)) {
-                return i;
-            }
-        }
-    } else {
-        Intersection *first0 = first_nontrivial_intersection(q0, view_data);
-        Intersection *first1 = first_nontrivial_intersection(q1, view_data);
-        if (!first0 || !first1)
-            return -1;
-
-        if (crease_check(*first0, *first1, q0.coords, q1.coords, view_data,
-                         cos_alpha, min_jump, is_jump)) {
-            return 0;
+    for (int i = 0; i < std::min(q0.ray.N, q1.ray.N); i++) {
+        const Intersection &a0 = q0.ray.intersections[i];
+        const Intersection &a1 = q1.ray.intersections[i];
+        if (crease_check(a0, a1, q0.coords, q1.coords, view_data, cos_alpha,
+                         min_jump, is_jump)) {
+            return i;
         }
     }
 
@@ -2216,14 +2141,13 @@ void VectorTracer::computeGradients() {
     // where opposing candidates are closest. (Again, march-cube style?,
     // then refined ? or A/B decision style.
 
-    QString svg_name =
-        file_name.endsWith(".svg") ? file_name : "/tmp/render.svg";
+    QTemporaryFile tfile("/tmp/render.svg.XXXXXX");
+
+    tfile.open();
     qDebug("Rendering final image, %d regions, to %s", region_list.size(),
-           svg_name.toUtf8().constData());
+           tfile.fileName().toUtf8().constData());
     {
-        QFile ofile(svg_name);
-        ofile.open(QFile::WriteOnly | QFile::Truncate);
-        QTextStream s(&ofile);
+        QTextStream s(&tfile);
 
         s << "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"\n "
              "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n";
@@ -2438,20 +2362,46 @@ void VectorTracer::computeGradients() {
         s << "</svg>\n";
     }
 
-    // We proxy via inkscape because QtSvg barely supports SVG.
-    // This takes half a second to run
     QTime time_start = QTime::currentTime();
-    run_command(QStringList() << "inkscape"
-                              << "--export-png=/tmp/write.png"
-                              << "--export-dpi=800" << svg_name);
-    if (file_name.endsWith(".pdf")) {
+    if (file_name.size()) {
+        if (file_name.endsWith(".pdf")) {
+            qDebug("Converting %s to %s", tfile.fileName().toUtf8().constData(),
+                   file_name.toUtf8().constData());
+            run_command(QStringList()
+                        << "inkscape"
+                        << "--export-pdf=" + file_name << tfile.fileName());
+        } else {
+            qDebug("Copying %s to %s", tfile.fileName().toUtf8().constData(),
+                   file_name.toUtf8().constData());
+            tfile.copy(file_name);
+        }
+    } else {
+        // Automatically pick a name to copy the SVG to
+        long i = 0;
+        QString fmt("vector%1.svg");
+        QString dst;
+        do {
+            dst = fmt.arg(i, 4, 10, QChar('0'));
+            i++;
+        } while (QFileInfo(dst).exists());
+        qDebug("Copying %s to %s", tfile.fileName().toUtf8().constData(),
+               dst.toUtf8().constData());
+        tfile.copy(dst);
+    }
+    {
+        // Use Inkscape to generate an image preview, because QtSVG is generally
+        // incapable; this should take half a second or so
+        QTemporaryFile png_file("/tmp/preview.png.XXXXXX");
+        png_file.open();
         run_command(QStringList() << "inkscape"
-                                  << "--export-pdf=" + file_name << svg_name);
+                                  << "--export-png=" + png_file.fileName()
+                                  << "--export-dpi=800" << tfile.fileName());
+        QImage grad_image = QImage(png_file.fileName(), "png");
+
+        emit produceImagePhase(grad_image, QString("Render completed"),
+                               nqueries, true);
     }
 
-    QImage grad_image = QImage("/tmp/write.png");
-    emit produceImagePhase(grad_image, QString("Render completed"), nqueries,
-                           true);
     QTime time_end = QTime::currentTime();
     qDebug("Conversion took %f seconds", time_start.msecsTo(time_end) * 1e-3);
 }

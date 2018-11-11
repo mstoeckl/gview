@@ -73,15 +73,9 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     display->setMinimumSize(QSize(300, 300));
 
     button_render = new QPushButton("Render");
-    choice_transparent = new QRadioButton("Transparent");
-    choice_opaque = new QRadioButton("Opaque");
     button_reroll = new QPushButton("Recolor");
     line_name = new QLineEdit();
-    line_name->setPlaceholderText("vector.svg");
-    QButtonGroup *choice_group = new QButtonGroup(this);
-    choice_group->addButton(choice_opaque);
-    choice_group->addButton(choice_transparent);
-    choice_opaque->setChecked(true);
+    line_name->setPlaceholderText("<automatic.svg>");
     combo_resolution = new QComboBox();
     combo_resolution->addItem("100x100");
     combo_resolution->addItem("1000x1000");
@@ -89,14 +83,12 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     combo_resolution->setCurrentIndex(0);
 
     connect(button_reroll, SIGNAL(pressed()), this, SLOT(updateColors()));
-    connect(choice_group, SIGNAL(buttonToggled(int, bool)), this,
-            SLOT(updateSettings()));
     connect(combo_resolution, SIGNAL(currentIndexChanged(int)), this,
             SLOT(updateSettings()));
     connect(line_name, SIGNAL(textEdited(const QString &)), this,
             SLOT(updateSettings()));
 
-    tracer = new VectorTracer(vd, td, QString(), false);
+    tracer = new VectorTracer(vd, td, QString());
     thread = new QThread();
 
     tracer->moveToThread(thread);
@@ -111,8 +103,6 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     QVBoxLayout *layout_control = new QVBoxLayout();
     layout_control->addWidget(button_render);
     layout_control->addStrut(10);
-    layout_control->addWidget(choice_opaque);
-    layout_control->addWidget(choice_transparent);
     layout_control->addWidget(button_reroll);
     layout_control->addWidget(line_name);
     layout_control->addWidget(combo_resolution);
@@ -136,17 +126,18 @@ void VectorPreview::queueRender() {
     QMetaObject::invokeMethod(tracer, "renderFull", Qt::QueuedConnection);
 }
 void VectorPreview::updateSettings() {
-    QString name = line_name->text().size() ? line_name->text() : "vector.svg";
-    if (!name.endsWith(".pdf") && !name.endsWith(".svg")) {
-        name = name + ".svg";
+    // We use an empty string to denote an automatically named file
+    QString name = line_name->text();
+    if (name.size()) {
+        if (!name.endsWith(".pdf") && !name.endsWith(".svg")) {
+            name = name + ".svg";
+        }
     }
-
-    bool is_transp = choice_transparent->isChecked();
 
     if (button_render->isEnabled()) {
         QSize szs[3] = {QSize(100, 100), QSize(1000, 1000), QSize(2500, 2500)};
         int i = combo_resolution->currentIndex();
-        tracer->reset(is_transp, szs[i], name);
+        tracer->reset(szs[i], name);
         display->setImage(tracer->preview(QSize(100, 100)));
     }
 }
@@ -186,11 +177,9 @@ VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     //    view_data.clipping_planes.push_back(p);
     view_data.color_table.clear();
     TrackData td;
-    QString target = "vector.svg";
 
     qsrand(QTime::currentTime().msec());
-    bool transparent = false;
-    vtracer = new VectorTracer(view_data, td, target, transparent, this);
+    vtracer = new VectorTracer(view_data, td, QString(), this);
     connect(vtracer, SIGNAL(produceImagePhase(QImage, QString, int, bool)),
             SLOT(handleImageUpdate(QImage, QString, int, bool)));
 
@@ -210,13 +199,6 @@ VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     connect(button_reset, SIGNAL(pressed()), this, SLOT(reset()));
     button_reroll = new QPushButton("Reroll colors");
     connect(button_reroll, SIGNAL(pressed()), vtracer, SLOT(recolor()));
-
-    choice_opaque = new QRadioButton("Opaque");
-    choice_transparent = new QRadioButton("Transparent");
-    QButtonGroup *choice_group = new QButtonGroup(this);
-    choice_group->addButton(choice_opaque);
-    choice_group->addButton(choice_transparent);
-    (transparent ? choice_transparent : choice_opaque)->setChecked(true);
 
     list_resolution = new QComboBox();
     list_resolution->addItem("1000", QVariant(QSize(1000, 1000)));
@@ -241,8 +223,6 @@ VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     layout_control->addWidget(button_step);
     layout_control->addWidget(label_step);
     layout_control->addWidget(button_reset);
-    layout_control->addWidget(choice_opaque);
-    layout_control->addWidget(choice_transparent);
     layout_control->addWidget(button_reroll);
     layout_control->addWidget(list_resolution);
     layout_control->addStretch(1);
@@ -290,9 +270,8 @@ void VectorWindow::handleImageUpdate(QImage img, QString s, int nqueries,
     }
 }
 void VectorWindow::reset() {
-    bool is_transp = choice_transparent->isChecked();
     QSize resol = list_resolution->currentData().toSize();
-    vtracer->reset(is_transp, resol, "vector.svg");
+    vtracer->reset(resol, QString());
     image_grid->setImage(QImage());
     image_edge->setImage(QImage());
     image_crease->setImage(QImage());

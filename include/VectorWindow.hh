@@ -41,8 +41,6 @@ private:
     QThread *thread;
 
     QPushButton *button_render;
-    QRadioButton *choice_transparent;
-    QRadioButton *choice_opaque;
     QPushButton *button_reroll;
     QLineEdit *line_name;
     QComboBox *combo_resolution;
@@ -68,8 +66,6 @@ private:
     QPushButton *button_reset;
     QPushButton *button_reroll;
     QLabel *label_step;
-    QRadioButton *choice_transparent;
-    QRadioButton *choice_opaque;
     QComboBox *list_resolution;
 
     ImageWidget *image_grid;

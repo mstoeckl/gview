@@ -181,17 +181,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     screenAction->setToolTip("Take a screenshot of active scene");
     connect(screenAction, SIGNAL(triggered()), this, SLOT(screenshot()));
 
-    QAction *vectorTAction = new QAction("Vector (Transparent)", this);
-    vectorTAction->setToolTip(
-        "Take a transparent vector screenshot of active scene");
-    connect(vectorTAction, SIGNAL(triggered()), this,
-            SLOT(vectorTScreenshot()));
-
-    QAction *vectorOAction = new QAction("Vector (Opaque)", this);
-    vectorOAction->setToolTip(
-        "Take an opaque vector screenshot of active scene");
-    connect(vectorOAction, SIGNAL(triggered()), this,
-            SLOT(vectorOScreenshot()));
+    QAction *vectorAction = new QAction("Vector screenshot", this);
+    vectorAction->setToolTip("Take a vector screenshot of active scene");
+    connect(vectorAction, SIGNAL(triggered()), this, SLOT(vectorScreenshot()));
 
     QAction *vectorPAction = new QAction("Vector preview", this);
     vectorPAction->setToolTip("Preview vector scene rect");
@@ -231,8 +223,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     screenshot_menu = main_menu->addMenu("Screenshot");
     screenshot_menu->addAction(screenAction);
     screenshot_menu->addAction(screen4Action);
-    screenshot_menu->addAction(vectorTAction);
-    screenshot_menu->addAction(vectorOAction);
+    screenshot_menu->addAction(vectorAction);
     screenshot_menu->addAction(vectorPAction);
 
     rwidget = new RenderWidget(vd, trackdata);
@@ -962,17 +953,10 @@ void Viewer::screenshot(int sx) {
     RenderSaveObject *rso = new RenderSaveObject(vd, trackdata, w, h);
     rso->start();
 }
-void Viewer::vectorTScreenshot() {
-    QString name = "vector_transparent.svg";
-    VectorTracer *vt = new VectorTracer(vd, trackdata, name, true);
-    vt->reset(true, QSize(1000, 1000), name);
-    vt->renderFull();
-    delete vt;
-}
-void Viewer::vectorOScreenshot() {
-    QString name = "vector_opaque.svg";
-    VectorTracer *vt = new VectorTracer(vd, trackdata, name, false);
-    vt->reset(false, QSize(1000, 1000), name);
+void Viewer::vectorScreenshot() {
+    QString name = "vector.svg";
+    VectorTracer *vt = new VectorTracer(vd, trackdata, name);
+    vt->reset(QSize(1000, 1000), name);
     vt->renderFull();
     delete vt;
 }
