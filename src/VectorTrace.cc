@@ -615,7 +615,16 @@ static int signed_area(const QPolygon &loop) {
     int area = 0;
     for (int k0 = 0; k0 < loop.size(); k0++) {
         int k1 = (k0 + 1) % loop.size();
-        area += (loop[k1].x() - loop[k0].x()) * (loop[k1].y() + loop[k1].y());
+        area += (loop[k1].x() - loop[k0].x()) * (loop[k1].y() + loop[k0].y());
+    }
+    return area;
+}
+static double signed_area(const QVector<RenderPoint> &loop) {
+    double area = 0;
+    for (int k0 = 0; k0 < loop.size(); k0++) {
+        int k1 = (k0 + 1) % loop.size();
+        area += (loop[k1].coords.x() - loop[k0].coords.x()) *
+                (loop[k1].coords.y() + loop[k0].coords.y());
     }
     return area;
 }
@@ -896,6 +905,14 @@ public:
         }
         return 4;
     }
+    bool contains(QPoint q) const {
+        for (int i = 0; i < 4; i++) {
+            if (p[i] == q) {
+                return true;
+            }
+        }
+        return false;
+    }
     void replace_first(QPoint o, QPoint n) {
         for (int i = 0; i < 4; i++) {
             if (p[i] == o) {
@@ -1148,6 +1165,7 @@ void VectorTracer::computeEdges() {
     }
     if (1) {
         /* Graph-style partitioning */
+        qDebug("Identifying local segments");
         QVector<QPoint> eooe_pts;
         QVector<QPoint> oo_multi_pts;
         QVector<QPoint> oo_pair_pts;
@@ -1270,6 +1288,7 @@ void VectorTracer::computeEdges() {
         }
 
         // Progressive boundary refinement: E/O points
+        qDebug("Refining %d grid-aligned dividers", eooe_pts.size());
         QMap<QPoint, QPair<RenderPoint, RenderPoint>> eo_refinement;
         for (QPoint &p : eooe_pts) {
             QPoint i0, i1;
@@ -1289,6 +1308,7 @@ void VectorTracer::computeEdges() {
             l1.ideal_color = calculateBoundaryColor(l1, l0);
         }
 
+        qDebug("Introducing corners where appropriate");
         QMap<QPoint, QPair<RenderPoint, RenderPoint>> oo_corners;
         QMap<QPoint, QPair<QPoint, QPoint>> oo_insertions;
         // Iterate over EO/OE links
@@ -1433,9 +1453,6 @@ void VectorTracer::computeEdges() {
         }
         for (const QPoint &inserted : oo_insertions.keys()) {
             const QPair<QPoint, QPoint> &vls = oo_insertions[inserted];
-            qDebug("interpolating (%d,%d) to (%d,%d) with (%d,%d)",
-                   vls.first.x(), vls.first.y(), vls.second.x(), vls.second.y(),
-                   inserted.x(), inserted.y());
             Links &l0 = link_map[vls.first];
             Links &l1 = link_map[vls.second];
             l0.replace_first(vls.second, inserted);
@@ -1444,14 +1461,105 @@ void VectorTracer::computeEdges() {
             link_map[inserted].add(vls.second);
         }
 
-        // TODO: FIXME, create a suitable subdivision algorithm for 3- and 4-
-        // joints! (for instance: based on the average entry point, produce a
-        // triangle whose three corners are very likely inside the constituent
-        // regions; if so, perform contraction (try to move each corner inward
-        // by 50% to the average point of the neighboring diagonal, as long as
-        // the color remains the same.) as long as possible or until the
-        // polytope has shrunk enough.
+        qDebug("Refining %d star joints", oo_multi_pts.size());
+        QMap<QPoint, QVector<RenderPoint>> oo_poly;
+        for (const QPoint &combo : oo_multi_pts) {
+            const Links &l = link_map[combo];
+            // iterate CCW and check ...
 
+            QVector<QPoint> pts;
+            const QPoint deltas[4] = {QPoint(0, 1), QPoint(1, 0), QPoint(0, -1),
+                                      QPoint(-1, 0)};
+            for (int i = 0; i < 4; i++) {
+                if (l.contains(combo + deltas[i])) {
+                    pts.append(combo + deltas[i]);
+                }
+            }
+            int m = pts.size();
+            if (m <= 2) {
+                qDebug("Need at least three points for poly");
+                continue;
+            }
+
+            // order [A B|B C|C D|D A], with pairs close by
+            QVector<const RenderPoint *> doubled_pts;
+            const QPair<RenderPoint, RenderPoint> *last =
+                &eo_refinement[pts.last()];
+            for (int i = 0; i < m; i++) {
+                const QPair<RenderPoint, RenderPoint> *pair =
+                    &eo_refinement[pts[i]];
+                if (pair->first.region_class == last->first.region_class ||
+                    pair->first.region_class == last->second.region_class) {
+                    doubled_pts.append(&pair->first);
+                    doubled_pts.append(&pair->second);
+                } else {
+                    doubled_pts.append(&pair->second);
+                    doubled_pts.append(&pair->first);
+                }
+                last = pair;
+            }
+            // take pairwise averages to form a polytope
+            QVector<RenderPoint> corners(m);
+            int invalid = 0;
+            for (int i = 0; i < m; i += 1) {
+                int i2 = 2 * i;
+                int j2 = (2 * i + 2 * m - 1) % (2 * m);
+                const RenderPoint *p0 = doubled_pts[i2];
+                const RenderPoint *p1 = doubled_pts[j2];
+                QPointF qavg = (p0->coords + p1->coords) / 2;
+                corners[i] = queryPoint(qavg, nav);
+                RenderPoint &ravg = corners[i];
+                if (typematch(ravg, *p0) && typematch(ravg, *p1)) {
+                    ravg.region_class = p0->region_class;
+                } else {
+                    invalid++;
+                }
+            }
+
+            qDebug("(%d,%d) with %d links, %d merged %svalid", combo.x(),
+                   combo.y(), l.count(), m - invalid, invalid ? "in" : "");
+            if (invalid) {
+                continue;
+            }
+
+            // polytope minimization.
+            const int nrounds = 200;
+            int i = 0;
+            for (int r = 0; r < nrounds; r++) {
+                bool adv = false;
+                for (int k = 0; k < m; k++) {
+                    int ip = i;
+                    i = (i + 1) % m;
+                    // Test a new point, and modify the corner list if
+                    // successful
+                    int in = (i + 1) % m;
+                    // QPointF mid = (corners[ip].coords + corners[in].coords) /
+                    // 2;
+                    QPointF mid =
+                        (rand() & 1) ? corners[ip].coords : corners[in].coords;
+                    // TODO: approaching mean is *bad*, leads to degeneracy.
+                    // also, keep getting area sign flips this way, which is
+                    // *odd*
+
+                    // query slightly closer
+                    RenderPoint alt =
+                        queryPoint((mid + corners[i].coords) / 2, nav);
+                    if (typematch(alt, corners[i])) {
+                        alt.region_class = corners[i].region_class;
+                        corners[i] = alt;
+                        adv = true;
+                        break;
+                    }
+                }
+                if (!adv) {
+                    continue;
+                }
+            }
+            oo_poly[combo] = corners;
+            qDebug("area of %g", signed_area(corners));
+        }
+
+        qDebug("Extracting loops");
         // Every loop contains at least one E/O or O/E point, and those
         // have exactly two parents.
         QVector<QSet<QPoint>> class_points(grid_nclasses);
@@ -1547,7 +1655,9 @@ void VectorTracer::computeEdges() {
             // for now
             for (int i = 0; i < loops.size(); i++) {
                 QVector<RenderPoint> rp;
-                for (QPoint p : loops[i]) {
+                int lps = loops[i].size();
+                for (int j = 0; j < lps; j++) {
+                    const QPoint &p = loops[i][j];
                     if (point_is_oo(p)) {
                         if (oo_corners.contains(p)) {
                             // Corner
@@ -1558,11 +1668,47 @@ void VectorTracer::computeEdges() {
                             } else {
                                 rp.append(cp.second);
                             }
-                        } else {
+                        } else if (oo_poly.contains(p)) {
                             // This is a joint!
-                            qDebug("Skipped joint at (%d,%d)", p.x(), p.y());
+                            const QVector<RenderPoint> &rpcyc = oo_poly[p];
+                            const QPoint &nxt = loops[i][(j + 1) % lps];
+                            const QPoint &prv = loops[i][(j + lps - 1) % lps];
+                            const QPair<RenderPoint, RenderPoint> &np =
+                                eo_refinement[nxt];
+                            const QPair<RenderPoint, RenderPoint> &pp =
+                                eo_refinement[prv];
+                            QPointF nc = np.first.region_class == cls
+                                             ? np.first.coords
+                                             : np.second.coords;
+                            QPointF pc = pp.first.region_class == cls
+                                             ? pp.first.coords
+                                             : pp.second.coords;
 
-                            // TODO: get these working!
+                            QPointF avg = (nc + pc) / 2;
+
+                            // Pick the closest point of our class to the
+                            // surrounding segment average
+                            int closest = -1;
+                            qreal distance =
+                                std::numeric_limits<qreal>::infinity();
+                            for (int k = 0; k < rpcyc.size(); k++) {
+                                QPointF delta = (rpcyc[k].coords - avg);
+                                double ad = delta.x() * delta.x() +
+                                            delta.y() * delta.y();
+                                if (ad < distance &&
+                                    rpcyc[k].region_class == cls) {
+                                    closest = k;
+                                    distance = ad;
+                                }
+                            }
+                            if (closest < 0) {
+                                qDebug("Class not encountered in "
+                                       "multilink");
+                                continue;
+                            }
+                            rp.append(rpcyc[closest]);
+                        } else {
+                            // failed to create a joint here
                             continue;
                         }
                     } else {
