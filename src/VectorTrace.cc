@@ -265,6 +265,8 @@ RenderPoint VectorTracer::getPoint(QPoint p) {
         return grid_points[p.x() * grid_size.height() + p.y()];
     }
 }
+
+/* Note that this is fully symmetric */
 void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
                                const RenderPoint &initial_outside,
                                RenderPoint *result_inside,
@@ -277,7 +279,7 @@ void VectorTracer::bracketEdge(const RenderPoint &initial_inside,
             QPointF p_mid =
                 0.5 * (initial_inside.coords + initial_outside.coords);
             *result_inside = queryPoint(p_mid, thread_navigator);
-            *result_outside = initial_outside;
+            *result_outside = *result_inside;
             return;
         } else {
             qFatal("Bracket must cross class boundary");
@@ -866,219 +868,789 @@ static QVector<RenderPoint> rloop_merge(const QVector<RenderPoint> &base,
     return bmod;
 }
 
+class Links {
+public:
+    Links() {
+        p[0] = dummy;
+        p[1] = dummy;
+        p[2] = dummy;
+        p[3] = dummy;
+    }
+    void add(QPoint r) {
+        for (int i = 0; i < 4; i++) {
+            if (p[i] == r) {
+                return;
+            }
+            if (p[i] == dummy) {
+                p[i] = r;
+                return;
+            }
+        }
+        qFatal("Overflow on link");
+    }
+    int count() const {
+        for (int i = 0; i < 4; i++) {
+            if (p[i] == dummy) {
+                return i;
+            }
+        }
+        return 4;
+    }
+    void replace_first(QPoint o, QPoint n) {
+        for (int i = 0; i < 4; i++) {
+            if (p[i] == o) {
+                p[i] = n;
+                return;
+            }
+        }
+        qFatal("Failed to find original");
+    }
+
+    QPoint p[4];
+    static constexpr QPoint dummy = QPoint(1 << 30, 1 << 30);
+};
+
+static void link_add(QMap<QPoint, Links> &links, const QPoint &a,
+                     const QPoint &b) {
+    links[a].add(b);
+    links[b].add(a);
+}
+/* The obvious way to do this doesn't handle negative numbers correctly */
+static void partition_sumpoint(const QPoint &p, QPoint *n, QPoint *f) {
+    int fpos = 2 * std::max(std::abs(p.x()), std::abs(p.y()));
+    int x = p.x() + 2 * fpos;
+    int y = p.y() + 2 * fpos;
+    *n = QPoint(x / 2 - fpos, y / 2 - fpos);
+    *f = p - *n;
+}
+/* again, C standard isn't math standard */
+static bool point_is_oo(const QPoint &p) {
+    return (p.x() & 0x1) && (p.y() & 0x1);
+}
+
 void VectorTracer::computeEdges() {
     region_list.clear();
     int W = grid_size.width(), H = grid_size.height();
     Navigator *nav = Navigator::create(view_data, view_data.navigator);
 
-    for (int cls = 0; cls < grid_nclasses; cls++) {
-        qDebug("Computing region boundaries %d", cls);
-        // Compute a hull path/curve for the points, sampling new points as
-        // needed. Right now, just a hull, with convex openings.
-        int xmin = W, xmax = -1, ymin = H, ymax = -1;
-        int lx = -1, ly = -1;
+    if (0) {
+        for (int cls = 0; cls < grid_nclasses; cls++) {
+            qDebug("Computing region boundaries %d", cls);
+            // Compute a hull path/curve for the points, sampling new points as
+            // needed. Right now, just a hull, with convex openings.
+            int xmin = W, xmax = -1, ymin = H, ymax = -1;
+            int lx = -1, ly = -1;
+            for (int x = 0; x < W; x++) {
+                for (int y = 0; y < H; y++) {
+                    int idx = x * H + y;
+                    if (grid_points[idx].region_class == cls) {
+                        xmin = std::min(x, xmin);
+                        xmax = std::max(x, xmax);
+                        ymin = std::min(y, ymin);
+                        ymax = std::max(y, ymax);
+                        lx = x;
+                        ly = y;
+                    }
+                }
+            }
+
+            QVector<QLine> segs;
+            for (int x = xmin - 1; x < xmax + 1; x++) {
+                for (int y = ymin - 1; y < ymax + 1; y++) {
+                    int code = 0;
+                    const int dxl[4] = {0, 1, 1, 0};
+                    const int dyl[4] = {0, 0, 1, 1};
+                    for (int i = 0; i < 4; i++) {
+                        int nx = x + dxl[i], ny = y + dyl[i];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H)
+                            continue;
+                        if (grid_points[nx * H + ny].region_class == cls)
+                            code |= 1 << i;
+                    }
+
+                    switch (code) {
+                    case 0xF:
+                    case 0x0:
+                        // 0000=1111 All or no corners are in class
+                        break;
+                    case 0xE:
+                    case 0x1:
+                        // 0001=1110 Corner (x,y)
+                        segs.push_back(
+                            QLine(2 * x + 1, 2 * y, 2 * x, 2 * y + 1));
+                        break;
+                    case 0xD:
+                    case 0x2:
+                        // 0010=1101 Corner (x+1,y)
+                        segs.push_back(
+                            QLine(2 * x + 1, 2 * y, 2 * x + 2, 2 * y + 1));
+                        break;
+                    case 0xB:
+                    case 0x4:
+                        // 0100=1011 Corner (x+1,y+1)
+                        segs.push_back(
+                            QLine(2 * x + 1, 2 * y + 2, 2 * x + 2, 2 * y + 1));
+                        break;
+                    case 0x8:
+                    case 0x7:
+                        // 0111=1000 Corner (x,y+1)
+                        segs.push_back(
+                            QLine(2 * x + 1, 2 * y + 2, 2 * x, 2 * y + 1));
+                        break;
+
+                    case 0xC:
+                    case 0x3:
+                        // 0011=1100 Line (along x)
+                        segs.push_back(
+                            QLine(2 * x, 2 * y + 1, 2 * x + 2, 2 * y + 1));
+                        break;
+                    case 0x9:
+                    case 0x6:
+                        // 0110=1001 Line (along y)
+                        segs.push_back(
+                            QLine(2 * x + 1, 2 * y, 2 * x + 1, 2 * y + 2));
+                        break;
+
+                    case 0xA:
+                    case 0x5:
+                        // 0101=1010 Saddle; must test center point to decide
+                        {
+                            QPointF pt =
+                                0.5 * (grid_points[x * H + y].coords +
+                                       grid_points[(x + 1) * H + y + 1].coords);
+                            RenderPoint rp = queryPoint(pt, nav);
+                            const RenderPoint &class_rep =
+                                (code == 0x5) ? grid_points[x * H + y]
+                                              : grid_points[x * H + y + 1];
+
+                            bool center_inclass = typematch(class_rep, rp);
+                            if ((code == 0x5) ^ center_inclass) {
+                                // Diagonals along (x,y+1)<->(x+1,y)
+                                segs.push_back(
+                                    QLine(2 * x + 1, 2 * y, 2 * x, 2 * y + 1));
+                                segs.push_back(QLine(2 * x + 1, 2 * y + 2,
+                                                     2 * x + 2, 2 * y + 1));
+                            } else {
+                                // Diagonals along (x,y)<->(x+1,y+1)
+                                segs.push_back(QLine(2 * x + 1, 2 * y,
+                                                     2 * x + 2, 2 * y + 1));
+                                segs.push_back(QLine(2 * x + 1, 2 * y + 2,
+                                                     2 * x, 2 * y + 1));
+                            }
+                        }
+
+                        break;
+
+                    default:
+                        qFatal("Shouldn't happen");
+                    }
+                }
+            }
+
+            qDebug("Constructing region boundaries %d of %d: %d segments", cls,
+                   grid_nclasses, segs.length());
+
+            QVector<QPolygon> loops = size_sorted_loops_from_seg(segs);
+
+            qDebug("Refining region boundaries %d: %d loops", cls,
+                   loops.size());
+
+            /* Refine all loops to stay barely within class. This _cannot_ be
+             * shared between classes, as boundaries aren't perfect cliffs and
+             * there may be third types in between. */
+            const RenderPoint &class_representative = grid_points[lx * H + ly];
+
+            Region region;
+            region.class_no = cls;
+            region.xmin = xmin;
+            region.xmax = xmax;
+            region.ymin = ymin;
+            region.ymax = ymax;
+
+            for (int i = 0; i < loops.size(); i++) {
+                QVector<RenderPoint> qlp;
+                // Loop refinement
+                for (QPoint loc : loops[i]) {
+                    // Binary search for the class point nearest the outside
+                    QPoint ilow = loc / 2;
+                    QPoint ihigh = loc - loc / 2;
+                    bool low_inclass = true;
+                    if (ilow.x() < 0 || ilow.x() >= W || ilow.y() < 0 ||
+                        ilow.y() >= H) {
+                        low_inclass = false;
+                    } else if (grid_points[ilow.x() * H + ilow.y()]
+                                   .region_class != cls) {
+                        low_inclass = false;
+                    }
+                    QPoint ip_in = low_inclass ? ilow : ihigh;
+                    QPoint ip_out = low_inclass ? ihigh : ilow;
+                    RenderPoint in_point = getPoint(ip_in);
+                    RenderPoint out_point = getPoint(ip_out);
+
+                    RenderPoint in_limit, out_limit;
+                    bracketEdge(in_point, out_point, &in_limit, &out_limit,
+                                nav);
+                    in_limit.ideal_color =
+                        calculateBoundaryColor(in_limit, out_limit);
+
+                    if (qlp.size() && (in_limit.coords - qlp.last().coords)
+                                              .manhattanLength() < 1e-15) {
+                        // In case bisection search, both times, reaches the
+                        // grid point.
+                        continue;
+                    }
+                    qlp.push_back(in_limit);
+                }
+
+                /* Loop corner insertion.
+                 */
+                double epsilon = (1. / std::max(W, H)) * 1e-5;
+                qlp = remove_rloop_duplicates(qlp, epsilon);
+
+                QVector<CornerCandidate> corner_cands =
+                    find_rloop_corners(qlp, i == 0, epsilon);
+
+                QVector<RenderPoint> pts;
+                QVector<int> idxs;
+                for (const CornerCandidate &corner : corner_cands) {
+                    RenderPoint cin = queryPoint(corner.inside, nav);
+                    RenderPoint cout = queryPoint(corner.outside, nav);
+                    bool in_icls = typematch(cin, class_representative);
+                    bool out_icls = typematch(cout, class_representative);
+
+                    if (!in_icls || out_icls) {
+                        continue;
+                    }
+
+                    RenderPoint plim_in, plim_out;
+                    bracketEdge(cin, cout, &plim_in, &plim_out, nav);
+                    plim_in.ideal_color =
+                        calculateBoundaryColor(plim_in, plim_out);
+
+                    pts.push_back(plim_in);
+                    idxs.push_back(corner.index);
+                }
+
+                qlp = rloop_merge(qlp, pts, idxs);
+
+                /* Place on boundary */
+                if (i == 0) {
+                    // Exterior and interior regions must have opposite
+                    // orientation for most odd-even fill implementations to
+                    // leave holes
+                    region.exterior = reverse_rloop(qlp);
+                } else {
+                    region.interior.push_back(qlp);
+                }
+            }
+            region_list.push_back(region);
+        }
+    }
+    if (1) {
+        /* Graph-style partitioning */
+        QVector<QPoint> eooe_pts;
+        QVector<QPoint> oo_multi_pts;
+        QVector<QPoint> oo_pair_pts;
+        QMap<QPoint, Links> link_map;
+        for (int x = -1; x < W; x++) {
+            for (int y = -1; y < H; y++) {
+                // Iterate over loop
+                const QPoint corners[4] = {
+                    QPoint(x, y),
+                    QPoint(x + 1, y),
+                    QPoint(x + 1, y + 1),
+                    QPoint(x, y + 1),
+                };
+                int ncls[4];
+                for (int i = 0; i < 4; i++) {
+                    if (corners[i].x() < 0 || corners[i].x() >= W ||
+                        corners[i].y() < 0 || corners[i].y() >= H) {
+                        ncls[i] = -1;
+                    } else {
+                        ncls[i] =
+                            grid_points[corners[i].x() * H + corners[i].y()]
+                                .region_class;
+                    }
+                }
+                int cmin = std::min(std::min(ncls[0], ncls[1]),
+                                    std::min(ncls[2], ncls[3]));
+                int cmax = std::max(std::max(ncls[0], ncls[1]),
+                                    std::max(ncls[2], ncls[3]));
+                if (cmin == cmax) {
+                    // All the same, do nothing
+                    continue;
+                }
+                int dmin = 1 << 30, dmax = -(1 << 30);
+                for (int i = 0; i < 4; i++) {
+                    if (ncls[i] != cmin && ncls[i] != cmax) {
+                        dmin = std::min(ncls[i], dmin);
+                        dmax = std::max(ncls[i], dmax);
+                    }
+                }
+                // ncls[0], splits[0], ncls[1], splits[1], ncls[2], ...
+                QPoint splits[4] = {
+                    corners[0] + corners[1], corners[1] + corners[2],
+                    corners[2] + corners[3], corners[3] + corners[0]};
+                QPoint center(2 * x + 1, 2 * y + 1);
+
+                if (dmin > dmax) {
+                    // Two different types, marchcube
+                    bool islow[4] = {(ncls[0] == cmin), (ncls[1] == cmin),
+                                     (ncls[2] == cmin), (ncls[3] == cmin)};
+                    int nlow = islow[0] + islow[1] + islow[2] + islow[3];
+                    if (nlow == 1) {
+                        // Corner configuration, 1 low
+                        for (int i = 0; i < 4; i++) {
+                            if (islow[i]) {
+                                link_add(link_map, splits[(i + 3) % 4],
+                                         splits[i]);
+                            }
+                        }
+                    } else if (nlow == 3) {
+                        // Corner configuration, 1 high
+                        for (int i = 0; i < 4; i++) {
+                            if (!islow[i]) {
+                                link_add(link_map, splits[(i + 3) % 4],
+                                         splits[i]);
+                            }
+                        }
+                    } else {
+                        // Split configuration, nlow == 2
+                        if (islow[0] == islow[2] || islow[1] == islow[3]) {
+                            // Saddle
+                            QPointF pt =
+                                0.5 * (grid_points[x * H + y].coords +
+                                       grid_points[(x + 1) * H + y + 1].coords);
+                            RenderPoint rp = queryPoint(pt, nav);
+                            const RenderPoint &rep0 =
+                                grid_points[corners[0].x() * H +
+                                            corners[0].y()];
+
+                            bool center_inclass = typematch(rep0, rp);
+                            // 0XaO1     0XaO1
+                            //  dXb   or  dOb
+                            // 3OcX2     3OcX2
+                            if (center_inclass) {
+                                link_add(link_map, splits[0], splits[1]);
+                                link_add(link_map, splits[2], splits[3]);
+                            } else {
+                                link_add(link_map, splits[3], splits[0]);
+                                link_add(link_map, splits[1], splits[2]);
+                            }
+                        } else if (islow[0] == islow[1]) {
+                            // Axis aligned
+                            link_add(link_map, splits[1], splits[3]);
+                        } else if (islow[0] == islow[3]) {
+                            // Axis aligned
+                            link_add(link_map, splits[0], splits[2]);
+                        }
+                    }
+                } else if (dmin == dmax) {
+                    // three distinct types, T shape.
+                    for (int i = 0; i < 4; i++) {
+                        int j = (i + 1) % 4;
+                        if (ncls[i] != ncls[j]) {
+                            link_add(link_map, center, splits[i]);
+                        }
+                    }
+                } else {
+                    // four distinct types, cross shape
+                    for (int i = 0; i < 4; i++) {
+                        link_add(link_map, center, splits[i]);
+                    }
+                }
+            }
+        }
+        for (const QPoint &p : link_map.keys()) {
+            if (point_is_oo(p)) {
+                oo_multi_pts.append(p);
+            } else {
+                eooe_pts.append(p);
+            }
+        }
+
+        // Progressive boundary refinement: E/O points
+        QMap<QPoint, QPair<RenderPoint, RenderPoint>> eo_refinement;
+        for (QPoint &p : eooe_pts) {
+            QPoint i0, i1;
+            partition_sumpoint(p, &i0, &i1);
+
+            RenderPoint p0 = getPoint(i0);
+            RenderPoint p1 = getPoint(i1);
+
+            QPair<RenderPoint, RenderPoint> &l = eo_refinement[p];
+            RenderPoint &l0 = l.first, &l1 = l.second;
+            bracketEdge(p0, p1, &l0, &l1, nav);
+
+            l0.region_class = p0.region_class;
+            l0.ideal_color = calculateBoundaryColor(l0, l1);
+
+            l1.region_class = p1.region_class;
+            l1.ideal_color = calculateBoundaryColor(l1, l0);
+        }
+
+        QMap<QPoint, QPair<RenderPoint, RenderPoint>> oo_corners;
+        QMap<QPoint, QPair<QPoint, QPoint>> oo_insertions;
+        // Iterate over EO/OE links
+        for (const QPoint &qb : eooe_pts) {
+            const Links &lb = link_map[qb];
+            if (lb.count() != 2) {
+                continue;
+            }
+            for (int j = 0; j < 2; j++) {
+                const QPoint &qc = lb.p[j];
+                const Links &lc = link_map[qc];
+                if (lc.count() != 2) {
+                    continue;
+                }
+                QPoint qa = lb.p[1 - j];
+                QPoint qd = (lc.p[0] == qb) ? lc.p[1] : lc.p[0];
+                if (point_is_oo(qa) || point_is_oo(qb) || point_is_oo(qc) ||
+                    point_is_oo(qd)) {
+                    continue;
+                }
+
+                // either along diagonal, or along line. beware saddle points.
+                QPoint target;
+                if (point_is_oo(qb + qc)) {
+                    if (qb.x() & 0x1) {
+                        target = QPoint(qb.x(), qc.y());
+                    } else {
+                        target = QPoint(qc.x(), qb.y());
+                    }
+                } else {
+                    target = (qb + qc) / 2;
+                }
+
+                if (oo_corners.contains(target)) {
+                    // already used
+                    continue;
+                }
+
+                QPointF pa = (eo_refinement[qa].first.coords +
+                              eo_refinement[qa].second.coords) /
+                             2;
+                QPointF pb = (eo_refinement[qb].first.coords +
+                              eo_refinement[qb].second.coords) /
+                             2;
+                QPointF pc = (eo_refinement[qc].first.coords +
+                              eo_refinement[qc].second.coords) /
+                             2;
+                QPointF pd = (eo_refinement[qd].first.coords +
+                              eo_refinement[qd].second.coords) /
+                             2;
+
+                // A1,A2,B1,B2 ...
+                QPointF dir_pre = pb - pa;
+                QPointF dir_post = pc - pd;
+                double len_pre = std::sqrt(dir_pre.x() * dir_pre.x() +
+                                           dir_pre.y() * dir_pre.y());
+                double len_post = std::sqrt(dir_post.x() * dir_post.x() +
+                                            dir_post.y() * dir_post.y());
+                if (len_pre <= 0. || len_post <= 0.) {
+                    continue;
+                }
+                dir_pre /= len_pre;
+                dir_post /= len_post;
+                double dotprod = QPointF::dotProduct(dir_pre, dir_post);
+                // -1 is aligned; +1 is ultra spiky
+                if (dotprod < std::cos(5 * M_PI / 6) ||
+                    dotprod > std::cos(1 * M_PI / 6)) {
+                    continue;
+                }
+
+                double det =
+                    dir_pre.y() * dir_post.x() - dir_pre.x() * dir_post.y();
+
+                QPointF src_pre = pb, src_post = pc;
+                double t = (dir_post.x() * (src_post.y() - src_pre.y()) +
+                            dir_post.y() * (src_pre.x() - src_post.x())) /
+                           det;
+                double s = (dir_pre.x() * (src_post.y() - src_pre.y()) +
+                            dir_pre.y() * (src_pre.x() - src_post.x())) /
+                           det;
+
+                // Real space min offset limit for corner
+                double epsilon = (1. / std::max(W, H)) * 1e-5;
+                if (s <= epsilon || t <= epsilon) {
+                    // If not exactly on the angle, can find intersection
+                    // point behind
+                    continue;
+                }
+
+                // A series of 4 EO/OE points
+
+                QPointF qavg = 0.5 * (src_pre + src_post);
+                QPointF qcor_pre = src_pre + t * dir_pre;
+                QPointF qcor_post = src_post + s * dir_post;
+
+                QPointF qcor = 0.5 * (qcor_pre + qcor_post);
+                QPointF qjump = 2 * qcor - qavg;
+
+                // Do binary search between qcor and qjump
+                // but only if qcor/qjump match classes as necessary
+
+                RenderPoint pavg = queryPoint(qavg, nav);
+                RenderPoint pjump = queryPoint(qjump, nav);
+
+                if (typematch(pavg, eo_refinement[qb].first)) {
+                    pavg.region_class = eo_refinement[qb].first.region_class;
+                } else if (typematch(pavg, eo_refinement[qb].second)) {
+                    pavg.region_class = eo_refinement[qb].second.region_class;
+                } else {
+                    // We jumped out of class, expect fine detail or noise,
+                    // so refinement is futile
+                    continue;
+                }
+                if (typematch(pjump, eo_refinement[qc].first)) {
+                    pjump.region_class = eo_refinement[qc].first.region_class;
+                } else if (typematch(pjump, eo_refinement[qc].second)) {
+                    pjump.region_class = eo_refinement[qc].second.region_class;
+                } else {
+                    continue;
+                }
+
+                if (pavg.region_class == pjump.region_class) {
+                    // Both points in the same region, no obvious corner to
+                    // refine
+                    continue;
+                }
+
+                RenderPoint l0, l1;
+                bracketEdge(pavg, pjump, &l0, &l1, nav);
+
+                l0.region_class = pavg.region_class;
+                l0.ideal_color = calculateBoundaryColor(l0, l1);
+
+                l1.region_class = pjump.region_class;
+                l1.ideal_color = calculateBoundaryColor(l1, l0);
+
+                // Note: there is, unlike with the EO/OE crossings, no
+                // specific ordering to this sort of intersection.
+                oo_corners[target] = QPair<RenderPoint, RenderPoint>(l0, l1);
+                oo_insertions[target] = QPair<QPoint, QPoint>(qb, qc);
+            }
+        }
+        for (const QPoint &inserted : oo_insertions.keys()) {
+            const QPair<QPoint, QPoint> &vls = oo_insertions[inserted];
+            qDebug("interpolating (%d,%d) to (%d,%d) with (%d,%d)",
+                   vls.first.x(), vls.first.y(), vls.second.x(), vls.second.y(),
+                   inserted.x(), inserted.y());
+            Links &l0 = link_map[vls.first];
+            Links &l1 = link_map[vls.second];
+            l0.replace_first(vls.second, inserted);
+            l1.replace_first(vls.first, inserted);
+            link_map[inserted].add(vls.first);
+            link_map[inserted].add(vls.second);
+        }
+
+        // TODO: FIXME, create a suitable subdivision algorithm for 3- and 4-
+        // joints! (for instance: based on the average entry point, produce a
+        // triangle whose three corners are very likely inside the constituent
+        // regions; if so, perform contraction (try to move each corner inward
+        // by 50% to the average point of the neighboring diagonal, as long as
+        // the color remains the same.) as long as possible or until the
+        // polytope has shrunk enough.
+
+        // Every loop contains at least one E/O or O/E point, and those
+        // have exactly two parents.
+        QVector<QSet<QPoint>> class_points(grid_nclasses);
+        for (QPoint p : eooe_pts) {
+            QPoint n, f;
+            partition_sumpoint(p, &n, &f);
+
+            if (n.x() >= 0 && n.x() < W && n.y() >= 0 && n.y() < H) {
+                class_points[grid_points[n.x() * H + n.y()].region_class]
+                    .insert(p);
+            }
+            if (f.x() >= 0 && f.x() < W && f.y() >= 0 && f.y() < H) {
+                class_points[grid_points[f.x() * H + f.y()].region_class]
+                    .insert(p);
+            }
+        }
+
+        QVector<Region> alt_reglist;
+        for (int cls = 0; cls < grid_nclasses; cls++) {
+            // Construct loops from class point seeds
+            QSet<QPoint> &pts = class_points[cls];
+            QVector<QVector<QPoint>> loops;
+            while (pts.size()) {
+                QPoint start = *pts.begin();
+                QVector<QPoint> loop;
+                // TODO: a single loop may hit a 4-junction with 3 classes
+                // twice; must fix!
+
+                // The solution would be an explicit winding direction heuristic
+                // (i.e, we move along EO/OE nodes so that our class is
+                // always to the left of our motion, picking up O/E nodes as
+                // necessary.)
+
+                QSet<QPoint> oo_seen;
+                loop.append(start);
+                pts.remove(start);
+                while (true) {
+                    Links l = link_map[start];
+                    bool found = false;
+                    for (int i = 0; i < l.count(); i++) {
+                        QPoint a = l.p[i];
+                        if (a == start) {
+                            // no backtrack
+                            continue;
+                        }
+                        // even => odd or even; odd => even
+                        bool is_odd = point_is_oo(a);
+                        if (is_odd) {
+                            if (!oo_seen.contains(a)) {
+                                start = a;
+                                loop.append(start);
+                                oo_seen.insert(start);
+                                found = true;
+                                break;
+                            }
+                        } else {
+                            if (pts.contains(a)) {
+                                // continue to an even point oif it borders
+                                // class
+                                start = a;
+                                loop.append(start);
+                                pts.remove(start);
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found) {
+                        break;
+                    }
+                }
+                loops.append(loop);
+            }
+            for (int i = 0; i < loops.size(); i++) {
+                int area = signed_area(loops[i]);
+
+                if (area > 0) {
+                    loops[i] = reverse_poly(loops[i]);
+                }
+            }
+
+            /* Loop with greatest extent is the containing loop */
+            qSort(loops.begin(), loops.end(), signed_area_cmp);
+
+            Region reg;
+            reg.class_no = cls;
+            reg.xmin = W;
+            reg.xmax = -1;
+            reg.ymin = H;
+            reg.ymax = -1;
+
+            // Interior/exterior loops -- make pairs. Then *skip* O/O points,
+            // for now
+            for (int i = 0; i < loops.size(); i++) {
+                QVector<RenderPoint> rp;
+                for (QPoint p : loops[i]) {
+                    if (point_is_oo(p)) {
+                        if (oo_corners.contains(p)) {
+                            // Corner
+                            const QPair<RenderPoint, RenderPoint> &cp =
+                                oo_corners[p];
+                            if (cp.first.region_class == cls) {
+                                rp.append(cp.first);
+                            } else {
+                                rp.append(cp.second);
+                            }
+                        } else {
+                            // This is a joint!
+                            qDebug("Skipped joint at (%d,%d)", p.x(), p.y());
+
+                            // TODO: get these working!
+                            continue;
+                        }
+                    } else {
+                        // Line portion
+                        const QPair<RenderPoint, RenderPoint> &ep =
+                            eo_refinement[p];
+                        if (ep.first.region_class == cls) {
+                            rp.append(ep.first);
+                        } else {
+                            rp.append(ep.second);
+                        }
+                    }
+                }
+                if (i == 0) {
+                    reg.exterior = reverse_rloop(rp);
+                } else {
+                    reg.interior.append(rp);
+                }
+            }
+
+            alt_reglist.append(reg);
+        }
+
+        // Set bounds
         for (int x = 0; x < W; x++) {
             for (int y = 0; y < H; y++) {
                 int idx = x * H + y;
-                if (grid_points[idx].region_class == cls) {
-                    xmin = std::min(x, xmin);
-                    xmax = std::max(x, xmax);
-                    ymin = std::min(y, ymin);
-                    ymax = std::max(y, ymax);
-                    lx = x;
-                    ly = y;
-                }
+                int cls = grid_points[idx].region_class;
+                alt_reglist[cls].xmin = std::min(x, alt_reglist[cls].xmin);
+                alt_reglist[cls].xmax = std::max(x, alt_reglist[cls].xmax);
+                alt_reglist[cls].ymin = std::min(y, alt_reglist[cls].ymin);
+                alt_reglist[cls].ymax = std::max(y, alt_reglist[cls].ymax);
             }
         }
 
-        QVector<QLine> segs;
-        for (int x = xmin - 1; x < xmax + 1; x++) {
-            for (int y = ymin - 1; y < ymax + 1; y++) {
-                int code = 0;
-                const int dxl[4] = {0, 1, 1, 0};
-                const int dyl[4] = {0, 0, 1, 1};
+        if (0) {
+            double S = 6;
+            QImage disp(2 * S * W + 2 * S, 2 * S * H + 2 * S,
+                        QImage::Format_ARGB32);
+            disp.fill(0xFFFFFFFF);
+            QPainter ptr(&disp);
+            ptr.setPen(Qt::black);
+            for (const QPoint &p : link_map.keys()) {
+                const Links &l = link_map[p];
                 for (int i = 0; i < 4; i++) {
-                    int nx = x + dxl[i], ny = y + dyl[i];
-                    if (nx < 0 || nx >= W || ny < 0 || ny >= H)
-                        continue;
-                    if (grid_points[nx * H + ny].region_class == cls)
-                        code |= 1 << i;
+                    if (l.p[i] != Links::dummy) {
+                        ptr.drawLine(S * p + QPoint(3 * S / 2, 3 * S / 2),
+                                     S * l.p[i] + QPoint(3 * S / 2, 3 * S / 2));
+                    }
                 }
-
-                switch (code) {
-                case 0xF:
-                case 0x0:
-                    // 0000=1111 All or no corners are in class
-                    break;
-                case 0xE:
-                case 0x1:
-                    // 0001=1100 Corner (x,y)
-                    segs.push_back(QLine(2 * x + 1, 2 * y, 2 * x, 2 * y + 1));
-                    break;
-                case 0xD:
-                case 0x2:
-                    // 0010=1101 Corner (x+1,y)
-                    segs.push_back(
-                        QLine(2 * x + 1, 2 * y, 2 * x + 2, 2 * y + 1));
-                    break;
-                case 0xB:
-                case 0x4:
-                    // 0100=1011 Corner (x+1,y+1)
-                    segs.push_back(
-                        QLine(2 * x + 1, 2 * y + 2, 2 * x + 2, 2 * y + 1));
-                    break;
-                case 0x8:
-                case 0x7:
-                    // 0111=1000 Corner (x,y+1)
-                    segs.push_back(
-                        QLine(2 * x + 1, 2 * y + 2, 2 * x, 2 * y + 1));
-                    break;
-
-                case 0xC:
-                case 0x3:
-                    // 0011=1100 Line (along x)
-                    segs.push_back(
-                        QLine(2 * x, 2 * y + 1, 2 * x + 2, 2 * y + 1));
-                    break;
-                case 0x9:
-                case 0x6:
-                    // 0110=1001 Line (along y)
-                    segs.push_back(
-                        QLine(2 * x + 1, 2 * y, 2 * x + 1, 2 * y + 2));
-                    break;
-
-                case 0xA:
-                case 0x5:
-                    // 0101=1010 Saddle; must test center point to decide
-                    {
-                        QPointF pt =
-                            0.5 * (grid_points[x * H + y].coords +
-                                   grid_points[(x + 1) * H + y + 1].coords);
-                        RenderPoint rp = queryPoint(pt, nav);
-                        const RenderPoint &class_rep =
-                            (code == 0x5) ? grid_points[x * H + y]
-                                          : grid_points[x * H + y + 1];
-
-                        bool center_inclass = typematch(class_rep, rp);
-                        if ((code == 0x5) ^ center_inclass) {
-                            // Diagonals along (x,y+1)<->(x+1,y)
-                            segs.push_back(
-                                QLine(2 * x + 1, 2 * y, 2 * x, 2 * y + 1));
-                            segs.push_back(QLine(2 * x + 1, 2 * y + 2,
-                                                 2 * x + 2, 2 * y + 1));
-                        } else {
-                            // Diagonals along (x,y)<->(x+1,y+1)
-                            segs.push_back(
-                                QLine(2 * x + 1, 2 * y, 2 * x + 2, 2 * y + 1));
-                            segs.push_back(
-                                QLine(2 * x + 1, 2 * y + 2, 2 * x, 2 * y + 1));
+            }
+            ptr.setPen(Qt::red);
+            for (const QPoint &p : link_map.keys()) {
+                ptr.drawEllipse(QPointF(S * p + QPoint(3 * S / 2, 3 * S / 2)),
+                                S / 3., S / 3.);
+            }
+            for (int i = 0; i < grid_nclasses; i++) {
+                QColor cc = QColor(randColor().rgba());
+                ptr.setPen(
+                    QPen(cc, 1, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin));
+                ptr.setBrush(cc);
+                for (int x = 0; x < W; x++) {
+                    for (int y = 0; y < H; y++) {
+                        if (grid_points[x * H + y].region_class == i) {
+                            QPoint p(x, y);
+                            ptr.drawEllipse(
+                                QPointF(2 * S * p +
+                                        QPoint(3 * S / 2, 3 * S / 2)),
+                                S / 4., S / 4.);
                         }
                     }
-
-                    break;
-
-                default:
-                    qFatal("Shouldn't happen");
                 }
             }
+            emit produceImagePhase(disp, QString("Boundaries completed"),
+                                   nqueries, false);
         }
 
-        qDebug("Constructing region boundaries %d of %d: %d segments", cls,
-               grid_nclasses, segs.length());
-
-        QVector<QPolygon> loops = size_sorted_loops_from_seg(segs);
-
-        qDebug("Refining region boundaries %d: %d loops", cls, loops.size());
-
-        /* Refine all loops to stay barely within class. This _cannot_ be
-         * shared between classes, as boundaries aren't perfect cliffs and
-         * there may be third types in between. */
-        const RenderPoint &class_representative = grid_points[lx * H + ly];
-
-        Region region;
-        region.class_no = cls;
-        region.xmin = xmin;
-        region.xmax = xmax;
-        region.ymin = ymin;
-        region.ymax = ymax;
-
-        for (int i = 0; i < loops.size(); i++) {
-            QVector<RenderPoint> qlp;
-            // Loop refinement
-            for (QPoint loc : loops[i]) {
-                // Binary search for the class point nearest the outside
-                QPoint ilow = loc / 2;
-                QPoint ihigh = loc - loc / 2;
-                bool low_inclass = true;
-                if (ilow.x() < 0 || ilow.x() >= W || ilow.y() < 0 ||
-                    ilow.y() >= H) {
-                    low_inclass = false;
-                } else if (grid_points[ilow.x() * H + ilow.y()].region_class !=
-                           cls) {
-                    low_inclass = false;
-                }
-                QPoint ip_in = low_inclass ? ilow : ihigh;
-                QPoint ip_out = low_inclass ? ihigh : ilow;
-                RenderPoint in_point = getPoint(ip_in);
-                RenderPoint out_point = getPoint(ip_out);
-
-                RenderPoint in_limit, out_limit;
-                bracketEdge(in_point, out_point, &in_limit, &out_limit, nav);
-                in_limit.ideal_color =
-                    calculateBoundaryColor(in_limit, out_limit);
-
-                if (qlp.size() &&
-                    (in_limit.coords - qlp.last().coords).manhattanLength() <
-                        1e-15) {
-                    // In case bisection search, both times, reaches the
-                    // grid point.
-                    continue;
-                }
-                qlp.push_back(in_limit);
-            }
-
-            /* Loop corner insertion.
-             */
-            double epsilon = (1. / std::max(W, H)) * 1e-5;
-            qlp = remove_rloop_duplicates(qlp, epsilon);
-
-            QVector<CornerCandidate> corner_cands =
-                find_rloop_corners(qlp, i == 0, epsilon);
-
-            QVector<RenderPoint> pts;
-            QVector<int> idxs;
-            for (const CornerCandidate &corner : corner_cands) {
-                RenderPoint cin = queryPoint(corner.inside, nav);
-                RenderPoint cout = queryPoint(corner.outside, nav);
-                bool in_icls = typematch(cin, class_representative);
-                bool out_icls = typematch(cout, class_representative);
-
-                if (!in_icls || out_icls) {
-                    continue;
-                }
-
-                RenderPoint plim_in, plim_out;
-                bracketEdge(cin, cout, &plim_in, &plim_out, nav);
-                plim_in.ideal_color = calculateBoundaryColor(plim_in, plim_out);
-
-                pts.push_back(plim_in);
-                idxs.push_back(corner.index);
-            }
-
-            qlp = rloop_merge(qlp, pts, idxs);
-
-            /* Place on boundary */
-            if (i == 0) {
-                // Exterior and interior regions must have opposite
-                // orientation for most odd-even fill implementations to
-                // leave holes
-                region.exterior = reverse_rloop(qlp);
-            } else {
-                region.interior.push_back(qlp);
-            }
+        if (0) {
+            // Draw them lines!
+            int S = std::max(1, 1024 / std::max(W + 1, H + 1));
+            QImage lineImage((W + 1) * S, (H + 1) * S, QImage::Format_ARGB32);
+            draw_boundaries_to(&lineImage, alt_reglist, S, grid_size);
+            emit produceImagePhase(lineImage, QString("Boundaries completed"),
+                                   nqueries, false);
         }
-        region_list.push_back(region);
+        region_list = alt_reglist;
     }
+
     delete nav;
     qDebug("Number of regions: %d", region_list.size());
 
@@ -1656,6 +2228,7 @@ void VectorTracer::computeCreases() {
         delete[] colors;
         delete[] scolors;
     }
+
     emit produceImagePhase(image, QString("Creases completed"), nqueries,
                            false);
 
@@ -2455,6 +3028,7 @@ void VectorTracer::computeGradients() {
         run_command(QStringList() << "inkscape"
                                   << "--export-png=" + png_file.fileName()
                                   << "--export-dpi=800" << tfile.fileName());
+
         QImage grad_image = QImage(png_file.fileName(), "png");
 
         emit produceImagePhase(grad_image, QString("Render completed"),

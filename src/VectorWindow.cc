@@ -77,10 +77,12 @@ VectorPreview::VectorPreview(ViewData vd, TrackData td) {
     line_name = new QLineEdit();
     line_name->setPlaceholderText("<automatic.svg>");
     combo_resolution = new QComboBox();
+    combo_resolution->addItem("25x25");
     combo_resolution->addItem("100x100");
+    combo_resolution->addItem("400x400");
     combo_resolution->addItem("1000x1000");
     combo_resolution->addItem("2500x2500");
-    combo_resolution->setCurrentIndex(0);
+    combo_resolution->setCurrentIndex(1);
 
     connect(button_reroll, SIGNAL(pressed()), this, SLOT(updateColors()));
     connect(combo_resolution, SIGNAL(currentIndexChanged(int)), this,
@@ -135,7 +137,8 @@ void VectorPreview::updateSettings() {
     }
 
     if (button_render->isEnabled()) {
-        QSize szs[3] = {QSize(100, 100), QSize(1000, 1000), QSize(2500, 2500)};
+        QSize szs[5] = {QSize(25, 25), QSize(100, 100), QSize(400, 400),
+                        QSize(1000, 1000), QSize(2500, 2500)};
         int i = combo_resolution->currentIndex();
         tracer->reset(szs[i], name);
         display->setImage(tracer->preview(QSize(100, 100)));

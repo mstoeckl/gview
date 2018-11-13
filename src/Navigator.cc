@@ -159,7 +159,7 @@ static RayPoint ftraceRay(const G4ThreeVector &init,
                                                   condrot(curr, forward));
             cmu.niter = iteration;
         }
-        G4double exitdist = cmu.abs_dist - sdist;
+        G4double exitdist = std::min(kInfinity / 4, cmu.abs_dist - sdist);
 
         // Typically, no-collision implies a distance of kInfinity,
         // but floating point error may reduce this slightly. Thus if
