@@ -944,6 +944,9 @@ static void partition_sumpoint(const QPoint &p, QPoint *n, QPoint *f) {
 static bool point_is_oo(const QPoint &p) {
     return (p.x() & 0x1) && (p.y() & 0x1);
 }
+static int cross_product(QPoint p, QPoint q) {
+    return p.x() * q.y() - p.y() * q.x();
+}
 
 void VectorTracer::computeEdges() {
     region_list.clear();
@@ -1212,7 +1215,8 @@ void VectorTracer::computeEdges() {
                 continue;
             }
 
-            if (pavg.region_class == pjump.region_class) {
+            if (pavg.region_class == pjump.region_class ||
+                typematch(pjump, pavg)) {
                 // Both points in the same region, no obvious corner to
                 // refine
                 continue;
@@ -1362,54 +1366,65 @@ void VectorTracer::computeEdges() {
         QSet<QPoint> &pts = class_points[cls];
         QVector<QVector<QPoint>> loops;
         while (pts.size()) {
-            QPoint start = *pts.begin();
             QVector<QPoint> loop;
-            // TODO: a single loop may hit a 4-junction with 3 classes
-            // twice; must fix!
-
-            // The solution would be an explicit winding direction heuristic
-            // (i.e, we move along EO/OE nodes so that our class is
-            // always to the left of our motion, picking up O/E nodes as
-            // necessary.)
-
-            QSet<QPoint> oo_seen;
-            loop.append(start);
-            pts.remove(start);
+            const QPoint initial = *pts.begin();
+            QPoint cur = initial;
+            loop.append(cur);
+            pts.remove(cur);
+            QPoint prev = Links::dummy;
             while (true) {
-                Links l = link_map[start];
-                bool found = false;
-                for (int i = 0; i < l.count(); i++) {
-                    QPoint a = l.p[i];
-                    if (a == start) {
-                        // no backtrack
-                        continue;
+                Links l = link_map[cur];
+                bool at_even = !point_is_oo(cur);
+                if (at_even) {
+                    if (l.count() != 2) {
+                        qDebug("Require that even points have exactly two "
+                               "neighbors");
                     }
-                    // even => odd or even; odd => even
-                    bool is_odd = point_is_oo(a);
-                    if (is_odd) {
-                        if (!oo_seen.contains(a)) {
-                            start = a;
-                            loop.append(start);
-                            oo_seen.insert(start);
-                            found = true;
-                            break;
+                    // Move to complementary node, possible even or odd
+                    if (prev != Links::dummy && l.p[0] != prev &&
+                        l.p[1] != prev) {
+                        qFatal("invariant fail");
+                    }
+                    QPoint next = l.p[0] == prev ? l.p[1] : l.p[0];
+                    if (next == loop[0]) {
+                        // Loop has closed
+                        break;
+                    }
+                    prev = cur;
+                    cur = next;
+                    loop.append(cur);
+                    pts.remove(cur);
+                } else {
+                    // Move to a node which we haven't seen yet; it will be even
+                    QPoint best = Links::dummy;
+                    for (int i = 0; i < l.count(); i++) {
+                        QPoint a = l.p[i];
+                        if (a == prev) {
+                            // backtracking forbidden
+                            continue;
                         }
-                    } else {
+                        // todo: orientation condition
                         if (pts.contains(a)) {
-                            // continue to an even point oif it borders
-                            // class
-                            start = a;
-                            loop.append(start);
-                            pts.remove(start);
-                            found = true;
+                            best = a;
                             break;
                         }
                     }
-                }
-                if (!found) {
-                    break;
+                    if (best == Links::dummy) {
+                        break;
+                    }
+
+                    prev = cur;
+                    cur = best;
+                    loop.append(cur);
+                    pts.remove(cur);
                 }
             }
+            if (link_map[initial].p[0] != cur &&
+                link_map[initial].p[1] != cur) {
+                qWarning("Loop failed to close: (%d,%d) and (%d,%d) not linked",
+                         initial.x(), initial.y(), cur.x(), cur.y());
+            }
+
             loops.append(loop);
         }
         for (int i = 0; i < loops.size(); i++) {
@@ -2186,9 +2201,8 @@ static double dist_2d(const QPointF &p, const QPointF &q) {
 
 static QStringList svg_subpath_text(const QVector<QPointF> &seq, int estart,
                                     int iend, double acceptable_error) {
-    if (estart == iend) {
-        // case may arise from top level caller
-        return QStringList();
+    if (iend <= estart) {
+        qFatal("Invalid range: estart=%d !< iend=%d", estart, iend);
     }
     const int fprec = 7;
     const QPointF &pstart = seq[estart], &pend = seq[iend];
@@ -2202,17 +2216,17 @@ static QStringList svg_subpath_text(const QVector<QPointF> &seq, int estart,
 
     // Attempt linear reduction
     {
-        double lin_error = 0.;
+        double max_deviation = 0.;
         const QPointF &delta = pend - pstart;
         for (int i = estart + 1; i < iend - 1; i++) {
             double num = (delta.y() * seq[i].x() - delta.x() * seq[i].y() +
                           pend.x() * pstart.y() - pend.y() * pstart.x());
-            lin_error += num * num;
+            max_deviation = std::max(max_deviation, std::abs(num));
         }
         // normalize to line scale
-        lin_error /= QPointF::dotProduct(delta, delta);
+        max_deviation /= std::sqrt(QPointF::dotProduct(delta, delta));
 
-        if (lin_error < acceptable_error) {
+        if (max_deviation < acceptable_error) {
             // return linear motion if cost is low enough
             QStringList lst;
             lst.append(QStringLiteral("L%1,%2")
@@ -2223,7 +2237,7 @@ static QStringList svg_subpath_text(const QVector<QPointF> &seq, int estart,
     }
 
     // Attempt bezier reduction if there are enough intermediate points
-    if (iend - estart >= 3) {
+    if (iend >= estart + 3) {
         // an alternative approach: approximate the entire region
         // through tangent control points every two points, compute error
         // on half points, and greedily remove control points while staying
@@ -2254,45 +2268,50 @@ static QStringList svg_subpath_text(const QVector<QPointF> &seq, int estart,
         bezier_cubic_basis(plct1 / path_length, &b0[0], &b0[1], &b0[2], &b0[3]);
         bezier_cubic_basis(plct2 / path_length, &b1[0], &b1[1], &b1[2], &b1[3]);
 
-        // solve 2d eqn
-        double c0x, c1x, c0y, c1y;
-        solve_2d_lin(b0[1], b0[2],
-                     pctrl0.x() - b0[0] * pstart.x() - b0[3] * pend.x(), //
-                     b1[1], b1[2],
-                     pctrl1.x() - b1[0] * pstart.x() - b1[3] * pend.x(), //
-                     &c0x, &c1x);
-        solve_2d_lin(b0[1], b0[2],
-                     pctrl0.y() - b0[0] * pstart.y() - b0[3] * pend.y(), //
-                     b1[1], b1[2],
-                     pctrl1.y() - b1[0] * pstart.y() - b1[3] * pend.y(), //
-                     &c0y, &c1y);
-        QPointF ctr0(c0x, c0y), ctr1(c1x, c1y);
+        // solve 2d eqn -- if solvable. (This need not always be the case.)
+        double det = det_2d(b0[1], b0[2], b1[1], b1[2]);
+        if (std::abs(det) > 0.) {
+            double c0x, c1x, c0y, c1y;
+            solve_2d_lin(b0[1], b0[2],
+                         pctrl0.x() - b0[0] * pstart.x() - b0[3] * pend.x(), //
+                         b1[1], b1[2],
+                         pctrl1.x() - b1[0] * pstart.x() - b1[3] * pend.x(), //
+                         &c0x, &c1x);
+            solve_2d_lin(b0[1], b0[2],
+                         pctrl0.y() - b0[0] * pstart.y() - b0[3] * pend.y(), //
+                         b1[1], b1[2],
+                         pctrl1.y() - b1[0] * pstart.y() - b1[3] * pend.y(), //
+                         &c0y, &c1y);
+            QPointF ctr0(c0x, c0y), ctr1(c1x, c1y);
 
-        // Again, to first approx, t is the path length *fraction*.
-        // This calculation slightly overestimates the ideal error
-        double bez_error = 0.;
-        double tpathlen = 0.;
-        for (int i = estart + 1; i < iend; i++) {
-            tpathlen += dist_2d(seq[i - 1], seq[i]);
-            double bc[4];
-            bezier_cubic_basis(tpathlen / path_length, &bc[0], &bc[1], &bc[2],
-                               &bc[3]);
-            QPointF prediction =
-                bc[0] * pstart + bc[1] * ctr0 + bc[2] * ctr1 + bc[3] * pend;
-            bez_error +=
-                QPointF::dotProduct(prediction - seq[i], prediction - seq[i]);
-        }
+            // Again, to first approx, t is the path length *fraction*.
+            // This calculation slightly overestimates the ideal error
+            double max_deviation = 0.;
+            double tpathlen = 0.;
+            for (int i = estart + 1; i < iend; i++) {
+                tpathlen += dist_2d(seq[i - 1], seq[i]);
+                double bc[4];
+                bezier_cubic_basis(tpathlen / path_length, &bc[0], &bc[1],
+                                   &bc[2], &bc[3]);
+                QPointF prediction =
+                    bc[0] * pstart + bc[1] * ctr0 + bc[2] * ctr1 + bc[3] * pend;
+                double sqerr = QPointF::dotProduct(prediction - seq[i],
+                                                   prediction - seq[i]);
+                max_deviation = std::max(max_deviation, sqerr);
+            }
+            max_deviation = std::sqrt(max_deviation);
 
-        if (bez_error < acceptable_error) {
-            QStringList lst;
-            lst.append(QStringLiteral("C%1,%2,%3,%4,%5,%6")
-                           .arg(ctr0.x(), 0, 'f', fprec)
-                           .arg(ctr0.y(), 0, 'f', fprec)
-                           .arg(ctr1.x(), 0, 'f', fprec)
-                           .arg(ctr1.y(), 0, 'f', fprec)
-                           .arg(pend.x(), 0, 'f', fprec)
-                           .arg(pend.y(), 0, 'f', fprec));
-            return lst;
+            if (max_deviation < acceptable_error) {
+                QStringList lst;
+                lst.append(QStringLiteral("C%1,%2,%3,%4,%5,%6")
+                               .arg(ctr0.x(), 0, 'f', fprec)
+                               .arg(ctr0.y(), 0, 'f', fprec)
+                               .arg(ctr1.x(), 0, 'f', fprec)
+                               .arg(ctr1.y(), 0, 'f', fprec)
+                               .arg(pend.x(), 0, 'f', fprec)
+                               .arg(pend.y(), 0, 'f', fprec));
+                return lst;
+            }
         }
     }
 
@@ -2319,7 +2338,9 @@ static QStringList svg_path_text_from_curve(const QPolygonF &pts, bool closed) {
     strl.append(QStringLiteral("M%1,%2")
                     .arg(s.x(), 0, 'f', fprec)
                     .arg(s.y(), 0, 'f', fprec));
-    strl << svg_subpath_text(pts, 0, pts.size() - 1, 1e-5);
+    if (pts.size() > 1) {
+        strl << svg_subpath_text(pts, 0, pts.size() - 1, 5e-6);
+    }
     if (closed) {
         strl.append("Z");
     }
@@ -2808,18 +2829,18 @@ void VectorTracer::computeGradients() {
                         if (qAlpha(subreg.linear_colors[i]) < 255) {
                             double alpha =
                                 QColor(subreg.linear_colors[i]).alphaF();
-                            s << QStringLiteral("    <stop offset=\"%1%\" "
+                            s << QStringLiteral("    <stop offset=\"%1\" "
                                                 "stop-color=\"%2\" "
                                                 "stop-opacity=\"%3\"/>\n")
-                                     .arg(100 * stop_pos)
+                                     .arg(stop_pos, 0, 'f', 5)
                                      .arg(color_hex_name_rgb(
                                          subreg.linear_colors[i]))
-                                     .arg(alpha);
+                                     .arg(alpha, 0, 'f', 3);
                         } else {
                             // SVG specifies a default stop-opacity of 1
-                            s << QStringLiteral("    <stop offset=\"%1%\" "
+                            s << QStringLiteral("    <stop offset=\"%1\" "
                                                 "stop-color=\"%2\"/>\n")
-                                     .arg(100 * stop_pos)
+                                     .arg(stop_pos, 0, 'f', 5)
                                      .arg(color_hex_name_rgb(
                                          subreg.linear_colors[i]));
                         }
