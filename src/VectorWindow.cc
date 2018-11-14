@@ -266,7 +266,7 @@ void VectorWindow::handleImageUpdate(QImage img, QString s, int nqueries,
         image_gradient->setImage(img);
     }
     label_step->setText(s);
-    statusBar()->showMessage(QString("Queries: %1").arg(nqueries));
+    statusBar()->showMessage(QStringLiteral("Queries: %1").arg(nqueries));
     if (done) {
         button_full->setEnabled(false);
         button_step->setEnabled(false);
