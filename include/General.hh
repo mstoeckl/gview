@@ -145,3 +145,20 @@ private:
 
 f3 rainbow_nhue(const float nhue);
 float color_srgb_to_nhue(const f3 &srgb);
+
+inline int ipow(int b, int e) {
+    int x = 1;
+    while (e > 0) {
+        x *= b;
+        e--;
+    }
+    return x;
+}
+inline int ilog(int b, int x) {
+    int e = 0;
+    while (x > 1) {
+        x /= b;
+        e++;
+    }
+    return e;
+}

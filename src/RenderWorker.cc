@@ -253,3 +253,36 @@ int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
 
     return k;
 }
+
+/**
+ * Given a view-port distance, and a corresponding real-space distance, return
+ * a view-port distance less than or equal to the provided distance, along with
+ * a compact label for the associated real-space length.
+ */
+QPair<double, QString> ruler_distance(double real_distance,
+                                      double vp_distance) {
+    const char *labels[7] = {"fm", "pm", "nm", "μm", "mm", "m", "km"};
+
+    int s = std::floor(std::log10(real_distance / CLHEP::fermi));
+    double dec_floor = std::pow(10., s) * CLHEP::fermi;
+    int uclass = std::max(0, std::min(6, s / 3));
+    double unit_distance = std::pow(1000., uclass) * CLHEP::fermi;
+
+    double frac_part = real_distance / dec_floor;
+    double rule_real_length;
+    if (frac_part > 5) {
+        rule_real_length = 5 * dec_floor;
+    } else {
+        if (frac_part < 1) {
+            qWarning("Ruler fraction below unit: %f", frac_part);
+        }
+        rule_real_length = dec_floor;
+    }
+    double rule_vp_length = (rule_real_length / real_distance) * vp_distance;
+    double rule_unit_length = rule_real_length / unit_distance;
+
+    const QString &desc = QStringLiteral("%1 %2")
+                              .arg(rule_unit_length, 0, 'g')
+                              .arg(labels[uclass]);
+    return QPair<double, QString>(rule_vp_length, desc);
+}

@@ -21,13 +21,7 @@ const long dsb_max = 999900000000000L;
 static const int dsb_nunits = 4;
 static const char *dsb_units[dsb_nunits] = {"nm", "um", "mm", "m"};
 static const int dsb_default = 2; // mm
-static long ipow(long base, int exp) {
-    long v = 1;
-    for (int i = 0; i < exp; i++) {
-        v *= base;
-    }
-    return v;
-}
+
 static int idigits(long val) {
     // 0,9 -> 1 ; 10,99 -> 2; 100,999->3
     int e = 1;

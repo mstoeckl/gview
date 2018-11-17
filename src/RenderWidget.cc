@@ -22,23 +22,6 @@ static int threadCount() {
     return itc;
 }
 
-static int ipow(int b, int e) {
-    int x = 1;
-    while (e > 0) {
-        x *= b;
-        e--;
-    }
-    return x;
-}
-static int ilog(int b, int x) {
-    int e = 0;
-    while (x > 1) {
-        x /= b;
-        e++;
-    }
-    return e;
-}
-
 static int isqrt(int x) { return std::sqrt(x); }
 
 static QImage fastIntegerScaleToOpaque(const QImage &base,
@@ -256,19 +239,12 @@ void RenderWidget::paintEvent(QPaintEvent *) {
 }
 
 void RenderWidget::drawRuler(QPainter &q) {
-    // draw ruler in bottom left corner
-    int max_ruler_length = std::max(this->width() / 3, 50);
-    // Max ruler length in real space nm
-    double ds =
-        (0.5 * currView.scale) * max_ruler_length / this->width() / CLHEP::nm;
-
-    int s = std::floor(std::log10(ds));
-    int unit = std::min(6, std::max(0, s / 3 + 2));
-    const char *labels[7] = {"fm", "pm", "nm", "μm", "mm", "m", "km"};
-
-    double fracpart = ds / std::pow(10., s);
-
-    int ruler_length = (max_ruler_length / fracpart);
+    double real_distance_per_pixel =
+        2 * currView.scale / std::min(this->width(), this->height());
+    int max_width = std::max(this->width() / 3, 50);
+    const QPair<double, QString> &p =
+        ruler_distance(real_distance_per_pixel * max_width, max_width);
+    int ruler_length = p.first;
 
     int dh = std::max(10, this->height() / 40);
 
@@ -287,9 +263,8 @@ void RenderWidget::drawRuler(QPainter &q) {
     QTextOption ropt;
     ropt.setAlignment(Qt::AlignTop | Qt::AlignLeft);
     QPoint ranchor = QPoint(dh + ruler_length, this->height() - dh);
-    q.drawText(
-        QRect(ranchor - QPoint(dh, 0), ranchor + QPoint(max_ruler_length, dh)),
-        QString("%1 ").arg(ipow(10, s - 3 * (s / 3))) + labels[unit], ropt);
+    q.drawText(QRect(ranchor - QPoint(dh, 0), ranchor + QPoint(max_width, dh)),
+               p.second);
 }
 
 void RenderWidget::keyPressEvent(QKeyEvent *e) { emit forwardKey(e); }

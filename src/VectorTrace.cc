@@ -2853,7 +2853,7 @@ void VectorTracer::computeGradients() {
 
         // Interior regions, clipped by boundaries
         s << QStringLiteral(
-            "<g id=\"interiors\" fill-opacity=\"1\" stroke=\"none\"  "
+            "<g id=\"interiors\" fill-opacity=\"1\" stroke=\"none\" "
             "fill-rule=\"evenodd\">\n");
         for (const Region &region : region_list) {
             // Compute region limit
@@ -2983,6 +2983,36 @@ void VectorTracer::computeGradients() {
         }
         s << QStringLiteral("</g>\n");
 
+        s << QStringLiteral("<g text-anchor=\"middle\" font-size=\"3.0px\" "
+                            "stroke-width=\"%1\">\n")
+                 .arg(T * 0.0025, 0, 'g');
+        {
+            double viewport_width =
+                2 * view_data.scale * (W * 1. / std::min(W, H));
+            const QPair<double, QString> &rule =
+                ruler_distance(viewport_width * 0.3, 0.3 * T);
+
+            s << QStringLiteral("  <path fill=\"none\" stroke=\"#000000\" "
+                                "d=\"M%1,%4 L%1,%3 %2,%3 %2,%4\" "
+                                "id=\"ruler_bracket\"/>\n")
+                     .arg(0.05 * T, 0, 'f', 5)
+                     .arg(0.05 * T + rule.first, 0, 'f', 5)
+                     .arg(0.95 * T, 0, 'f', 5)
+                     .arg(0.93 * T, 0, 'f', 5);
+
+            s << QStringLiteral("  <text fill=\"#000000\" "
+                                "x=\"%1\" "
+                                "y=\"%2\" id=\"zero\">0</text>\n")
+                     .arg(0.05 * T, 0, 'f', 5)
+                     .arg(0.975 * T, 0, 'f', 5);
+            s << QStringLiteral("  <text fill=\"#000000\" "
+                                "x=\"%1\" "
+                                "y=\"%2\" id=\"zero\">%3</text>\n")
+                     .arg(0.05 * T + rule.first, 0, 'f', 5)
+                     .arg(0.975 * T, 0, 'f', 5)
+                     .arg(rule.second);
+            s << QStringLiteral("</g>\n");
+        }
         s << QStringLiteral("</svg>\n");
     }
 

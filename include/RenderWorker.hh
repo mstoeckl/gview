@@ -159,3 +159,5 @@ long recursivelySumNCalls(const std::vector<Element> &elts,
 void recursivelyPrintNCalls(const std::vector<Element> &elts,
                             const ElemMutables e[], int depth = 0, long net = 0,
                             int idx = 0);
+
+QPair<double, QString> ruler_distance(double scale, double max_width_frac);
