@@ -4,19 +4,9 @@
 #include <QString>
 #include <cmath>
 
-QString FColor::hexName() const {
-    QRgb color = rgba();
-    int cr = qRed(color);
-    int cg = qGreen(color);
-    int cb = qBlue(color);
-    const char *numbers = "0123456789abcdef";
-    return QString("#%1%2%3%4%5%6")
-        .arg(numbers[cr / 16])
-        .arg(numbers[cr % 16])
-        .arg(numbers[cg / 16])
-        .arg(numbers[cg % 16])
-        .arg(numbers[cb / 16])
-        .arg(numbers[cb % 16]);
+QRgb FColor::rgbaRound() const {
+    return qRgba(std::round(v[0] * 255.f), std::round(v[1] * 255.f),
+                 std::round(v[2] * 255.f), std::round(v[3] * 255.f));
 }
 
 static f3 color_srgb_to_rgb(const f3 &srgb) {

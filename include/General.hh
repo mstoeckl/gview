@@ -51,6 +51,7 @@ public:
     QRgb rgba() const {
         return qRgba(v[0] * 255.f, v[1] * 255.f, v[2] * 255.f, v[3] * 255.f);
     }
+    QRgb rgbaRound() const;
     inline float redF() const { return v[0]; }
     inline float greenF() const { return v[1]; }
     inline float blueF() const { return v[2]; }
@@ -58,7 +59,6 @@ public:
     float magnitude() const {
         return v[3] * std::max(v[2], std::max(v[1], v[0]));
     }
-    QString hexName() const;
     static FColor blend(const FColor &a, const FColor &b, float s) {
         float t = 1. - s;
         return FColor(t * a.v[0] + s * b.v[0], t * a.v[1] + s * b.v[1],

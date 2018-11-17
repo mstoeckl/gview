@@ -28,6 +28,13 @@ private:
 enum class GradientType { gSolid, gLinear, gRadial };
 
 typedef struct {
+    /* A gradient, based on uniformly spaced values */
+    float min;
+    float max;
+    QVector<QRgb> colors;
+} Gradient;
+
+typedef struct {
     int subclass_no;
     // zero alpha signifies invisible
     QVector<QVector<RenderPoint>> boundaries;
@@ -38,9 +45,10 @@ typedef struct {
     QRgb solid_color;
     // Linear gradient parameters
     float linear_angle;
-    float linear_start;
-    float linear_stop;
-    QVector<QRgb> linear_colors;
+    // Radial gradient parameters
+    QPointF radial_center;
+    // Gradient parameters
+    Gradient gradient;
 
     // Add clipping plane marks
     bool is_clipped_patch;
