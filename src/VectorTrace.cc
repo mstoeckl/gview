@@ -944,9 +944,6 @@ static void partition_sumpoint(const QPoint &p, QPoint *n, QPoint *f) {
 static bool point_is_oo(const QPoint &p) {
     return (p.x() & 0x1) && (p.y() & 0x1);
 }
-static int cross_product(QPoint p, QPoint q) {
-    return p.x() * q.y() - p.y() * q.x();
-}
 
 void VectorTracer::computeEdges() {
     region_list.clear();
@@ -2060,7 +2057,7 @@ void VectorTracer::computeCreases() {
     delete[] flood_fill_data;
     delete[] crease_edge_count;
 
-    int S = std::max(10, 1024 / std::max(W - 1, H - 1));
+    int S = std::max(4, 1024 / std::max(W - 1, H - 1));
     QImage image((W - 1) * S, (H - 1) * S, QImage::Format_ARGB32);
     {
         QRgb *colors = new QRgb[grid_nclasses];
@@ -2402,47 +2399,57 @@ static QPointF l1_min(const QVector<QPointF> pts) {
     return current;
 }
 
-static bool angle_comp(const QLineF &a, const QLineF &b) {
-    double da = std::atan2(a.p2().y(), a.p2().x());
-    double db = std::atan2(b.p2().y(), b.p2().x());
-    // ensure we fall in the positive domain
-    if (da < 0.) {
-        da += CLHEP::pi;
-    }
-    if (db < 0.) {
-        db += CLHEP::pi;
-    }
-    return da < db;
+static bool sort_by_first(const QPair<double, double> &a,
+                          const QPair<double, double> &b) {
+    return a.first < b.first;
 }
 
-static QPointF compute_radial_center(const Region &region,
-                                     const Subregion &subreg,
-                                     RenderPoint *grid_points,
-                                     const QSize &grid_size) {
-    // TODO: generalize to find an elliptical pair...
+static QVector<QPair<double, double>>
+medfilt(const QVector<QPair<double, double>> &v, int m) {
+    int d = m / 2;
+    QVector<QPair<double, double>> o;
+    QVector<double> t(m);
+    for (int i = 0; i < v.size() - m; i++) {
+        for (int j = 0; j < m; j++) {
+            t[j] = v[i + j].second;
+        }
+        qSort(t);
+        o.append(QPair<double, double>(v[i + d].first, t[d]));
+    }
+    return o;
+}
 
-    // TODO fixme: the 'pairwise intersection' rule plays badly
-    // with crossed line pairs
-
+/* Compute candidates for the center of a radial distribution. This must
+ * be done in some sort of global fashion, because aggregation of local
+ * estimates (i.e, from circle centers predicted by four points) amplifies
+ * gradient errors due to the grid spacing. */
+static QVector<QPointF> compute_radial_centers(const Region &region,
+                                               const Subregion &subreg,
+                                               RenderPoint *grid_points,
+                                               const QSize &grid_size) {
     const int W = grid_size.width(), H = grid_size.height();
-    /* Step 1: compute color gradients */
-    QVector<QLineF> rays;
+    QVector<QPair<QPointF, QPointF>> gradients;
+    // Step 1: compute all gradients
     for (int x = region.xmin; x <= region.xmax; x++) {
         for (int y = region.ymin; y <= region.ymax; y++) {
             // There are four dx/dy kernels feasible;
-            // we include all which exist
+            // we add them all together
             RenderPoint &base = grid_points[x * H + y];
             if (base.region_class != region.class_no)
                 continue;
             if (base.subregion_class != subreg.subclass_no)
                 continue;
 
-            int dxs[4] = {1, 1, -1, -1};
-            int dys[4] = {1, -1, -1, 1};
+            double mag_base = base.ideal_color.magnitude();
+
+            QPointF net_deriv;
+            QPoint dxs[4] = {QPoint(1, 1), QPoint(1, -1), QPoint(-1, -1),
+                             QPoint(-1, 1)};
             for (int k = 0; k < 4; k++) {
-                int xnx = x + dxs[k], yny = y + dys[k];
-                if (xnx >= W || yny >= H || xnx < 0 || yny < 0)
+                int xnx = x + dxs[k].x(), yny = y + dxs[k].y();
+                if (xnx >= W || yny >= H || xnx < 0 || yny < 0) {
                     continue;
+                }
 
                 RenderPoint &pdx = grid_points[xnx * H + y];
                 if (pdx.region_class != region.class_no)
@@ -2456,63 +2463,88 @@ static QPointF compute_radial_center(const Region &region,
                 if (pdy.subregion_class != subreg.subclass_no)
                     continue;
 
-                // We consider derivatives in magnitude, as intra-subregion
-                // color shifts tend to be scaling-only
-                float mag_base = base.ideal_color.magnitude();
                 float mag_dx = pdx.ideal_color.magnitude();
                 float mag_dy = pdy.ideal_color.magnitude();
 
-                double dx = (mag_dx - mag_base) / dxs[k];
-                double dy = (mag_dy - mag_base) / dys[k];
-                double mag2 = (dx * dx + dy * dy);
-                if (mag2 <= 0.)
-                    continue;
-
-                double s = std::sqrt(mag2);
-                QLineF l(base.coords, QPointF(dx / s, dy / s));
-                rays.push_back(l);
+                double dx =
+                    (mag_dx - mag_base) / (pdx.coords.x() - base.coords.x());
+                double dy =
+                    (mag_dy - mag_base) / (pdy.coords.y() - base.coords.y());
+                net_deriv += QPointF(dx, dy);
+            }
+            if (net_deriv.x() != 0 && net_deriv.y() != 0) {
+                net_deriv /= dist_2d(QPointF(), net_deriv);
+                gradients.append(
+                    QPair<QPointF, QPointF>(base.coords, net_deriv));
             }
         }
     }
-
-    if (rays.size() == 0) {
-        return QPointF();
+    if (gradients.size() < 5) {
+        return QVector<QPointF>();
     }
-    if (rays.size() == 1) {
-        return rays[0].p1();
-    }
-    qSort(rays.begin(), rays.end(), angle_comp);
 
-    /* Step 2: identify pairwise line intersections for lines with large angle
-     * difference */
-    QVector<QPointF> intersections;
-    for (int i = 0; i < rays.size() / 2; i++) {
-        int j = i + rays.size() / 2;
-        // Line intersections:
-        const QPointF &p0 = rays[i].p1(), &p1 = rays[j].p1();
-        const QPointF &d0 = rays[i].p2(), &d1 = rays[j].p2();
-
-        if (det_2d(d0.x(), d1.x(), d0.y(), d1.y()) == 0) {
-            // unsolvable system
-            continue;
+    // Step 2: sample over angles
+    const int n_angles =
+        12; /* effectively controls minimum detectable slice angle */
+    double offsets[n_angles];
+    for (int i = 0; i < n_angles; i++) {
+        double angle = i * CLHEP::pi / n_angles;
+        double sa = std::sin(angle), ca = std::cos(angle);
+        QVector<QPair<double, double>> tcp;
+        for (const QPair<QPointF, QPointF> &p : gradients) {
+            double t = -sa * p.first.x() + ca * p.first.y();
+            double contra = std::abs(ca * p.second.x() + sa * p.second.y());
+            tcp.push_back(QPair<double, double>(t, contra));
         }
+        qSort(tcp.begin(), tcp.end(), sort_by_first);
+
+        // median filter over cb
+        int nmedlength = 5;
+        QVector<QPair<double, double>> tcpfilt = medfilt(tcp, nmedlength);
+
+        // select average position of peak (medfilt -> exist multiple)
+        int nbest = 0;
+        double best = 0.;
+        double mxs = -1.;
+        for (int k = 0; k < tcpfilt.size(); k++) {
+            if (tcpfilt[k].second > mxs) {
+                mxs = tcpfilt[k].second;
+                best = tcpfilt[k].first;
+                nbest = 1;
+            } else if (tcpfilt[k].second == mxs) {
+                best += tcpfilt[k].first;
+                nbest += 1;
+            }
+        }
+        offsets[i] = best / nbest;
+    }
+
+    // Step 3: compute pairwise intersections
+    QVector<QPointF> ints;
+    for (int i = 0; i < n_angles; i++) {
+        int k = (i + 1) % n_angles;
+        double angle_i = i * CLHEP::pi / n_angles;
+        double angle_k = k * CLHEP::pi / n_angles;
+        double si = std::sin(angle_i), ci = std::cos(angle_i);
+        double sk = std::sin(angle_k), ck = std::cos(angle_k);
+
+        QPointF pi(-si * offsets[i], ci * offsets[i]);
+        QPointF pk(-sk * offsets[k], ck * offsets[k]);
+        QPointF di(ci, si);
+        QPointF dk(ck, sk);
 
         double s, t;
-        solve_2d_lin(d0.x(), d1.x(), p1.x() - p0.x(), d0.y(), d1.y(),
-                     p1.y() - p0.y(), &s, &t);
-        const QPointF &cross0 = p0 + s * d0;
-        const QPointF &cross1 = p1 - t * d1;
-        intersections.append((cross0 + cross1) / 2);
+        solve_2d_lin(di.x(), dk.x(), pk.x() - pi.x(), di.y(), dk.y(),
+                     pk.y() - pi.y(), &s, &t);
+        QPointF crossi = pi + s * di;
+        QPointF crossk = pk - t * dk;
+        QPointF cx = (crossi + crossk) / 2;
+        ints.append(cx);
     }
 
-    /* Step 3: compute median of intersections */
-    if (intersections.size() == 0) {
-        return QPointF();
-    }
-    if (intersections.size() == 1) {
-        return intersections[0];
-    }
-    return l1_min(intersections);
+    // Add the mean point, for better high-symmetry perf
+    ints.push_back(l1_min(ints));
+    return ints;
 }
 
 static float compute_histogram_angle(const Region &region,
@@ -2677,6 +2709,11 @@ compute_gradient(const QVector<QPair<FColor, float>> &colors_at_position,
 static Gradient
 compute_linear_gradient(const QVector<QPair<FColor, QPointF>> &interior_colors,
                         const QSize &gridsize, double angle, long *error) {
+    if (std::isnan(angle)) {
+        *error = std::numeric_limits<long>::max();
+        Gradient g;
+        return g;
+    }
     int S = std::max(gridsize.width(), gridsize.height()) - 1;
     double grid_spacing = 1.0 / S;
     QVector<QPair<FColor, float>> colors_at_position;
@@ -2691,6 +2728,11 @@ static Gradient
 compute_radial_gradient(const QVector<QPair<FColor, QPointF>> &interior_colors,
                         const QSize &gridsize, const QPointF &center,
                         long *error) {
+    if (std::isnan(center.x()) || std::isnan(center.y())) {
+        *error = std::numeric_limits<long>::max();
+        Gradient g;
+        return g;
+    }
     int S = std::max(gridsize.width(), gridsize.height()) - 1;
     double grid_spacing = 1.0 / S;
     QVector<QPair<FColor, float>> colors_at_position;
@@ -2851,15 +2893,16 @@ void VectorTracer::computeGradients() {
             }
             if (best_err > 0) {
                 long this_err = std::numeric_limits<long>::max();
-                subreg.radial_center = compute_radial_center(
-                    region, subreg, grid_points, grid_size);
-                Gradient g =
-                    compute_radial_gradient(interior_colors, grid_size,
-                                            subreg.radial_center, &this_err);
-                if (this_err < best_err) {
-                    subreg.gradient_type = GradientType::gRadial;
-                    subreg.gradient = g;
-                    best_err = this_err;
+                for (const QPointF &c : compute_radial_centers(
+                         region, subreg, grid_points, grid_size)) {
+                    Gradient g = compute_radial_gradient(
+                        interior_colors, grid_size, c, &this_err);
+                    if (this_err < best_err) {
+                        subreg.radial_center = c;
+                        subreg.gradient_type = GradientType::gRadial;
+                        subreg.gradient = g;
+                        best_err = this_err;
+                    }
                 }
             }
 
