@@ -198,7 +198,7 @@ public:
 };
 
 int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
-                    const G4RotationMatrix &parent_rot,
+                    const G4String &suffix, const G4RotationMatrix &parent_rot,
                     const G4ThreeVector &parent_offset, int *counter) {
     int cc = 0;
     if (!counter) {
@@ -219,7 +219,8 @@ int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
     {
         // Reference only valid where elts is unmodified
         Element &m = elts[k];
-        m.name = phys->GetName();
+        m.name =
+            phys->GetName().substr(0, phys->GetName().size() - suffix.size());
         m.orig_vol = phys;
 
         // Only identity has a trace of +3 => norm2 of 0
@@ -243,7 +244,7 @@ int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
 
     std::vector<int> svi;
     for (int i = 0; i < log->GetNoDaughters(); i++) {
-        svi.push_back(convertCreation(elts, log->GetDaughter(i), rot,
+        svi.push_back(convertCreation(elts, log->GetDaughter(i), suffix, rot,
                                       offset + parent_offset, counter));
     }
     ElemSort esort(elts);

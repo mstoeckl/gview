@@ -121,7 +121,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     vd.orig_vol = geo_options[which_geo].vol;
     vd.octree = nullptr;
     vd.elements.clear();
-    convertCreation(vd.elements, geo_options[which_geo].vol);
+    convertCreation(vd.elements, geo_options[which_geo].vol,
+                    geo_options[which_geo].suffix);
     vd.scene_radius = vd.elements[0].solid->GetExtent().GetExtentRadius();
     vd.scale = vd.scene_radius / 2;
     vd.base_offset = G4ThreeVector();
@@ -810,13 +811,15 @@ void Viewer::changeGeometry(QAction *act) {
                 which_geo = i;
                 vd.orig_vol = geo_options[which_geo].vol;
                 vd.elements.clear();
-                convertCreation(vd.elements, geo_options[which_geo].vol);
+                convertCreation(vd.elements, geo_options[which_geo].vol,
+                                geo_options[which_geo].suffix);
                 vd.scene_radius =
                     vd.elements[0].solid->GetExtent().GetExtentRadius();
                 if (4 * vd.scene_radius > vd.camera.mag()) {
                     vd.camera *= 4 * vd.scene_radius / vd.camera.mag();
                 }
                 // Reset pivot list
+                QString old_selection_name = pivot_volume->currentText();
                 pivot_volume->blockSignals(true);
                 pivot_volume->clear();
                 for (const Element &e : vd.elements) {
@@ -824,6 +827,12 @@ void Viewer::changeGeometry(QAction *act) {
                                           e.ecode);
                 }
                 pivot_volume->setCurrentIndex(0);
+                for (int k = 0; k < pivot_volume->count(); k++) {
+                    if (pivot_volume->itemText(k) == old_selection_name) {
+                        pivot_volume->setCurrentIndex(k);
+                        break;
+                    }
+                }
                 pivot_volume->blockSignals(false);
 
                 std::vector<const G4Material *> mtl_list =
@@ -1036,6 +1045,16 @@ void Viewer::reloadLineTypeSelection() {
     line_type_selection->blockSignals(false);
 }
 
+void recursiveNameAppend(G4VPhysicalVolume *vp, const char *suffix) {
+    G4String name = vp->GetName() + suffix;
+    vp->SetName(name);
+    vp->GetLogicalVolume()->SetName(name);
+    int nd = vp->GetLogicalVolume()->GetNoDaughters();
+    for (G4int i = 0; i < nd; i++) {
+        recursiveNameAppend(vp->GetLogicalVolume()->GetDaughter(i), suffix);
+    }
+}
+
 void Viewer::openGeometry() {
     QString selected = "GDML (*.gdml *.gdml.gz)";
     QString fn = QFileDialog::getOpenFileName(
@@ -1058,13 +1077,15 @@ void Viewer::openGeometry() {
         g.name = G4String(fn.toUtf8().constData());
         p.Read(g.name, false);
         G4cout << "Done reading..." << G4endl;
-        // Need to modify volume name to prevent collisions in lookup
         g.vol = p.GetWorldVolume();
         char buf[30];
-        sprintf(buf, "-%d", int(geo_options.size()));
-        G4String name = g.vol->GetName() + buf;
-        g.vol->SetName(name);
-        g.vol->GetLogicalVolume()->SetName(name);
+        sprintf(buf, "-%d", int(geo_options.size() + 1));
+        // Recursively modify volume names, because otherwise the reader
+        // invokes GetVolume to scan through the list of all so-far created
+        // logical/physical volumes, and picks the first one matching the
+        // name
+        recursiveNameAppend(g.vol, buf);
+        g.suffix = buf;
         geo_options.push_back(g);
         G4cout << "Done converting..." << G4endl;
         p.Clear();

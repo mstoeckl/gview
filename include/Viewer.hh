@@ -35,6 +35,7 @@ class HistogrammicRangeSlider;
 typedef struct {
     G4String name;
     G4VPhysicalVolume *vol;
+    G4String suffix;
 } GeoOption;
 
 class Viewer : public QMainWindow {
@@ -126,3 +127,5 @@ private:
     bool shift;
     long rayiter;
 };
+
+void recursiveNameAppend(G4VPhysicalVolume *vp, const char *suffix);

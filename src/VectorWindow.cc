@@ -164,7 +164,7 @@ VectorWindow::VectorWindow(const char *name, G4VPhysicalVolume *vol)
     ViewData view_data;
     view_data.orig_vol = vol;
     view_data.elements.clear();
-    convertCreation(view_data.elements, vol);
+    convertCreation(view_data.elements, vol, "");
     view_data.scene_radius =
         view_data.elements[0].solid->GetExtent().GetExtentRadius();
     view_data.scale = view_data.scene_radius; // *0.05 for hxrd3

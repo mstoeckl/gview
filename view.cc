@@ -9,6 +9,8 @@
 #include <QTime>
 
 #include <G4GDMLParser.hh>
+#include <G4LogicalVolumeStore.hh>
+#include <G4PhysicalVolumeStore.hh>
 
 int usage() {
     fprintf(stderr,
@@ -70,19 +72,20 @@ int main(int argc, char **argv) {
             ofo.close();
 
             G4GDMLParser p;
-            p.SetAddPointerToName(true);
             G4cout << "Started reading (may take a while)..." << G4endl;
             p.Read(ofo.fileName().toUtf8().constData(), false);
             G4cout << "Done reading..." << G4endl;
             GeoOption g;
             g.name = G4String(argv[j]);
-            // Need to modify volume name to prevent collisions in lookup
             g.vol = p.GetWorldVolume();
             char buf[30];
             sprintf(buf, "-%d", j);
-            G4String name = g.vol->GetName() + buf;
-            g.vol->SetName(name);
-            g.vol->GetLogicalVolume()->SetName(name);
+            // Recursively modify volume names, because otherwise the reader
+            // invokes GetVolume to scan through the list of all so-far created
+            // logical/physical volumes, and picks the first one matching the
+            // name
+            recursiveNameAppend(g.vol, buf);
+            g.suffix = buf;
             opts.push_back(g);
             G4cout << "Done converting..." << G4endl;
             p.Clear();

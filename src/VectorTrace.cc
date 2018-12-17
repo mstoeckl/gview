@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "VectorTrace.hh"
 
+#include "Bezier.hh"
 #include "Navigator.hh"
 #include "Shaders.hh"
 
@@ -2238,80 +2239,21 @@ static QStringList svg_subpath_text(const QVector<QPointF> &seq, int estart,
 
     // Attempt bezier reduction if there are enough intermediate points
     if (iend >= estart + 3) {
-        // an alternative approach: approximate the entire region
-        // through tangent control points every two points, compute error
-        // on half points, and greedily remove control points while staying
-        // in budget
-
-        // We approximate a best fit by selecting the cubic bezier curve
-        // passing evenly-ish through the interior points. Note that, for
-        // large radius curves like the one to be resolved here, the ideal `t`
-        // value of a point is (to 1st order) its path length fraction.
-        int icontrol0 = (2 * estart + iend) / 3,
-            icontrol1 = (estart + 2 * iend) / 3;
-        const QPointF &pctrl0 = seq[icontrol0], &pctrl1 = seq[icontrol1];
-
-        double path_length = 0.;
-        for (int i = estart; i < icontrol0; i++) {
-            path_length += dist_2d(seq[i], seq[i + 1]);
-        }
-        double plct1 = path_length;
-        for (int i = icontrol0; i < icontrol1; i++) {
-            path_length += dist_2d(seq[i], seq[i + 1]);
-        }
-        double plct2 = path_length;
-        for (int i = icontrol1; i < iend; i++) {
-            path_length += dist_2d(seq[i], seq[i + 1]);
-        }
-
-        double b0[4], b1[4];
-        bezier_cubic_basis(plct1 / path_length, &b0[0], &b0[1], &b0[2], &b0[3]);
-        bezier_cubic_basis(plct2 / path_length, &b1[0], &b1[1], &b1[2], &b1[3]);
-
-        // solve 2d eqn -- if solvable. (This need not always be the case.)
-        double det = det_2d(b0[1], b0[2], b1[1], b1[2]);
-        if (std::abs(det) > 0.) {
-            double c0x, c1x, c0y, c1y;
-            solve_2d_lin(b0[1], b0[2],
-                         pctrl0.x() - b0[0] * pstart.x() - b0[3] * pend.x(), //
-                         b1[1], b1[2],
-                         pctrl1.x() - b1[0] * pstart.x() - b1[3] * pend.x(), //
-                         &c0x, &c1x);
-            solve_2d_lin(b0[1], b0[2],
-                         pctrl0.y() - b0[0] * pstart.y() - b0[3] * pend.y(), //
-                         b1[1], b1[2],
-                         pctrl1.y() - b1[0] * pstart.y() - b1[3] * pend.y(), //
-                         &c0y, &c1y);
-            QPointF ctr0(c0x, c0y), ctr1(c1x, c1y);
-
-            // Again, to first approx, t is the path length *fraction*.
-            // This calculation slightly overestimates the ideal error
-            double max_deviation = 0.;
-            double tpathlen = 0.;
-            for (int i = estart + 1; i < iend; i++) {
-                tpathlen += dist_2d(seq[i - 1], seq[i]);
-                double bc[4];
-                bezier_cubic_basis(tpathlen / path_length, &bc[0], &bc[1],
-                                   &bc[2], &bc[3]);
-                QPointF prediction =
-                    bc[0] * pstart + bc[1] * ctr0 + bc[2] * ctr1 + bc[3] * pend;
-                double sqerr = QPointF::dotProduct(prediction - seq[i],
-                                                   prediction - seq[i]);
-                max_deviation = std::max(max_deviation, sqerr);
-            }
-            max_deviation = std::sqrt(max_deviation);
-
-            if (max_deviation < acceptable_error) {
-                QStringList lst;
-                lst.append(QStringLiteral("C%1,%2,%3,%4,%5,%6")
-                               .arg(ctr0.x(), 0, 'f', fprec)
-                               .arg(ctr0.y(), 0, 'f', fprec)
-                               .arg(ctr1.x(), 0, 'f', fprec)
-                               .arg(ctr1.y(), 0, 'f', fprec)
-                               .arg(pend.x(), 0, 'f', fprec)
-                               .arg(pend.y(), 0, 'f', fprec));
-                return lst;
-            }
+        double xctrl[4], yctrl[4];
+        assert(sizeof(QPointF) == 2 * sizeof(double));
+        int n = iend - estart + 1;
+        double err = bezier_segment_fit((double *)(seq.data() + estart), n,
+                                        xctrl, yctrl);
+        if (err <= 2 * acceptable_error) {
+            QStringList lst;
+            lst.append(QStringLiteral("C%1,%2,%3,%4,%5,%6")
+                           .arg(xctrl[1], 0, 'f', fprec)
+                           .arg(yctrl[1], 0, 'f', fprec)
+                           .arg(xctrl[2], 0, 'f', fprec)
+                           .arg(yctrl[2], 0, 'f', fprec)
+                           .arg(pend.x(), 0, 'f', fprec)
+                           .arg(pend.y(), 0, 'f', fprec));
+            return lst;
         }
     }
 
@@ -3182,7 +3124,7 @@ void VectorTracer::computeGradients() {
                             crease_col.blueF() / 2, crease_col.alphaF());
 
                         s << QStringLiteral(
-                                 "    <path id=\"edge%1_%2_%3\" stroke=\"%4\" "
+                                 " <path id=\"edge%1_%2_%3\" stroke=\"%4\" "
                                  "d=\"%5\"/>\n")
                                  .arg(region.class_no)
                                  .arg(subreg.subclass_no)

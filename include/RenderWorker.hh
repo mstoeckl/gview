@@ -151,6 +151,7 @@ void debugRayPoint(const RayPoint &ray, const std::vector<Element> &els);
 
 class G4VPhysicalVolume;
 int convertCreation(std::vector<Element> &elts, const G4VPhysicalVolume *phys,
+                    const G4String &suffix,
                     const G4RotationMatrix &parent_rot = G4RotationMatrix(),
                     const G4ThreeVector &parent_offset = G4ThreeVector(),
                     int *counter = NULL);
