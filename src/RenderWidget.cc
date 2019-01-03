@@ -205,6 +205,8 @@ void RenderWidget::resizeEvent(QResizeEvent *evt) {
     currView.level_of_detail = ilog(DOWNSCALE_BASE, immediate_lod);
     changed_inputs |= CHANGE_VIEWPORT;
     rerender_priv();
+
+    emit forwardResize(evt);
 }
 
 void RenderWidget::paintEvent(QPaintEvent *) {

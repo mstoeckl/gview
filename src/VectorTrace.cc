@@ -1910,7 +1910,7 @@ void VectorTracer::computeCreases() {
                 QPointF(std::numeric_limits<float>::quiet_NaN(),
                         std::numeric_limits<float>::quiet_NaN());
             subreg.gradient.min = std::numeric_limits<float>::infinity();
-            subreg.gradient.min = -std::numeric_limits<float>::infinity();
+            subreg.gradient.max = -std::numeric_limits<float>::infinity();
             subreg.gradient.colors.clear();
 
             // Determine if subregion is clipped region
@@ -2707,6 +2707,15 @@ static FColor compute_mean_color(const QVector<RenderPoint> &pts) {
     return FColor(bnet_r / n, bnet_g / n, bnet_b / n, bnet_a / n);
 }
 
+static QVector<QRgb> hatch_dim(const QVector<QRgb> &a) {
+    QVector<QRgb> r(a.size());
+    for (int i = 0; i < a.size(); i++) {
+        r[i] = qRgba(4 * qRed(a[i]) / 5, 4 * qGreen(a[i]) / 5,
+                     4 * qBlue(a[i]) / 5, qAlpha(a[i]));
+    }
+    return r;
+}
+
 static QVector<QVector<RenderPoint>>
 extract_visible_boundary(const QVector<RenderPoint> &pts) {
     // We already assume there is at least one invisible point
@@ -2769,7 +2778,6 @@ static void add_gradient_stops(QTextStream &s, const QVector<QRgb> &v,
             // Skip redundant points
             continue;
         }
-
         if (qAlpha(v[i]) < 255) {
             double alpha = qAlpha(v[i]) / 255.;
             s << QStringLiteral("  <stop offset=\"%1\" stop-color=\"%2\" "
@@ -2907,24 +2915,23 @@ void VectorTracer::computeGradients() {
             "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"\n "
             "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">\n");
 
-        s << QStringLiteral(
-                 "<svg version=\"1.1\" width=\"%1\" height=\"%2\" >\n")
+        s << QStringLiteral("<svg width=\"%1\" height=\"%2\" ersion=\"1.1\" "
+                            "xmlns=\"http://www.w3.org/2000/svg\" "
+                            "xmlns:xlink=\"http://www.w3.org/1999/xlink\">\n")
                  .arg(viewbox.width())
                  .arg(viewbox.height());
 
         s << QStringLiteral("<defs>\n");
 
-        // Hatching fill overlays (by type)
+        // Hatching fill textures
         QMap<CompactNormal, int> normal_directions;
         for (const Region &region : region_list) {
             for (const Subregion &subreg : region.subregions) {
                 // consider average normal over subregion
                 if (subreg.is_clipped_patch) {
                     QPoint src = subreg.representative_coord;
-                    const CompactNormal &normal =
-                        grid_points[src.x() * H + src.y()]
-                            .ray.intersections[0]
-                            .normal;
+                    const RenderPoint &r = grid_points[src.x() * H + src.y()];
+                    const CompactNormal &normal = r.ray.intersections[0].normal;
                     if (!normal_directions.contains(normal)) {
                         normal_directions[normal] = normal_directions.size();
                     }
@@ -2933,40 +2940,50 @@ void VectorTracer::computeGradients() {
         }
         const G4ThreeVector &updown = view_data.orientation.rowY();
         const G4ThreeVector &lright = view_data.orientation.rowZ();
-        for (CompactNormal nd : normal_directions.keys()) {
+        for (const CompactNormal &nd : normal_directions.keys()) {
             int idx = normal_directions[nd];
             const G4ThreeVector &normal = nd;
 
             const G4ThreeVector &orthA = normal.orthogonal().unit();
             const G4ThreeVector &orthB = normal.cross(orthA).unit();
             const G4ThreeVector &pattern_dir = (orthA + orthB);
-            // Convert to unit viewport space
-            double udf = pattern_dir.dot(updown) / view_data.scale,
-                   lrf = pattern_dir.dot(lright) / view_data.scale;
-            double nudf, nlrf;
-            // Convert to SVG space
-            dirtransf.map(udf, lrf, &nudf, &nlrf);
+            // Use unit viewport space
+            double udf = pattern_dir.dot(updown), lrf = pattern_dir.dot(lright);
             // Compute spacing/angle
-            double spacing = 10 * std::sqrt(nudf * nudf + nlrf * nlrf);
-            double angle = std::atan2(nudf, nlrf);
+            double spacing = 0.0175 * std::sqrt(udf * udf + lrf * lrf);
+            // Viewed perpendicularly, the stripe angle should not be pi/4
+            double angle = std::atan2(udf, lrf) - M_PI / 30;
 
-            //            double hatch_width = spacing / 2;
+            // we do not want infinite density
+            spacing = std::max(spacing, 0.001);
 
-            double hatch_width = T / 40.;
-            qDebug("spacing %f hatch_width %f", spacing, hatch_width);
+            // We produce only one clip path, for the darker strips. This
+            // will overlay the lighter region
+            s << QStringLiteral(" <clipPath id=\"hatching%1\">").arg(idx);
 
-            s << QStringLiteral("    <pattern id=\"hatching%1\" width=\"%2\" "
-                                "height=\"10\" patternTransform=\"rotate(%3 0 "
-                                "0)\" patternUnits=\"userSpaceOnUse\">\n")
-                     .arg(idx)
-                     .arg(hatch_width)
-                     .arg(angle * 180 / CLHEP::pi);
-            s << QStringLiteral(
-                     "       <line x1=\"0\" y1=\"0\" x2=\"0\" "
-                     "y2=\"10\" stroke=\"%1\" stroke-width=\"%2\"/>\n")
-                     .arg(color_hex_name_rgb(qRgb(0, 0, 0)))
-                     .arg(hatch_width);
-            s << QStringLiteral("    </pattern>\n");
+            double L = std::sqrt(2);
+            int n = std::ceil(L / spacing / 2);
+            QPointF prim(std::cos(angle), std::sin(angle));
+            QPointF sec(-std::sin(angle), std::cos(angle));
+            prim *= spacing;
+            sec *= L;
+            QStringList lpath;
+            for (int x = -n; x <= n; x++) {
+                QPointF corners[4] = {
+                    prim * (2 * x - 0.5) + sec, prim * (2 * x - 0.5) - sec,
+                    prim * (2 * x + 0.5) - sec, prim * (2 * x + 0.5) + sec};
+                for (int j = 0; j < 4; j++) {
+                    QPointF wco = transf.map(corners[j]);
+                    lpath.push_back(QStringLiteral("%1%2,%3")
+                                        .arg("MLLL"[j])
+                                        .arg(wco.x(), 0, 'g', 6)
+                                        .arg(wco.y(), 0, 'g', 6));
+                }
+                lpath.push_back("Z");
+            }
+
+            s << QStringLiteral("  <path d=\"%1\"/>\n").arg(lpath.join(" "));
+            s << QStringLiteral(" </clipPath>\n");
         }
 
         // Gradients
@@ -2992,38 +3009,60 @@ void VectorTracer::computeGradients() {
                     ssfstart = transf.map(ssfstart);
                     ssfstop = transf.map(ssfstop);
 
-                    s << QStringLiteral(" <linearGradient id=\"gradient%1_%2\" "
-                                        "x1=\"%3\" "
-                                        "y1=\"%4\" x2=\"%5\" y2=\"%6\" "
-                                        "spreadMethod=\"%7\" "
-                                        "gradientUnits=\"userSpaceOnUse\">\n")
-                             .arg(region.class_no)
-                             .arg(subreg.subclass_no)
-                             .arg(ssfstart.x())
-                             .arg(ssfstart.y())
-                             .arg(ssfstop.x())
-                             .arg(ssfstop.y())
-                             .arg(0 ? "repeat" : "pad");
-                    add_gradient_stops(s, subreg.gradient.colors, 0., 1.);
-                    s << QStringLiteral(" </linearGradient>\n");
+                    for (int v = 0; v < (subreg.is_clipped_patch ? 2 : 1);
+                         v++) {
+                        s << QStringLiteral(
+                                 " <linearGradient id=\"gradient%1_%2%3\" "
+                                 "x1=\"%4\" "
+                                 "y1=\"%5\" x2=\"%6\" y2=\"%7\" "
+                                 "spreadMethod=\"%8\" "
+                                 "gradientUnits=\"userSpaceOnUse\">\n")
+                                 .arg(region.class_no)
+                                 .arg(subreg.subclass_no)
+                                 .arg(subreg.is_clipped_patch
+                                          ? (v ? "_dim" : "")
+                                          : "")
+                                 .arg(ssfstart.x())
+                                 .arg(ssfstart.y())
+                                 .arg(ssfstop.x())
+                                 .arg(ssfstop.y())
+                                 .arg(0 ? "repeat" : "pad");
+                        bool dim = subreg.is_clipped_patch && v == 1;
+                        add_gradient_stops(
+                            s,
+                            dim ? hatch_dim(subreg.gradient.colors)
+                                : subreg.gradient.colors,
+                            0., 1.);
+                        s << QStringLiteral(" </linearGradient>\n");
+                    }
                 } else if (subreg.gradient_type == GradientType::gRadial) {
                     QPointF tc = transf.map(subreg.radial_center);
                     double rs = transf.m11() * subreg.gradient.max;
 
-                    s << QStringLiteral(" <radialGradient id=\"gradient%1_%2\" "
-                                        "cx=\"%3\" "
-                                        "cy=\"%4\" r=\"%5\" "
-                                        "spreadMethod=\"pad\" "
-                                        "gradientUnits=\"userSpaceOnUse\">\n")
-                             .arg(region.class_no)
-                             .arg(subreg.subclass_no)
-                             .arg(tc.x())
-                             .arg(tc.y())
-                             .arg(rs);
-                    add_gradient_stops(
-                        s, subreg.gradient.colors,
-                        subreg.gradient.min / subreg.gradient.max, 1.);
-                    s << QStringLiteral(" </radialGradient>\n");
+                    for (int v = 0; v < (subreg.is_clipped_patch ? 2 : 1);
+                         v++) {
+                        s << QStringLiteral(
+                                 " <radialGradient id=\"gradient%1_%2%3\" "
+                                 "cx=\"%4\" "
+                                 "cy=\"%5\" r=\"%6\" "
+                                 "spreadMethod=\"pad\" "
+                                 "gradientUnits=\"userSpaceOnUse\">\n")
+                                 .arg(region.class_no)
+                                 .arg(subreg.subclass_no)
+                                 .arg(subreg.is_clipped_patch
+                                          ? (v ? "_dim" : "")
+                                          : "")
+                                 .arg(tc.x())
+                                 .arg(tc.y())
+                                 .arg(rs);
+                        bool dim = subreg.is_clipped_patch && v == 1;
+                        add_gradient_stops(
+                            s,
+                            dim ? hatch_dim(subreg.gradient.colors)
+                                : subreg.gradient.colors,
+                            subreg.gradient.min / subreg.gradient.max, 1.);
+                        s << QStringLiteral(" </radialGradient>\n");
+                    }
                 }
             }
         }
@@ -3039,14 +3078,24 @@ void VectorTracer::computeGradients() {
                 const QVector<QPolygonF> &subloops =
                     boundary_loops_for_subregion(subreg, transf);
 
-                QString fill_desc;
+                const QString &btext = svg_path_text_from_polygons(subloops);
+
+                QString fill_desc, fill_desc_dim;
                 if (subreg.gradient_type == GradientType::gSolid) {
                     fill_desc = color_hex_name_rgb(subreg.solid_color);
+                    QRgb c = qRgba(4 * qRed(subreg.solid_color) / 5,
+                                   4 * qGreen(subreg.solid_color) / 5,
+                                   4 * qBlue(subreg.solid_color) / 5,
+                                   qAlpha(subreg.solid_color));
+                    fill_desc_dim = color_hex_name_rgb(c);
                 } else if (subreg.gradient_type == GradientType::gLinear ||
                            subreg.gradient_type == GradientType::gRadial) {
                     fill_desc = QStringLiteral("url(#gradient%1_%2)")
                                     .arg(region.class_no)
                                     .arg(subreg.subclass_no);
+                    fill_desc_dim = QStringLiteral("url(#gradient%1_%2_dim)")
+                                        .arg(region.class_no)
+                                        .arg(subreg.subclass_no);
                 } else {
                     qFatal("Unsupported gradient type");
                 }
@@ -3056,26 +3105,21 @@ void VectorTracer::computeGradients() {
                          .arg(region.class_no)
                          .arg(subreg.subclass_no)
                          .arg(fill_desc)
-                         .arg(svg_path_text_from_polygons(subloops));
+                         .arg(btext);
 
-                // Overlay mix with hatching
                 if (subreg.is_clipped_patch) {
                     QPoint src = subreg.representative_coord;
-                    const CompactNormal &normal =
-                        grid_points[src.x() * H + src.y()]
-                            .ray.intersections[0]
-                            .normal;
+                    const RenderPoint &r = grid_points[src.x() * H + src.y()];
+                    const CompactNormal &normal = r.ray.intersections[0].normal;
                     int idx = normal_directions[normal];
                     s << QStringLiteral(
-                             " <path id=\"region_hatch%1_%2\" "
-                             "fill=\"url(#hatching%3)\" opacity=\"0.2\" "
-                             "d=\"%4\"/>\n")
+                             " <path id=\"region%1_%2_hatch\" fill=\"%3\" "
+                             "clip-path=\"url(#hatching%4)\" d=\"%5\"/>\n")
                              .arg(region.class_no)
                              .arg(subreg.subclass_no)
+                             .arg(fill_desc_dim)
                              .arg(idx)
-                             .arg(svg_path_text_from_polygons(subloops));
-                }
-                if (subreg.is_clipped_patch) {
+                             .arg(btext);
                 }
             }
         }
@@ -3084,8 +3128,7 @@ void VectorTracer::computeGradients() {
         // Boundaries
         s << QStringLiteral(
                  "<g id=\"boundaries\" fill=\"none\" stroke-width=\"%1\" "
-                 "fill-rule=\"evenodd\" stroke-linecap=\"square\" "
-                 "stroke-linejoin=\"miter\">\n")
+                 "stroke-linecap=\"square\" stroke-linejoin=\"miter\">\n")
                  .arg(T * 0.003);
         for (const Region &region : region_list) {
             const QVector<QPolygonF> &loops =

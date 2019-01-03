@@ -178,9 +178,9 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     oriAction->setToolTip("Select a camera direction");
     connect(oriAction, SIGNAL(triggered()), this, SLOT(restOrient()));
 
-    QAction *screenAction = new QAction("Screenshot", this);
-    screenAction->setToolTip("Take a screenshot of active scene");
-    connect(screenAction, SIGNAL(triggered()), this, SLOT(screenshot()));
+    screen_action = new QAction("Screenshot", this);
+    screen_action->setToolTip("Take a screenshot of active scene");
+    connect(screen_action, SIGNAL(triggered()), this, SLOT(screenshot()));
 
     QAction *vectorAction = new QAction("Vector screenshot", this);
     vectorAction->setToolTip("Take a vector screenshot of active scene");
@@ -222,7 +222,7 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
     view_menu->addAction(oriAction);
     main_menu->addSeparator();
     screenshot_menu = main_menu->addMenu("Screenshot");
-    screenshot_menu->addAction(screenAction);
+    screenshot_menu->addAction(screen_action);
     screenshot_menu->addAction(screen4Action);
     screenshot_menu->addAction(vectorAction);
     screenshot_menu->addAction(vectorPAction);
@@ -240,6 +240,8 @@ Viewer::Viewer(const std::vector<GeoOption> &options,
             SLOT(processWheel(QWheelEvent *)));
     connect(rwidget, SIGNAL(forwardContextMenu(QContextMenuEvent *)), this,
             SLOT(processContextMenu(QContextMenuEvent *)));
+    connect(rwidget, SIGNAL(forwardResize(QResizeEvent *)), this,
+            SLOT(processResize(QResizeEvent *)));
 
     QSizePolicy dosp(QSizePolicy::MinimumExpanding,
                      QSizePolicy::MinimumExpanding);
@@ -707,6 +709,12 @@ void Viewer::processContextMenu(QContextMenuEvent *event) {
     menu.addMenu(view_menu);
     menu.addMenu(screenshot_menu);
     menu.exec(event->globalPos());
+}
+
+void Viewer::processResize(QResizeEvent *event) {
+    screen_action->setText(QStringLiteral("Screenshot (%1 x %2)")
+                               .arg(event->size().width())
+                               .arg(event->size().height()));
 }
 
 Plane plane_transform(const Plane &p, const G4RotationMatrix &rot,

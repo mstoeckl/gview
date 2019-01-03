@@ -69,6 +69,15 @@ public:
             acc.v[0] + b_weight * b.v[0], acc.v[1] + b_weight * b.v[1],
             acc.v[2] + b_weight * b.v[2], acc.v[3] + b_weight * b.v[3]);
     }
+    bool operator<(const FColor &other) const {
+        if (v[0] != other.v[0])
+            return v[0] < other.v[0];
+        if (v[1] != other.v[1])
+            return v[1] < other.v[1];
+        if (v[2] != other.v[2])
+            return v[2] < other.v[2];
+        return v[3] < other.v[3];
+    }
 
 private:
     float v[4];

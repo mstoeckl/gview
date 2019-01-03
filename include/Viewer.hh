@@ -50,6 +50,7 @@ public slots:
     void processMouse(QMouseEvent *);
     void processWheel(QWheelEvent *);
     void processContextMenu(QContextMenuEvent *);
+    void processResize(QResizeEvent *);
 
     void showFrameTime(qreal);
     void restClip();
@@ -92,6 +93,7 @@ private:
     TrackData trackdata;
     RenderWidget *rwidget;
     QAction *frame_time_display;
+    QAction *screen_action;
     QDockWidget *dock_clip;
     QDockWidget *dock_tree;
     QDockWidget *dock_info;

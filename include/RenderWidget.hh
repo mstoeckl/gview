@@ -18,6 +18,7 @@ signals:
     void forwardMouse(QMouseEvent *);
     void forwardWheel(QWheelEvent *);
     void forwardContextMenu(QContextMenuEvent *);
+    void forwardResize(QResizeEvent *evt);
 
 public slots:
     void setFullDetail(bool);

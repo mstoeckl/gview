@@ -22,8 +22,14 @@ static FColor colorMap(const Intersection &intersection,
         double aslp = orthA * position;
         double bslp = orthB * position;
 
-        double shade_factor = (aslp + bslp) * shade_scale;
-        shade_factor *= 10.;
+        const double angle = -M_PI / 4 + -M_PI / 30;
+        const double sin_r = std::sin(angle), cos_r = std::cos(angle);
+
+        // project onto line
+        double v = -aslp * sin_r + bslp * cos_r;
+
+        double shade_factor = v * shade_scale;
+        shade_factor *= 14;
         double fm = std::fmod(shade_factor, 1.);
         if (fm < 0.)
             fm += 1.;

@@ -555,31 +555,32 @@ preset_colors(const std::vector<const G4Material *> &material_list) {
     color_map["ArgonGas"] = color_map["ArgonGas"];
     color_map["Air"] = VColor::fromRgbF(0.8, 0.8, 0.8);
 
-    color_map["Al6061"] = VColor::fromRgbF(1.0, 0.2, 0.2);
-    color_map["Al5083"] = VColor::fromRgbF(0.8, 0.4, 0.4);
-    color_map["G4_Al"] = VColor::fromRgbF(0.9, 0.3, 0.4);
+    color_map["Al6061"] = VColor(255, 41, 58); // illu
+    color_map["Al5083"] = VColor(159, 30, 45); // illu
+    color_map["G4_Al"] = VColor(170, 0, 0);    // auto
+    color_map["G4_C"] = color_map["G4_Al"];    // dummy
 
     // Often have nickel plated lead
-    color_map["G4_Pb"] = VColor::fromRgbF(0.4, 0.0, 0.7);
-    color_map["G4_Ni"] = VColor::fromRgbF(0.5, 0.1, 0.8);
+    color_map["G4_Pb"] = VColor(146, 42, 153); // illu
+    color_map["G4_Ni"] = VColor(180, 80, 187); // illu, twisted
 
-    color_map["G4_Cu"] = VColor::fromRgbF(0.0, 0.9, 0.7);
+    color_map["G4_Cu"] = VColor(98, 200, 156); // illu
     color_map["G4_Au"] = VColor::fromRgbF(1.0, 0.9, 0.0);
     color_map["Gold"] = color_map["G4_Au"];
     color_map["BaF2"] = VColor::fromRgbF(1.0, 1.0, 1.0);
 
-    color_map["Teflon"] = VColor::fromRgbF(0.0, 0.8, 0.2);
+    color_map["Teflon"] = VColor(94, 188, 236); // illu
     color_map["C2H2O"] = VColor::fromRgbF(0.9, 0.9, 0.5);
-    color_map["Lexan"] = VColor::fromRgbF(0.7, 0.7, 0.9);
+    color_map["Lexan"] = VColor(203, 250, 13); // illu, twisted
     color_map["Mylar"] = VColor::fromRgbF(0.7, 0.9, 0.7);
 
-    color_map["PolyimideFoam"] = VColor::fromRgbF(0.8, 0.5, 0.2);
+    color_map["PolyimideFoam"] = VColor(250, 178, 14); // illu
     color_map["Delrin"] = VColor::fromRgbF(0.6, 0.7, 0.9);
     color_map["UVSilica"] = VColor::fromRgbF(0.6, 0.8, 1.0);
-    color_map["UHMW"] = VColor::fromRgbF(0.4, 0.4, 0.4);
+    color_map["UHMW"] = VColor(250, 178, 14); // illu
 
     color_map["Polycarb"] = VColor::fromRgbF(0.7, 0.8, 0.3);
-    color_map["Hevimet"] = VColor::fromRgbF(0.3, 0.35, 0.35);
+    color_map["Hevimet"] = VColor(38, 77, 164); // illu
     color_map["Kapton"] = VColor::fromRgbF(0.7, 0.7, 0.6);
 
     color_map["TungstenCarbide"] = VColor::fromRgbF(0.3, 0.3, 0.3);
