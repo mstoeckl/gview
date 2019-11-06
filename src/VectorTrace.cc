@@ -878,20 +878,22 @@ static QVector<RenderPoint> rloop_merge(const QVector<RenderPoint> &base,
     return bmod;
 }
 
+static constexpr QPoint dummypt = QPoint(1 << 30, 1 << 30);
+
 class Links {
 public:
     Links() {
-        p[0] = dummy;
-        p[1] = dummy;
-        p[2] = dummy;
-        p[3] = dummy;
+        p[0] = dummypt;
+        p[1] = dummypt;
+        p[2] = dummypt;
+        p[3] = dummypt;
     }
     void add(QPoint r) {
         for (int i = 0; i < 4; i++) {
             if (p[i] == r) {
                 return;
             }
-            if (p[i] == dummy) {
+            if (p[i] == dummypt) {
                 p[i] = r;
                 return;
             }
@@ -900,7 +902,7 @@ public:
     }
     int count() const {
         for (int i = 0; i < 4; i++) {
-            if (p[i] == dummy) {
+            if (p[i] == dummypt) {
                 return i;
             }
         }
@@ -925,8 +927,8 @@ public:
     }
 
     QPoint p[4];
-    static constexpr QPoint dummy = QPoint(1 << 30, 1 << 30);
 };
+// constexpr QPoint Links::dummy = QPoint(1 << 30, 1 << 30);
 
 static void link_add(QMap<QPoint, Links> &links, const QPoint &a,
                      const QPoint &b) {
@@ -1369,7 +1371,7 @@ void VectorTracer::computeEdges() {
             QPoint cur = initial;
             loop.append(cur);
             pts.remove(cur);
-            QPoint prev = Links::dummy;
+            QPoint prev = dummypt;
             while (true) {
                 Links l = link_map[cur];
                 bool at_even = !point_is_oo(cur);
@@ -1379,8 +1381,7 @@ void VectorTracer::computeEdges() {
                                "neighbors");
                     }
                     // Move to complementary node, possible even or odd
-                    if (prev != Links::dummy && l.p[0] != prev &&
-                        l.p[1] != prev) {
+                    if (prev != dummypt && l.p[0] != prev && l.p[1] != prev) {
                         qFatal("invariant fail");
                     }
                     QPoint next = l.p[0] == prev ? l.p[1] : l.p[0];
@@ -1394,7 +1395,7 @@ void VectorTracer::computeEdges() {
                     pts.remove(cur);
                 } else {
                     // Move to a node which we haven't seen yet; it will be even
-                    QPoint best = Links::dummy;
+                    QPoint best = dummypt;
                     for (int i = 0; i < l.count(); i++) {
                         QPoint a = l.p[i];
                         if (a == prev) {
@@ -1407,7 +1408,7 @@ void VectorTracer::computeEdges() {
                             break;
                         }
                     }
-                    if (best == Links::dummy) {
+                    if (best == dummypt) {
                         break;
                     }
 
